@@ -637,6 +637,59 @@ mod tests {
             "Hola & adiós"
         );
     }
+    /// Pins what the HTML parser hands to `plain_text` for malformed markup, entities and
+    /// whitespace, so a parser upgrade that changes extracted evidence fails here.
+    #[test]
+    fn plain_text_of_malformed_html_entities_and_whitespace_is_stable() {
+        for (html, expected) in [
+            ("<p>One<p>Two <b>bold</i> tail</b>", "One Two  bold tail"),
+            (
+                "a&nbsp;b &lt;x&gt; &amp;amp; &#233; &eacute; &copy &unknown; &#x1F600; &#0; &#x80;",
+                "a\u{a0}b <x> &amp; é é © &unknown; 😀 \u{fffd} €",
+            ),
+            ("<p>  a \n\t b  </p>\n<p>c</p>", "  a \n\t b   \n c"),
+            (
+                "<style>x{}</style><SCRIPT>s()</SCRIPT><AT id=\"0\">Ana</AT> hi <textarea>t</textarea><title>T</title><template><p>tpl</p></template><noscript>ns</noscript><!-- comment --><table><tr><td>cell</td></tr></table>text<br>after",
+                " hi  t T tpl ns cell text after",
+            ),
+            ("<table>stray<tr><td>c</td></tr></table>", "stray c"),
+            (
+                "<div>unclosed <span>deep <ul><li>one<li>two</ul>",
+                "unclosed  deep  one two",
+            ),
+            ("<![CDATA[x]]><?pi y?><p>z</p>", "z"),
+            ("<p>a<br/>b</p><pre>\nl1\n  l2</pre>", "a b l1\n  l2"),
+            (
+                "<select><option>o1<option>o2</select><svg><title>st</title><text>sv</text></svg><math><mi>m</mi></math>",
+                "o1 o2 st sv m",
+            ),
+            ("plain & text < not tag", "plain & text < not tag"),
+        ] {
+            assert_eq!(plain_text(html), expected, "{html}");
+        }
+    }
+    /// The Graph adapter reads Azure DevOps links with `a[href]`; pin which anchors match and
+    /// how their attribute values are decoded.
+    #[test]
+    fn anchor_selector_reads_hrefs_as_the_graph_adapter_does() {
+        let html = r#"<A HREF="https://dev.azure.com/o/p/_git/r?a=1&amp;b=2">x</A><a href='https://dev.azure.com/o/y'>y</a><a href=https://dev.azure.com/o/z>z</a><a href="https://evil.test/">e</a><a>nohref</a><a href="">empty</a><a href="https://dev.azure.com/o/&#x61;">ent</a>"#;
+        let fragment = scraper::Html::parse_fragment(html);
+        let selector = scraper::Selector::parse("a[href]").unwrap();
+        assert_eq!(
+            fragment
+                .select(&selector)
+                .filter_map(|e| e.value().attr("href"))
+                .collect::<Vec<_>>(),
+            [
+                "https://dev.azure.com/o/p/_git/r?a=1&b=2",
+                "https://dev.azure.com/o/y",
+                "https://dev.azure.com/o/z",
+                "https://evil.test/",
+                "",
+                "https://dev.azure.com/o/a",
+            ]
+        );
+    }
     #[test]
     fn markdown_answer_renders_as_escaped_teams_html() {
         let answer = "El servicio **Crear ODC** se invoca con `POST /api/v1/solicitudes/crear`.\nSegunda línea <script>x</script> & más.\n\nPasos:\n1. Arma el cuerpo:\n   ```json\n   {\n     \"Servicios\": []\n   }\n   ```\n2. Envía la solicitud.\n\n- Campo `RutTramitador`\n  - Subcampo\n- [evil](javascript:alert(1)) [ok](https://dev.azure.com/o/p/_wiki?pagePath=%2FA%20(b))\n\n**Fuentes**\n- [Crear ODC (Solicitud de Servicio)](https://dev.azure.com/o/p/_wiki/wikis/w?pagePath=%2FCrear%20ODC&x=1): wiki del proyecto P.";

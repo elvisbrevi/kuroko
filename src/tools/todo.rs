@@ -414,6 +414,68 @@ mod tests {
         );
     }
 
+    /// Pins the node tree for malformed markup, so a parser upgrade that changes how the
+    /// provider's HTML is repaired fails here.
+    #[test]
+    fn rich_nodes_of_malformed_html_are_stable() {
+        fn show(nodes: &[RichNode]) -> String {
+            nodes
+                .iter()
+                .map(|node| {
+                    if node.tag == "text" {
+                        return format!("{:?}", node.text);
+                    }
+                    let mut out = node.tag.clone();
+                    if let Some(url) = &node.url {
+                        out += &format!("@{url}");
+                    }
+                    if !node.text.is_empty() {
+                        out += &format!("={:?}", node.text);
+                    }
+                    format!("{out}[{}]", show(&node.children))
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+        let base = "https://dev.azure.com/o/p/_workitems/edit/7";
+        for (html, expected) in [
+            (
+                "<p>One<p>Two <b>bold</i> tail</b>",
+                r#"p["One"],p["Two ",b["bold tail"]]"#,
+            ),
+            (
+                "<p>  a \n\t b  </p>\n<p>c</p>",
+                r#"p["  a \n\t b  "],"\n",p["c"]"#,
+            ),
+            (
+                "<style>x{}</style><SCRIPT>s()</SCRIPT><AT id=\"0\">Ana</AT> hi <textarea>t</textarea><title>T</title><template><p>tpl</p></template><noscript>ns</noscript><!-- comment --><table><tr><td>cell</td></tr></table>text<br>after",
+                r#"span["Ana"]," hi ",span["t"],span["T"],table[tbody[tr[td["cell"]]]],"text",br[],"after""#,
+            ),
+            (
+                "<table>stray<tr><td>c</td></tr></table>",
+                r#""stray",table[tbody[tr[td["c"]]]]"#,
+            ),
+            (
+                "<div>unclosed <span>deep <ul><li>one<li>two</ul>",
+                r#"div["unclosed ",span["deep ",ul[li["one"],li["two"]]]]"#,
+            ),
+            (
+                "<p>a<br/>b</p><pre>\nl1\n  l2</pre>",
+                r#"p["a",br[],"b"],pre["l1\n  l2"]"#,
+            ),
+            (
+                "<select><option>o1<option>o2</select><svg><title>st</title></svg><math><mi>m</mi></math>",
+                r#"span[span["o1"],span["o2"]]"#,
+            ),
+            (
+                "<a href=\"/p/_git/r?a=1&amp;b=2\">x</a><A HREF='https://dev.azure.com/o/y'>y</A><img src=\"../img.png\" alt=\"A&amp;B\">",
+                r#"a@https://dev.azure.com/p/_git/r?a=1&b=2["x"],a@https://dev.azure.com/o/y["y"],img@https://dev.azure.com/o/p/_workitems/img.png="A&B"[]"#,
+            ),
+        ] {
+            assert_eq!(show(&rich_nodes(html, base)), expected, "{html}");
+        }
+    }
+
     #[test]
     fn filters_and_links_cannot_widen_the_tool() {
         assert_eq!(serde_json::from_str::<Filters>("{}").unwrap().limit, 10);

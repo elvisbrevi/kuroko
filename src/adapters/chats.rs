@@ -900,6 +900,13 @@ mod tests {
             ["[image: Homero en los arbustos]", "[image]"]
         );
         assert!(image_labels("<p>Sin imágenes</p>").is_empty());
+        // Attribute quoting, case and entities in the markup.
+        assert_eq!(
+            image_labels(
+                "<img alt=\"A&amp;B\"><IMG ALT=x><img alt=\"\"><img itemtype=\"http://schema.skype.com/Emoji\" alt=\"e\"><img\nalt='q'>"
+            ),
+            ["[image: A&B]", "[image: x]", "[image]", "[image: q]"]
+        );
         // The alt text is data: markup in it stays text.
         assert_eq!(
             image_labels("<img alt=\"&lt;b&gt;x&lt;/b&gt;\">"),

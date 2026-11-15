@@ -309,7 +309,7 @@ mod tests {
             .await;
         let revision = |date: &str, hours: f64, state: &str, user: &str| {
             json!({"fields":{
-                "System.TeamProject":"Payments","System.WorkItemType":"Custom Task","System.Title":"Daily task","System.Description":"<p>Verified work</p>",
+                "System.TeamProject":"Payments","System.WorkItemType":"Custom Task","System.Title":"Daily task","System.Description":"<p>Verified <b>work</b> &amp; more</p><ul><li>a<li>b</ul>",
                 "System.State":state,"System.ChangedDate":date,"System.CreatedDate":"2026-10-01T12:00:00Z","System.AssignedTo":{"uniqueName":user},effort:hours
             }})
         };
@@ -387,7 +387,7 @@ mod tests {
             "daily effort is a delta, never capped to the target"
         );
         assert_eq!(day.tasks[0].item.state, "Working");
-        assert_eq!(day.tasks[0].description, "Verified work");
+        assert_eq!(day.tasks[0].description, "Verified  work  & more a b");
         assert!(
             day.tasks
                 .iter()
