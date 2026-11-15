@@ -334,3 +334,14 @@ pub(super) fn document(body: String) -> Response {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_etag_is_the_quoted_first_32_digits_of_the_sha256() {
+        assert_eq!(
+            super::etag(b"console.log(1)\n"),
+            "\"3879a5d930ae1999b278a3a498f7de3f\""
+        );
+    }
+}

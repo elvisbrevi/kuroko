@@ -1121,3 +1121,15 @@ pub(crate) fn profile_argument(args: Vec<String>) -> (Vec<String>, Option<PathBu
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_entry_identity_is_twelve_lowercase_digits_of_the_path_sha256() {
+        // The path does not exist, so it is hashed as given.
+        assert_eq!(
+            super::id(std::path::Path::new("/nonexistent/pta-profile")),
+            "0b72708a3f77"
+        );
+    }
+}

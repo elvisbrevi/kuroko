@@ -786,3 +786,54 @@ pub(crate) mod tests {
         assert!(result.unwrap_err().to_string().contains("twice"));
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+
+    #[tokio::test]
+    async fn a_downloaded_archive_digest_is_the_lowercase_sha256_of_its_bytes() {
+        let server = MockServer::start().await;
+        Mock::given(path("/a"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'a'; 100_000]))
+            .mount(&server)
+            .await;
+        Mock::given(path("/abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"abc".to_vec()))
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let mut sink = Vec::new();
+        let large = fetch(
+            &client,
+            &format!("{}/a", server.uri()),
+            "a",
+            1 << 20,
+            &mut sink,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            large.sha256,
+            "6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee"
+        );
+        assert_eq!(large.size, 100_000);
+        let mut sink = Vec::new();
+        let small = fetch(
+            &client,
+            &format!("{}/abc", server.uri()),
+            "abc",
+            1 << 20,
+            &mut sink,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            small.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

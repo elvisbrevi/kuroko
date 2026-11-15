@@ -416,3 +416,22 @@ fn activity_key(activity: &Linkable) -> String {
         ))
     )
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_activity_key_is_the_sha256_of_organization_url_and_date() {
+        let activity = Linkable {
+            organization: "https://dev.azure.com/org".into(),
+            url: "https://dev.azure.com/org/p/_workitems/edit/7".into(),
+            date: "2026-11-02".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            activity_key(&activity),
+            "fa8849b3541a1b4f711e659c2111628d746a23ca0684415a986a963b8fd0bf76"
+        );
+    }
+}

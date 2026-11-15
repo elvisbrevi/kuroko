@@ -525,3 +525,24 @@ mod tests {
         toml::to_string(value).unwrap()
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_revision_is_the_sha256_of_the_three_files_each_followed_by_a_zero() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("profile");
+        crate::security::private_dir(&dir).unwrap();
+        let store = LocalSettings::open(&dir, &root.path().join("data")).unwrap();
+        fs::write(&store.config, b"a").unwrap();
+        fs::write(&store.map, b"b").unwrap();
+        fs::write(&store.tunnel, b"c").unwrap();
+        // sha256 of the bytes "a\0b\0c\0".
+        assert_eq!(
+            store.revision().unwrap(),
+            "13e228567e8249fce53337f25d7970de3bd68ab2653424c7b8f9fd05e33caedf"
+        );
+    }
+}

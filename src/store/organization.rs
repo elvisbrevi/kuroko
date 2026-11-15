@@ -265,3 +265,23 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+    use crate::store::settings::LocalSettings;
+
+    #[test]
+    fn the_revision_is_the_sha256_of_the_serialized_organization() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("profile");
+        crate::security::private_dir(&dir).unwrap();
+        let settings = LocalSettings::open(&dir, &root.path().join("data")).unwrap();
+        let store = LocalOrganization::new(&settings);
+        assert_eq!(
+            serde_json::to_string(&store.organization().unwrap()).unwrap(),
+            r#"{"organization":{},"guides":[]}"#
+        );
+        assert_eq!(store.revision().unwrap(), "b95591e25c19f4ae8e0cd4e7674d1a915b712580915313e7eab56362e452610c");
+    }
+}

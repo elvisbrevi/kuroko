@@ -433,3 +433,14 @@ pub(crate) mod tests {
         assert_eq!(Image::read(&big, "").unwrap_err(), ImageRefusal::TooLarge);
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_image_digest_is_the_first_eight_digits_of_the_sha256() {
+        let image = Image::new("a.gif", "alt", b"GIF89a\x02\x00\x02\x00".to_vec()).unwrap();
+        assert_eq!(image.digest(), "7f4ab4ff");
+    }
+}

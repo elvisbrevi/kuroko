@@ -385,3 +385,14 @@ pub(super) async fn browser(
     })
     .into_response()
 }
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_enrollment_secret_hash_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::hash("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

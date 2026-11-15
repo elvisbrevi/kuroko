@@ -549,4 +549,33 @@ mod tests {
         assert_eq!(checks.load(Ordering::SeqCst), 2);
         assert!(store.token().unwrap().is_none());
     }
+
+    /// The PKCE challenge is the unpadded URL-safe base64 of the SHA-256 of the verifier, checked
+    /// against a different implementation of the hash (aws-lc).
+    #[tokio::test]
+    async fn the_pkce_challenge_is_the_sha256_of_the_verifier() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&dir.path().join("tokens.db")).unwrap());
+        let oauth = OAuth::new(
+            config(),
+            reqwest::Client::new(),
+            store,
+            Vault::new(&STANDARD.encode([3; 32])).unwrap(),
+        )
+        .unwrap();
+        let (url, state) = oauth
+            .begin_desktop("http://localhost:34567/")
+            .await
+            .unwrap();
+        let challenge = url::Url::parse(&url)
+            .unwrap()
+            .query_pairs()
+            .find(|(k, _)| k == "code_challenge")
+            .map(|(_, v)| v.into_owned())
+            .unwrap();
+        let verifier = oauth.pending.lock().await[&state].verifier.clone();
+        let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, verifier.as_bytes());
+        assert_eq!(challenge, URL_SAFE_NO_PAD.encode(digest.as_ref()));
+        assert_eq!(challenge.len(), 43);
+    }
 }

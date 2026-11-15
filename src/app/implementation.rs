@@ -2985,3 +2985,14 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn a_stored_digest_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::digest("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

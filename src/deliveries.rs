@@ -609,3 +609,32 @@ impl Destinations {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_approval_digest_is_the_sha256_of_the_canonical_definition() {
+        let destination = Destination {
+            id: "x".into(),
+            description: "d".into(),
+            target: Target::CloudflareWorkerSecret {
+                account_id: "a".into(),
+                script: "s".into(),
+                secret_name: "N".into(),
+                token: "t".into(),
+            },
+            variables: vec!["v1".into()],
+            created_at: 0,
+            approved_at: None,
+            approved_digest: None,
+        };
+        // The digest of {"description":"d","id":"x","target":{"account_id":"a","kind":
+        // "cloudflare_worker_secret","script":"s","secret_name":"N","token":"t"},"variables":["v1"]}
+        assert_eq!(
+            destination.digest(),
+            "d960e3614c571a7e9d9d6d6e0ec554dc63eca2b1f3c93adaba4cb3fbaa329dac"
+        );
+    }
+}

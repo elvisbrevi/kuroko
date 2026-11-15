@@ -281,3 +281,24 @@ pub(super) fn denial(error: &anyhow::Error) -> crate::variables::Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_qualifiers_are_32_lowercase_digits_of_the_domain_separated_sha256() {
+        let link = Link {
+            origin: "https://c.example".into(),
+            account: 42,
+            machine: "m-1".into(),
+        };
+        assert_eq!(qualifier(&link), "dd77d0141bb7c272a68239abf098ac55");
+        let cloud = crate::config::Cloud {
+            endpoint: "https://w.example/".into(),
+            installation: "inst-1".into(),
+            ..Default::default()
+        };
+        assert_eq!(store_qualifier(&cloud), "112517c8422faf0e4712cff7ea7d1481");
+    }
+}

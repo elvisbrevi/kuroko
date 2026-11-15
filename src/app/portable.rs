@@ -1442,3 +1442,18 @@ pub(super) async fn note_remove(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn a_note_token_is_32_lowercase_digits_of_the_sha256_of_its_json() {
+        let note = Note {
+            id: "n1".into(),
+            ..Note::default()
+        };
+        assert_eq!(serde_json::to_string(&note).unwrap(), r#"{"id":"n1","title":"","text":"","contexts":[],"keywords":[],"origin":"user","created_at":0,"updated_at":0}"#);
+        assert_eq!(token(&note), "006b0ec3932b8e8f6b2351c1603889ca");
+    }
+}

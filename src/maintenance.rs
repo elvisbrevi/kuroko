@@ -920,3 +920,30 @@ pub mod release;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::digest;
+
+    #[test]
+    fn an_installed_executable_digest_is_the_lowercase_sha256_of_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("small");
+        std::fs::write(&small, b"abc").unwrap();
+        let found = digest(&small).unwrap();
+        assert_eq!(
+            found.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(found.size, 3);
+        // Larger than the copy buffer of `std::io::copy` (8 KiB).
+        let large = dir.path().join("large");
+        std::fs::write(&large, vec![b'a'; 100_000]).unwrap();
+        let found = digest(&large).unwrap();
+        assert_eq!(
+            found.sha256,
+            "6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee"
+        );
+        assert_eq!(found.size, 100_000);
+    }
+}

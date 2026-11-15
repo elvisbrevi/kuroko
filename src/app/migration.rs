@@ -1084,3 +1084,15 @@ async fn adopt_settings(host: &Arc<Host>, journal: &mut Journal) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn a_migration_entry_id_is_the_uuid_built_from_the_sha256() {
+        // Replaying a creation must find the entry it made: the ID may never change.
+        assert_eq!(
+            super::entry_id("dest", "cred"),
+            "25047b97-0c93-4673-8266-d1dcf417f891"
+        );
+    }
+}

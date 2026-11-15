@@ -347,3 +347,14 @@ mod tests {
         assert!(!again[0].starts_with("Refreshed"), "{again:?}");
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_installed_skill_file_hash_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::hash(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

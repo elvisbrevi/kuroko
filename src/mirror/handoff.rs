@@ -333,3 +333,24 @@ mod tests {
         assert_ne!(one, plain);
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_pairing_code_is_the_upper_case_start_of_the_sha256() {
+        // sha256("tx-1") and sha256("tx-1:key-1"), first eight hexadecimal digits in capitals.
+        assert_eq!(code("tx-1", None), "045E-F594");
+        assert_eq!(code("tx-1", Some("key-1")), "4356-42CC");
+    }
+
+    #[test]
+    fn the_token_fingerprint_is_32_lowercase_digits_of_the_hmac() {
+        // HMAC-SHA256 keyed with the domain over `client \0 secret`, first 32 digits.
+        assert_eq!(
+            token_fingerprint("client", "secret"),
+            "d4f0b44b56cb3ca8bb4fafbf88037746"
+        );
+    }
+}

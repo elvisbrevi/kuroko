@@ -3629,3 +3629,28 @@ mod entity_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn a_page_reference_is_wiki_colon_and_the_sha256_of_its_identity() {
+        let wiki = Wiki {
+            organization: "org".into(),
+            project: "project".into(),
+            project_id: "pid".into(),
+            id: "wid".into(),
+            name: "name".into(),
+            kind: "projectWiki".into(),
+            repository_id: "repo".into(),
+            mapped_path: "/".into(),
+            versions: vec![],
+        };
+        // sha256 of ["org","pid","wid","v","/path"].
+        assert_eq!(
+            page_reference_id(&wiki, "v", "/path"),
+            "wiki:ed5db79719f9b8a6d795646e31e94ce109b5eedd183af8a27a3d2fde2b667105"
+        );
+    }
+}
