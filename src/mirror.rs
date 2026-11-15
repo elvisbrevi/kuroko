@@ -11,7 +11,6 @@
 //! (a recovery at start, a restored database) is still caught by the next sweep.
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 /// Announces that a store wrote a record the mirror keeps; the host's loop sends it soon. A write
 /// that does not announce itself is found by the loop's regular sweep.
@@ -150,10 +149,7 @@ pub fn canonical(value: &Value) -> Vec<u8> {
 }
 
 pub fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::hash::sha256_hex(bytes)
 }
 
 /// What a record holds before it is sealed: its natural identifier (so a copy restores without the
@@ -164,3 +160,22 @@ pub fn plaintext(id: &str, value: &Value) -> Vec<u8> {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// The exact text of the digests, pinned before the hash crate was upgraded: stored fingerprints
+/// and record digests must keep matching byte for byte.
+#[cfg(test)]
+mod hash_pins {
+    use super::hex_sha256;
+
+    #[test]
+    fn the_record_digest_is_lowercase_hex_of_the_sha256() {
+        assert_eq!(
+            hex_sha256(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hex_sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

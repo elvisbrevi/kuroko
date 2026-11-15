@@ -12,7 +12,6 @@
 //! rules (key shape, reserved environment names, destinations, program, directory) live here.
 use crate::variables::{Error, Secret};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -340,23 +339,9 @@ pub fn ensure_approved(launcher: &Launcher) -> Result<()> {
 }
 
 fn digest(path: &Path) -> Result<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)
+    let file = std::fs::File::open(path)
         .map_err(|_| input("The program cannot be read; check the path."))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(crate::hash::sha256_reader(file)?)
 }
 
 fn executable(path: &Path) -> bool {
@@ -824,3 +809,32 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::digest;
+
+    #[test]
+    fn a_program_digest_is_the_lowercase_sha256_of_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("small");
+        std::fs::write(&small, b"abc").unwrap();
+        assert_eq!(
+            digest(&small).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        // More than one read buffer (64 KiB), so the streaming path is exercised.
+        let large = dir.path().join("large");
+        std::fs::write(&large, vec![b'a'; 100_000]).unwrap();
+        assert_eq!(
+            digest(&large).unwrap(),
+            "6d1cf22d7cc09b085dfc25ee1a1f3ae0265804c607bc2074ad253bcc82fd81ee"
+        );
+        let empty = dir.path().join("empty");
+        std::fs::write(&empty, b"").unwrap();
+        assert_eq!(
+            digest(&empty).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+}

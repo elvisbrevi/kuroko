@@ -2136,7 +2136,6 @@ fn is_mine(p: &Page) -> bool {
     )
 }
 fn page_reference_id(wiki: &Wiki, version: &str, path: &str) -> String {
-    use sha2::{Digest, Sha256};
     // A short opaque ID is easier for the provider to copy exactly. Scope, URL,
     // path, published version and revision remain explicit in the typed registry.
     let identity = serde_json::to_vec(&(
@@ -2147,7 +2146,7 @@ fn page_reference_id(wiki: &Wiki, version: &str, path: &str) -> String {
         path,
     ))
     .unwrap();
-    format!("wiki:{:x}", Sha256::digest(identity))
+    format!("wiki:{}", crate::hash::sha256_hex(identity))
 }
 fn under_mapped(path: &str, mapped: &str) -> bool {
     validate_path(path).is_ok()
@@ -3626,6 +3625,31 @@ mod entity_tests {
                 .unwrap()
                 .iter()
                 .all(|r| !r.url.path().contains("Other"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn a_page_reference_is_wiki_colon_and_the_sha256_of_its_identity() {
+        let wiki = Wiki {
+            organization: "org".into(),
+            project: "project".into(),
+            project_id: "pid".into(),
+            id: "wid".into(),
+            name: "name".into(),
+            kind: "projectWiki".into(),
+            repository_id: "repo".into(),
+            mapped_path: "/".into(),
+            versions: vec![],
+        };
+        // sha256 of ["org","pid","wid","v","/path"].
+        assert_eq!(
+            page_reference_id(&wiki, "v", "/path"),
+            "wiki:ed5db79719f9b8a6d795646e31e94ce109b5eedd183af8a27a3d2fde2b667105"
         );
     }
 }

@@ -13,7 +13,6 @@ use axum::{
 };
 use fs2::FileExt;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -377,7 +376,7 @@ impl Portal {
         if tokens.next().is_some() || token.len() > 128 {
             return None;
         }
-        Some(format!("{:x}", Sha256::digest(token.as_bytes())))
+        Some(crate::hash::sha256_hex(token))
     }
     async fn authenticate(
         &self,
@@ -447,10 +446,7 @@ impl Portal {
                 ),
             identity,
         };
-        sessions.insert(
-            format!("{:x}", Sha256::digest(token.as_bytes())),
-            session.clone(),
-        );
+        sessions.insert(crate::hash::sha256_hex(&token), session.clone());
         Ok((token, session))
     }
     async fn login_limit(&self, name: &str) -> bool {
@@ -907,7 +903,7 @@ async fn machine_command(
             Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         }
     } else {
-        let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+        let hash = crate::hash::sha256_hex(token);
         let id = args["id"].as_str().unwrap_or_default();
         entries
             .into_iter()

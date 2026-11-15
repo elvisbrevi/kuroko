@@ -4,6 +4,7 @@ pub mod recorded;
 pub mod store;
 #[cfg(test)]
 mod tests;
+use crate::hash::sha256_hex;
 use crate::{
     ado::{
         link::{Linkable, Target},
@@ -17,7 +18,6 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -408,11 +408,27 @@ pub fn validate_sources(settings: &Settings, map: &KnowledgeMap) -> Result<()> {
 }
 
 fn activity_key(activity: &Linkable) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!(
-            "{}|{}|{}",
-            activity.organization, activity.url, activity.date
-        ))
-    )
+    sha256_hex(format!(
+        "{}|{}|{}",
+        activity.organization, activity.url, activity.date
+    ))
+}
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_activity_key_is_the_sha256_of_organization_url_and_date() {
+        let activity = Linkable {
+            organization: "https://dev.azure.com/org".into(),
+            url: "https://dev.azure.com/org/p/_workitems/edit/7".into(),
+            date: "2026-11-02".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            activity_key(&activity),
+            "fa8849b3541a1b4f711e659c2111628d746a23ca0684415a986a963b8fd0bf76"
+        );
+    }
 }

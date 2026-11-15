@@ -211,7 +211,7 @@ pub(super) fn authorize_machine(
     )?;
     file.sync_all()?;
     entries.insert(
-        format!("{:x}", Sha256::digest(token.as_bytes())),
+        crate::hash::sha256_hex(token),
         Pairing {
             account_id: account.id,
             version: account.version,
@@ -345,7 +345,7 @@ pub(super) fn consume_pairing(
     }
     let _lock = file_lock(root, "machine-pairings.lock")?;
     let mut entries = pairings(root)?;
-    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    let hash = crate::hash::sha256_hex(token);
     let Some(pairing) = entries.get(&hash) else {
         return Ok(None);
     };

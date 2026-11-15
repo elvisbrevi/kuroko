@@ -86,7 +86,7 @@ fn handoff(url: &str) -> String {
 }
 
 fn digest(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    crate::hash::sha256_hex(value)
 }
 
 /// A URL- and cookie-safe random value (256 bits).
@@ -541,3 +541,26 @@ async fn command(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_cookie_digest_is_the_lowercase_sha256() {
+        assert_eq!(
+            digest("token-value"),
+            "e6c02a5742ea9d4de588eb9b9de7bed43dc17011552186bed3e98b2c5958ff4a"
+        );
+    }
+
+    #[test]
+    fn the_profile_digest_is_the_raw_sha256_of_the_path() {
+        let raw = profile_digest(Path::new("/p"));
+        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "00d74baf14ea415c6164614838c91f834c38c3e564444dfa5bc3aa0d2809e265"
+        );
+    }
+}

@@ -44,7 +44,7 @@ pub(super) enum Poll {
 }
 
 fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    crate::hash::sha256_hex(value)
 }
 fn hex64(value: &str) -> bool {
     value.len() == 64
@@ -384,4 +384,15 @@ pub(super) async fn browser(
         Err(error) => control::Reply::error("invalid_input", 2, &error.to_string()),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_enrollment_secret_hash_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::hash("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

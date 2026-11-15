@@ -9,6 +9,7 @@ pub mod consumers;
 pub mod deliveries;
 pub mod diagnostics;
 pub mod evidence;
+pub mod hash;
 pub mod index;
 pub mod knowledge;
 pub mod llm;

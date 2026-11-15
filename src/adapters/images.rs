@@ -142,11 +142,7 @@ impl Image {
     }
     /// The first 8 hexadecimal digits of the SHA-256 of the bytes.
     pub fn digest(&self) -> String {
-        Sha256::digest(&self.bytes)
-            .iter()
-            .take(4)
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        crate::hash::hex(&Sha256::digest(&self.bytes)[..4])
     }
     /// What the person approves: `homero.gif · GIF 480×400 · 1.05 MB · sha256 1a2b3c4d`.
     pub fn summary(&self) -> String {
@@ -431,5 +427,16 @@ pub(crate) mod tests {
         let big = dir.path().join("big.png");
         std::fs::write(&big, png(9, 9, MAX_TOTAL + 1)).unwrap();
         assert_eq!(Image::read(&big, "").unwrap_err(), ImageRefusal::TooLarge);
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_image_digest_is_the_first_eight_digits_of_the_sha256() {
+        let image = Image::new("a.gif", "alt", b"GIF89a\x02\x00\x02\x00".to_vec()).unwrap();
+        assert_eq!(image.digest(), "7f4ab4ff");
     }
 }

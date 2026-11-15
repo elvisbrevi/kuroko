@@ -5,10 +5,10 @@
 //! come from a value, and a definition's digest names exactly what the person approved; anything
 //! different is a new, unapproved definition. Responses are read up to a bound and discarded:
 //! only the HTTP status and a boolean computed here leave.
+use crate::hash::sha256_hex;
 use crate::variables::{Error, Secret};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -93,10 +93,7 @@ impl Destination {
             "target": self.target,
             "variables": self.variables,
         });
-        Sha256::digest(canonical.to_string().as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        sha256_hex(canonical.to_string())
     }
     pub fn approved(&self) -> bool {
         self.approved_at.is_some() && self.approved_digest.as_deref() == Some(&self.digest())
@@ -609,3 +606,32 @@ impl Destinations {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_approval_digest_is_the_sha256_of_the_canonical_definition() {
+        let destination = Destination {
+            id: "x".into(),
+            description: "d".into(),
+            target: Target::CloudflareWorkerSecret {
+                account_id: "a".into(),
+                script: "s".into(),
+                secret_name: "N".into(),
+                token: "t".into(),
+            },
+            variables: vec!["v1".into()],
+            created_at: 0,
+            approved_at: None,
+            approved_digest: None,
+        };
+        // The digest of {"description":"d","id":"x","target":{"account_id":"a","kind":
+        // "cloudflare_worker_secret","script":"s","secret_name":"N","token":"t"},"variables":["v1"]}
+        assert_eq!(
+            destination.digest(),
+            "d960e3614c571a7e9d9d6d6e0ec554dc63eca2b1f3c93adaba4cb3fbaa329dac"
+        );
+    }
+}

@@ -11,6 +11,7 @@
 //! a rotated content key reaches it later the same way, sealed to the key the person confirmed,
 //! without trusting the computer again.
 
+use crate::hash::{hex, sha256_hex};
 use aes_gcm_siv::{
     Aes256GcmSiv, KeyInit, Nonce,
     aead::{Aead, Payload},
@@ -19,7 +20,6 @@ use anyhow::{Context, Result, anyhow, ensure};
 use aws_lc_rs::agreement::{self, PrivateKey, UnparsedPublicKey, X25519};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use super::seal::hmac_sha256;
@@ -192,7 +192,7 @@ pub fn seal(recipient: &str, context: &str, plaintext: &[u8]) -> Result<Sealed> 
         .map_err(|_| anyhow!("the handoff could not be sealed"))?;
     Ok(Sealed {
         key: sender,
-        nonce: hex(&nonce),
+        nonce: hex(nonce),
         data: STANDARD.encode(data),
     })
 }
@@ -201,8 +201,8 @@ pub fn seal(recipient: &str, context: &str, plaintext: &[u8]) -> Result<Sealed> 
 /// the computer asked for the account store, its public key.
 pub fn code(transaction: &str, recipient: Option<&str>) -> String {
     let digest = match recipient {
-        None => hex(&Sha256::digest(transaction.as_bytes())),
-        Some(key) => hex(&Sha256::digest(format!("{transaction}:{key}").as_bytes())),
+        None => sha256_hex(transaction),
+        Some(key) => sha256_hex(format!("{transaction}:{key}")),
     }
     .to_ascii_uppercase();
     format!("{}-{}", &digest[..4], &digest[4..8])
@@ -227,7 +227,7 @@ fn associated(context: &str, sender: &str, recipient: &str) -> Vec<u8> {
 /// A short, one-way fingerprint of a service token (client ID and secret), so a computer and its
 /// coordinator can tell whether they hold the same one without either sending it.
 pub fn token_fingerprint(client_id: &str, client_secret: &str) -> String {
-    hex(&hmac_sha256(
+    hex(hmac_sha256(
         b"personal-teams-assistant/cloud-token/v1",
         &[client_id.as_bytes(), &[0], client_secret.as_bytes()],
     ))[..32]
@@ -243,10 +243,6 @@ pub fn valid_fingerprint(value: &str) -> bool {
 
 pub fn valid_public(value: &str) -> bool {
     unhex(value, 32).is_some()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn unhex(text: &str, len: usize) -> Option<Vec<u8>> {
@@ -276,7 +272,7 @@ mod tests {
         let other = Receiver::generate().unwrap();
         assert!(other.open("sign-in-1", &sealed).is_err());
         let mut tampered = sealed.clone();
-        tampered.nonce = hex(&[0u8; 12]);
+        tampered.nonce = hex([0u8; 12]);
         assert!(receiver.open("sign-in-1", &tampered).is_err());
         // Each seal uses a fresh ephemeral key and nonce.
         let again = seal(receiver.public(), "sign-in-1", b"synthetic bundle").unwrap();
@@ -331,5 +327,26 @@ mod tests {
         let two = code(&transaction, Some(&"2".repeat(64)));
         assert_ne!(one, two);
         assert_ne!(one, plain);
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn the_pairing_code_is_the_upper_case_start_of_the_sha256() {
+        // sha256("tx-1") and sha256("tx-1:key-1"), first eight hexadecimal digits in capitals.
+        assert_eq!(code("tx-1", None), "045E-F594");
+        assert_eq!(code("tx-1", Some("key-1")), "4356-42CC");
+    }
+
+    #[test]
+    fn the_token_fingerprint_is_32_lowercase_digits_of_the_hmac() {
+        // HMAC-SHA256 keyed with the domain over `client \0 secret`, first 32 digits.
+        assert_eq!(
+            token_fingerprint("client", "secret"),
+            "d4f0b44b56cb3ca8bb4fafbf88037746"
+        );
     }
 }

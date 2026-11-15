@@ -146,7 +146,6 @@ impl Bench {
     /// line each time it runs.
     #[cfg(unix)]
     fn launcher(&self, id: &str, body: &str, timeout: u64) -> crate::consumers::Launcher {
-        use sha2::{Digest, Sha256};
         use std::os::unix::fs::PermissionsExt;
         let program = self.root.path().join(format!("{id}.sh"));
         fs::write(
@@ -159,10 +158,7 @@ impl Bench {
         .unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         let program = program.canonicalize().unwrap();
-        let digest = Sha256::digest(fs::read(&program).unwrap())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
+        let digest = crate::hash::sha256_hex(fs::read(&program).unwrap());
         crate::consumers::Launcher {
             id: id.into(),
             description: "Synthetic release".into(),

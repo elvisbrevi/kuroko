@@ -19,7 +19,6 @@ use super::{
     *,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 /// Marks every definition this module writes; nothing without it is changed or removed.
@@ -99,8 +98,7 @@ pub(crate) fn id(profile: &Path) -> String {
     let path = profile
         .canonicalize()
         .unwrap_or_else(|_| profile.to_path_buf());
-    let digest = Sha256::digest(path.to_string_lossy().as_bytes());
-    digest[..6].iter().map(|b| format!("{b:02x}")).collect()
+    crate::hash::sha256_hex(path.to_string_lossy().as_bytes())[..12].to_owned()
 }
 
 impl Target {
@@ -1121,3 +1119,15 @@ pub(crate) fn profile_argument(args: Vec<String>) -> (Vec<String>, Option<PathBu
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_entry_identity_is_twelve_lowercase_digits_of_the_path_sha256() {
+        // The path does not exist, so it is hashed as given.
+        assert_eq!(
+            super::id(std::path::Path::new("/nonexistent/pta-profile")),
+            "0b72708a3f77"
+        );
+    }
+}

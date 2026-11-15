@@ -1,8 +1,8 @@
 //! The user's HUs and bugs by process-specific assignment, independent of activity windows.
 use super::*;
+use crate::hash::sha256_hex;
 use crate::tools::todo::{Date, Filters, Item, List, WorkType};
 use crate::work_items::{self, Guide};
-use sha2::{Digest, Sha256};
 
 fn literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
@@ -65,7 +65,7 @@ pub(super) fn timestamp(value: &Value) -> Option<String> {
 
 pub(super) async fn metadata(client: &Client, key: &str, cache: &Store, url: Url) -> Result<Value> {
     // Metadata only, five minutes; the credential fingerprint prevents reuse after an account change.
-    let cache_key = format!("todo-schema:{:x}:{url}", Sha256::digest(key.as_bytes()));
+    let cache_key = format!("todo-schema:{}:{url}", sha256_hex(key));
     cached_read(
         cache,
         &cache_key,

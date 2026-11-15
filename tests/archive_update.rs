@@ -3,11 +3,11 @@
 //! `personal-teams-assistant` and `pta` in the archive format of this computer's target (`.zip` on
 //! Windows, `.tgz` elsewhere), and the updater downloads, checks, unpacks and runs them to read
 //! their version, exactly as it would a published release. Nothing is installed.
+use personal_teams_assistant::hash::sha256_hex;
 use personal_teams_assistant::maintenance::{
     self, CLI, CRATE, Version,
     release::{self, Source},
 };
-use sha2::{Digest as _, Sha256};
 use std::{io::Write as _, path::Path};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -112,7 +112,7 @@ async fn this_builds_own_release_archive_stages_as_a_verified_pair() {
     let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
     let bytes = archive(&version);
     let name = release::archive_name(TARGET, &version);
-    let digest = format!("{:x}  {name}\n", Sha256::digest(&bytes));
+    let digest = format!("{}  {name}\n", sha256_hex(&bytes));
     let server = serve(&version, bytes.clone(), digest).await;
     let dir = tempfile::tempdir().unwrap();
     let partial = dir.path().join(format!("{version}.partial"));
@@ -132,7 +132,7 @@ async fn this_builds_own_release_archive_stages_as_a_verified_pair() {
     let archive = manifest.archive.unwrap();
     assert_eq!(archive.name, name);
     assert_eq!(archive.size, bytes.len() as u64);
-    assert_eq!(archive.sha256, format!("{:x}", Sha256::digest(&bytes)));
+    assert_eq!(archive.sha256, sha256_hex(&bytes));
     let mut wanted = vec![exe(CRATE), exe(CLI)];
     wanted.sort();
     assert_eq!(entries(&partial.join("root/bin")), wanted);
@@ -154,7 +154,7 @@ async fn a_pair_that_reports_another_version_or_a_wrong_digest_is_not_staged() {
     let server = serve(
         &newer,
         bytes.clone(),
-        format!("{:x}  {name}\n", Sha256::digest(&bytes)),
+        format!("{}  {name}\n", sha256_hex(&bytes)),
     )
     .await;
     let dir = tempfile::tempdir().unwrap();
@@ -174,12 +174,7 @@ async fn a_pair_that_reports_another_version_or_a_wrong_digest_is_not_staged() {
         "{error}"
     );
     // A digest of other bytes stops before anything is unpacked.
-    let server = serve(
-        &newer,
-        bytes,
-        format!("{:x}  {name}\n", Sha256::digest(b"other")),
-    )
-    .await;
+    let server = serve(&newer, bytes, format!("{}  {name}\n", sha256_hex(b"other"))).await;
     let partial = dir.path().join("b");
     let error = release::stage(
         &source(&server),

@@ -288,7 +288,7 @@ impl Document {
         let mut hash = Sha256::new();
         hash.update(b"personal-teams-assistant/portable-configuration/v1\0");
         hash.update(canonical);
-        format!("{:x}", hash.finalize())
+        crate::hash::hex(hash.finalize())
     }
 
     /// Install this document into a profile: the portable fields are replaced, everything
@@ -1121,5 +1121,34 @@ mod tests {
         let mut invalid = account.clone();
         invalid.settings.message_style.accent = "blue".into();
         assert!(invalid.check().is_err());
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    /// The configuration digest is the lowercase hexadecimal SHA-256 of the domain and the
+    /// canonical JSON, checked against a different implementation of the hash (aws-lc) so it does
+    /// not depend on the template's current content.
+    #[test]
+    fn the_configuration_digest_is_the_lowercase_sha256_of_domain_and_canonical_json() {
+        let config = Config::desktop_template().unwrap();
+        let map = KnowledgeMap::parse("").unwrap();
+        let document = Document::project(&config, &map);
+        let canonical = serde_json::to_vec(&serde_json::json!({
+            "document": &document,
+            "notes": Vec::<Note>::new(),
+        }))
+        .unwrap();
+        let mut input = b"personal-teams-assistant/portable-configuration/v1\0".to_vec();
+        input.extend(canonical);
+        let expected: String = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &input)
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(document.digest(&[]), expected);
+        assert_eq!(expected.len(), 64);
     }
 }

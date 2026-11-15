@@ -7,7 +7,6 @@ use crate::store::{
 };
 use crate::tools::todo::{Detail, DetailRequest};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 pub(super) mod checkout;
@@ -402,7 +401,7 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 fn digest(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    crate::hash::sha256_hex(text)
 }
 fn uuid(text: &str) -> Result<()> {
     ensure!(
@@ -2982,6 +2981,17 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "A connected worker cannot serve coordinator requests."
+        );
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn a_stored_digest_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::digest("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
 }

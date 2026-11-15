@@ -2,7 +2,6 @@ use crate::app::control::Reply;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -22,7 +21,7 @@ struct Installed {
 }
 
 fn hash(text: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(text))
+    crate::hash::sha256_hex(text)
 }
 
 fn current() -> Installed {
@@ -345,5 +344,16 @@ mod tests {
         // Refreshing again changes nothing.
         let again = refresh(&profile);
         assert!(!again[0].starts_with("Refreshed"), "{again:?}");
+    }
+}
+
+#[cfg(test)]
+mod hash_pins {
+    #[test]
+    fn an_installed_skill_file_hash_is_the_lowercase_sha256() {
+        assert_eq!(
+            super::hash(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }

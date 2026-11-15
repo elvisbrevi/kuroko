@@ -195,9 +195,7 @@ fn resolves(map: &KnowledgeMap, source: &crate::knowledge::Resource) -> bool {
 /// What a note looked like when a client read it: a change since then is a conflict, however
 /// quickly it followed (timestamps have a resolution of one second).
 fn token(note: &Note) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(serde_json::to_vec(note).unwrap_or_default());
-    digest[..16].iter().map(|b| format!("{b:02x}")).collect()
+    crate::hash::sha256_hex(serde_json::to_vec(note).unwrap_or_default())[..32].to_owned()
 }
 
 fn now() -> i64 {
@@ -207,21 +205,20 @@ fn now() -> i64 {
 /// An opaque fingerprint of the account this host serves, so a client notices when the
 /// coordinator's configuration stops coming from the account it loaded.
 fn source(host: &Host) -> String {
-    use sha2::{Digest, Sha256};
     let account = host
         .state
         .authority
         .account
         .as_ref()
         .map_or("owner", |a| a.id.as_str());
-    let digest = Sha256::digest(
+    let digest = crate::hash::sha256_hex(
         [
             b"personal-teams-assistant/portable-configuration-source/v1".as_slice(),
             account.as_bytes(),
         ]
         .concat(),
     );
-    digest[..16].iter().map(|b| format!("{b:02x}")).collect()
+    digest[..32].to_owned()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1442,3 +1439,21 @@ pub(super) async fn note_remove(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hash_pins {
+    use super::*;
+
+    #[test]
+    fn a_note_token_is_32_lowercase_digits_of_the_sha256_of_its_json() {
+        let note = Note {
+            id: "n1".into(),
+            ..Note::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&note).unwrap(),
+            r#"{"id":"n1","title":"","text":"","contexts":[],"keywords":[],"origin":"user","created_at":0,"updated_at":0}"#
+        );
+        assert_eq!(token(&note), "006b0ec3932b8e8f6b2351c1603889ca");
+    }
+}

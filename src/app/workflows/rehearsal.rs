@@ -123,7 +123,6 @@ impl Teams {
 /// A launcher of the coordinator that appends a line to `marker` each time it runs (a release in
 /// a test environment); approved with the digest of its program.
 fn launcher(bench: &Bench, marker: &std::path::Path) -> crate::consumers::Launcher {
-    use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
     let program = bench.root.path().join("release.sh");
     fs::write(
@@ -133,10 +132,7 @@ fn launcher(bench: &Bench, marker: &std::path::Path) -> crate::consumers::Launch
     .unwrap();
     fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
     let program = program.canonicalize().unwrap();
-    let digest = Sha256::digest(fs::read(&program).unwrap())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let digest = crate::hash::sha256_hex(fs::read(&program).unwrap());
     crate::consumers::Launcher {
         id: "release-desa".into(),
         description: "Synthetic release in desa".into(),
