@@ -1428,7 +1428,7 @@ async fn admitted_accounts_sign_in_privately_and_rebinding_revokes_only_their_au
     let machine = uuid::Uuid::new_v4().to_string();
     let token = security::random_secret();
     write_private(&profile_dir(&portal.root, &entries[1]).join("implementation/registry.json"),
-        &json!({"machines":[{"id":machine,"account_version":entries[1].version,"secret_hash":format!("{:x}",Sha256::digest(token.as_bytes()))}]}).to_string()).unwrap();
+        &json!({"machines":[{"id":machine,"account_version":entries[1].version,"secret_hash":crate::hash::sha256_hex(&token)}]}).to_string()).unwrap();
     store::edit_accounts(&portal.root, |entries| {
         entries[1].version = uuid::Uuid::new_v4().to_string();
         entries[1].access_binding.as_mut().unwrap().provider_user_id = "1003".into();
@@ -1651,7 +1651,7 @@ async fn an_exited_managed_child_cannot_quit_a_replacement_host_for_the_same_pro
 // Browser-assisted machine sign-in: synthetic accounts, installations and verifiers only.
 fn login_verifier() -> (String, String) {
     let verifier = security::random_secret();
-    let challenge = format!("{:x}", Sha256::digest(verifier.as_bytes()));
+    let challenge = crate::hash::sha256_hex(&verifier);
     (verifier, challenge)
 }
 async fn machine_post(portal: &Arc<Portal>, body: Value, bearer: Option<&str>) -> Response {
@@ -3535,10 +3535,9 @@ fn a_pairing_is_stored_under_the_lowercase_sha256_of_its_token() {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let stored: Value = serde_json::from_slice(
-        &fs::read(portal.root.join("machine-pairings.json")).unwrap(),
-    )
-    .unwrap();
+    let stored: Value =
+        serde_json::from_slice(&fs::read(portal.root.join("machine-pairings.json")).unwrap())
+            .unwrap();
     let keys: Vec<&String> = stored.as_object().unwrap().keys().collect();
     assert_eq!(keys, [&expected]);
     assert_eq!(expected.len(), 64);

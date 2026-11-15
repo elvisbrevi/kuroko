@@ -11,7 +11,6 @@
 //! (a recovery at start, a restored database) is still caught by the next sweep.
 
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 /// Announces that a store wrote a record the mirror keeps; the host's loop sends it soon. A write
 /// that does not announce itself is found by the loop's regular sweep.
@@ -150,10 +149,7 @@ pub fn canonical(value: &Value) -> Vec<u8> {
 }
 
 pub fn hex_sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::hash::sha256_hex(bytes)
 }
 
 /// What a record holds before it is sealed: its natural identifier (so a copy restores without the

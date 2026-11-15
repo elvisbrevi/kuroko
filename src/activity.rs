@@ -4,6 +4,7 @@ pub mod recorded;
 pub mod store;
 #[cfg(test)]
 mod tests;
+use crate::hash::sha256_hex;
 use crate::{
     ado::{
         link::{Linkable, Target},
@@ -17,7 +18,6 @@ use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -408,13 +408,10 @@ pub fn validate_sources(settings: &Settings, map: &KnowledgeMap) -> Result<()> {
 }
 
 fn activity_key(activity: &Linkable) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!(
-            "{}|{}|{}",
-            activity.organization, activity.url, activity.date
-        ))
-    )
+    sha256_hex(format!(
+        "{}|{}|{}",
+        activity.organization, activity.url, activity.date
+    ))
 }
 
 #[cfg(test)]

@@ -142,11 +142,7 @@ impl Image {
     }
     /// The first 8 hexadecimal digits of the SHA-256 of the bytes.
     pub fn digest(&self) -> String {
-        Sha256::digest(&self.bytes)
-            .iter()
-            .take(4)
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        crate::hash::hex(&Sha256::digest(&self.bytes)[..4])
     }
     /// What the person approves: `homero.gif · GIF 480×400 · 1.05 MB · sha256 1a2b3c4d`.
     pub fn summary(&self) -> String {

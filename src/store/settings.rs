@@ -265,7 +265,7 @@ impl SettingsStore for LocalSettings {
             hash.update(fs::read(path).unwrap_or_default());
             hash.update([0]);
         }
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(crate::hash::hex(hash.finalize()))
     }
 }
 

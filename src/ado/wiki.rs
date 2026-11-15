@@ -2136,7 +2136,6 @@ fn is_mine(p: &Page) -> bool {
     )
 }
 fn page_reference_id(wiki: &Wiki, version: &str, path: &str) -> String {
-    use sha2::{Digest, Sha256};
     // A short opaque ID is easier for the provider to copy exactly. Scope, URL,
     // path, published version and revision remain explicit in the typed registry.
     let identity = serde_json::to_vec(&(
@@ -2147,7 +2146,7 @@ fn page_reference_id(wiki: &Wiki, version: &str, path: &str) -> String {
         path,
     ))
     .unwrap();
-    format!("wiki:{:x}", Sha256::digest(identity))
+    format!("wiki:{}", crate::hash::sha256_hex(identity))
 }
 fn under_mapped(path: &str, mapped: &str) -> bool {
     validate_path(path).is_ok()

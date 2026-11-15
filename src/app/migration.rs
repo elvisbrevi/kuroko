@@ -206,7 +206,7 @@ fn destination(host: &Host) -> std::result::Result<Destination, vault::Error> {
     }
     let identity = web::account_identity(&host.state.authority).unwrap_or(Value::Null);
     let owner = identity["username"].as_str().unwrap_or("").to_owned();
-    let digest = Sha256::digest(
+    let digest = crate::hash::sha256_hex(
         [
             b"personal-teams-assistant/migration-destination/v1".as_slice(),
             host.state
@@ -218,7 +218,7 @@ fn destination(host: &Host) -> std::result::Result<Destination, vault::Error> {
         ]
         .concat(),
     );
-    let key: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+    let key = digest[..32].to_owned();
     Ok(Destination {
         view: json!({
             "key": key,

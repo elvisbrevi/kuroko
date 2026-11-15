@@ -19,7 +19,6 @@ use super::{
     *,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 /// Marks every definition this module writes; nothing without it is changed or removed.
@@ -99,8 +98,7 @@ pub(crate) fn id(profile: &Path) -> String {
     let path = profile
         .canonicalize()
         .unwrap_or_else(|_| profile.to_path_buf());
-    let digest = Sha256::digest(path.to_string_lossy().as_bytes());
-    digest[..6].iter().map(|b| format!("{b:02x}")).collect()
+    crate::hash::sha256_hex(path.to_string_lossy().as_bytes())[..12].to_owned()
 }
 
 impl Target {

@@ -44,7 +44,7 @@ pub(super) enum Poll {
 }
 
 fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    crate::hash::sha256_hex(value)
 }
 fn hex64(value: &str) -> bool {
     value.len() == 64

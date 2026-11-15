@@ -2,7 +2,6 @@ use crate::app::control::Reply;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -22,7 +21,7 @@ struct Installed {
 }
 
 fn hash(text: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(text))
+    crate::hash::sha256_hex(text)
 }
 
 fn current() -> Installed {

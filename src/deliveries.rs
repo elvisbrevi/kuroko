@@ -5,10 +5,10 @@
 //! come from a value, and a definition's digest names exactly what the person approved; anything
 //! different is a new, unapproved definition. Responses are read up to a bound and discarded:
 //! only the HTTP status and a boolean computed here leave.
+use crate::hash::sha256_hex;
 use crate::variables::{Error, Secret};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -93,10 +93,7 @@ impl Destination {
             "target": self.target,
             "variables": self.variables,
         });
-        Sha256::digest(canonical.to_string().as_bytes())
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        sha256_hex(canonical.to_string())
     }
     pub fn approved(&self) -> bool {
         self.approved_at.is_some() && self.approved_digest.as_deref() == Some(&self.digest())

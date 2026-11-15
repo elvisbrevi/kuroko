@@ -288,7 +288,7 @@ impl Document {
         let mut hash = Sha256::new();
         hash.update(b"personal-teams-assistant/portable-configuration/v1\0");
         hash.update(canonical);
-        format!("{:x}", hash.finalize())
+        crate::hash::hex(hash.finalize())
     }
 
     /// Install this document into a profile: the portable fields are replaced, everything

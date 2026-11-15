@@ -17,7 +17,6 @@ use crate::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// The organization and its work item guides.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -127,7 +126,7 @@ impl OrganizationStore for LocalOrganization<'_> {
 
     fn revision(&self) -> Result<String> {
         let record = serde_json::to_vec(&self.organization()?)?;
-        Ok(format!("{:x}", Sha256::digest(record)))
+        Ok(crate::hash::sha256_hex(record))
     }
 }
 
@@ -282,6 +281,9 @@ mod hash_pins {
             serde_json::to_string(&store.organization().unwrap()).unwrap(),
             r#"{"organization":{},"guides":[]}"#
         );
-        assert_eq!(store.revision().unwrap(), "b95591e25c19f4ae8e0cd4e7674d1a915b712580915313e7eab56362e452610c");
+        assert_eq!(
+            store.revision().unwrap(),
+            "b95591e25c19f4ae8e0cd4e7674d1a915b712580915313e7eab56362e452610c"
+        );
     }
 }

@@ -218,7 +218,7 @@ async fn fetch(
     );
     Ok(ArchiveFile {
         name: file.to_owned(),
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: crate::hash::hex(hash.finalize()),
         size,
     })
 }

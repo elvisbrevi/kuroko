@@ -9,7 +9,6 @@
 //! (and running) are never touched.
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
@@ -818,10 +817,8 @@ pub(crate) fn digest(path: &Path) -> Result<Digest> {
         "A staged executable is missing or empty."
     );
     let mut file = std::fs::File::open(path)?;
-    let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash)?;
     Ok(Digest {
-        sha256: format!("{:x}", hash.finalize()),
+        sha256: crate::hash::sha256_reader(&mut file)?,
         size: metadata.len(),
     })
 }

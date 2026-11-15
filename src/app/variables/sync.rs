@@ -825,19 +825,18 @@ fn serve(
 /// An opaque fingerprint of the account this host serves, so a client notices when the
 /// coordinator's catalog stops coming from the account it cached.
 fn source(host: &Host) -> String {
-    use sha2::{Digest, Sha256};
     let account = host
         .state
         .authority
         .account
         .as_ref()
         .map_or("owner", |a| a.id.as_str());
-    let digest = Sha256::digest(
+    let digest = crate::hash::sha256_hex(
         [
             b"personal-teams-assistant/variable-catalog-source/v1".as_slice(),
             account.as_bytes(),
         ]
         .concat(),
     );
-    digest[..16].iter().map(|b| format!("{b:02x}")).collect()
+    digest[..32].to_owned()
 }

@@ -2,11 +2,11 @@
 //! repositories are chosen. Read with the enabled source's read credential, bounded and cached
 //! like the process metadata; nothing here writes or changes a source.
 use super::{Catalog, Source, cached_read, project_url, request};
+use crate::hash::sha256_hex;
 use crate::{state::Store, workflows::CatalogRepository};
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::{Client, Method};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 /// More repositories than this in one project fail instead of returning a partial list.
 pub const MAX_REPOSITORIES: usize = 1000;
@@ -92,10 +92,7 @@ pub(crate) async fn list(
         &["_apis", "git", "repositories"],
     )?;
     // Metadata only; the credential fingerprint prevents reuse after an account change.
-    let cache_key = format!(
-        "workflow-repositories:{:x}:{url}",
-        Sha256::digest(key.as_bytes())
-    );
+    let cache_key = format!("workflow-repositories:{}:{url}", sha256_hex(key));
     let value = cached_read(
         cache,
         &cache_key,

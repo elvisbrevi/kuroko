@@ -254,10 +254,8 @@ pub(super) const CACHE_RULE: &str = "private, no-cache";
 
 /// A strong validator for a file's bytes: a hash of them.
 pub(super) fn etag(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(bytes);
-    let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
-    format!("\"{hex}\"")
+    let digest = crate::hash::sha256_hex(bytes);
+    format!("\"{}\"", &digest[..32])
 }
 
 /// The tags of the embedded copies, hashed once.

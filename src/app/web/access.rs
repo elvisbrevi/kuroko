@@ -265,7 +265,7 @@ impl Verifier {
         {
             return Err(StatusCode::UNAUTHORIZED);
         }
-        let token_hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+        let token_hash = crate::hash::sha256_hex(token);
         {
             let mut identities = self.identities.lock().await;
             identities.retain(|_, (identity, time)| {

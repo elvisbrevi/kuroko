@@ -4,7 +4,6 @@
 use super::*;
 use crate::maintenance::release::{self, Source};
 use crate::store::settings::SettingsStore;
-use sha2::{Digest as _, Sha256};
 
 /// The installation's recorded target: the archive format and the executable names follow it.
 const TARGET: &str = if cfg!(windows) {
@@ -18,7 +17,7 @@ fn archive_name(version: &str) -> String {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hash::sha256_hex(bytes)
 }
 
 /// The release archive of `version`: the directory with the matched pair, a licence and a readme.

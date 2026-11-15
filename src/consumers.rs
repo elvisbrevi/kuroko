@@ -12,7 +12,6 @@
 //! rules (key shape, reserved environment names, destinations, program, directory) live here.
 use crate::variables::{Error, Secret};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -340,23 +339,9 @@ pub fn ensure_approved(launcher: &Launcher) -> Result<()> {
 }
 
 fn digest(path: &Path) -> Result<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)
+    let file = std::fs::File::open(path)
         .map_err(|_| input("The program cannot be read; check the path."))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    Ok(crate::hash::sha256_reader(file)?)
 }
 
 fn executable(path: &Path) -> bool {

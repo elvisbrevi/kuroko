@@ -86,7 +86,7 @@ fn handoff(url: &str) -> String {
 }
 
 fn digest(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    crate::hash::sha256_hex(value)
 }
 
 /// A URL- and cookie-safe random value (256 bits).

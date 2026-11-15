@@ -7,7 +7,6 @@ use crate::store::{
 };
 use crate::tools::todo::{Detail, DetailRequest};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 pub(super) mod checkout;
@@ -402,7 +401,7 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 fn digest(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    crate::hash::sha256_hex(text)
 }
 fn uuid(text: &str) -> Result<()> {
     ensure!(
