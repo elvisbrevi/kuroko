@@ -274,7 +274,7 @@
       repositories: [{ id: repo(1), name: 'payments-api' }, { id: repo(2), name: 'payments-web' }], machine: '11111111-1111-4111-8111-111111111111',
       checkouts: { [repo(1)]: '/work/application', [repo(2)]: '/work/application/web' }, agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' },
       instructions: 'Run the unit tests before every commit.', blocks: ['base-branch', 'notify-release'], updated_at: secs(NOW - 3_600_000) },
-    { id: 'exports-nightly', name: 'Exports batch', description: 'Bugs of the nightly export batch.', enabled: false, auto_start: true, organization: org, project: 'Exports',
+    { id: 'exports-nightly', name: 'Exports batch', description: 'Use for Tasks and Bugs of the nightly export batch: file generation, retries and delivery to partners. Do not use for the on-demand exports or the reporting consoles. Documentation: https://dev.azure.com/example/Exports/_wiki/wikis/Exports.wiki/3349/Batch-nocturno-y-entregas-a-socios-comerciales', enabled: false, auto_start: true, organization: org, project: 'Exports',
       repositories: [{ id: repo(4), name: 'exports-batch' }], machine: '22222222-2222-4222-8222-222222222222',
       checkouts: { [repo(4)]: '/Users/ana/src/exports-batch' }, agent: { provider: 'codex', model: 'gpt-6.1-sol', effort: 'medium' }, instructions: '', blocks: [], updated_at: secs(NOW - 86_400_000) },
   ] : [];
