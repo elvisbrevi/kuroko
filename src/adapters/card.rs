@@ -1,14 +1,22 @@
-//! The assistant's messages as an Adaptive Card, when `[message_style]` is on: the answer's
-//! Markdown framed by a colored stripe along the left edge and a band with a label above or
+//! Every message the app sends to Teams is an Adaptive Card in the account's `[message_style]`:
+//! the Markdown framed by a colored stripe along the left edge and a band with a label above or
 //! below it. Teams drops styles from chat HTML, so a card is the only way to color a message.
 //!
 //! The stripe is a tiny PNG painted down the card's left edge, so any color works; the band
 //! uses a Teams container style, which Teams shades for its light or dark theme. The card holds
-//! only text and links checked by the pipeline: no actions, inputs or remote images.
+//! only text, links checked by the pipeline and the message's own images (its Graph hosted
+//! contents): no actions, inputs or remote images.
+//!
+//! A card that does not fit in one message is laid out compactly first (paragraph lines in one
+//! block, tables as lines, code without its fallback); a message still too large is rewritten
+//! shorter by a model ([`condense`]) and checked by code, or not sent. It never falls back to
+//! plain HTML.
 use super::teams;
 use crate::config::{BandColor, BandPosition, LabelColor, Language, MessageStyle, TextSize};
+use crate::llm::LlmProvider;
 use base64::Engine;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 /// Graph's attachment type for an Adaptive Card.
 pub const CONTENT_TYPE: &str = "application/vnd.microsoft.card.adaptive";
@@ -18,7 +26,7 @@ const BAND: &str = "pta-band";
 /// Markdown never turns text into a link the pipeline did not check.
 const LINK: char = '\u{e002}';
 /// Graph's limit for a message: the HTML body plus the serialized card.
-const LIMIT: usize = 27_800;
+pub const LIMIT: usize = 27_800;
 
 /// Marks mention `n` in the Markdown a caller passes: `MENTION_START`, `n`, `MENTION_END`.
 pub const MENTION_START: char = '\u{e000}';
@@ -26,59 +34,98 @@ pub const MENTION_END: char = '\u{e001}';
 
 /// The Graph message that sends `markdown` as a styled card, with `marker` (the output marker
 /// of the personal chat, or nothing) after it. `mentions` are the (user ID, shown name) of each
-/// mention marked in `markdown`: the card mentions them itself, as Teams cards do, so a message
-/// with mentions keeps the style. `None` when the style is off or the card would not fit in a
-/// message: the caller then sends plain HTML, which always fits a valid answer.
+/// mention marked in `markdown`: the card mentions them itself, as Teams cards do. `images` are
+/// the alt texts of the message's hosted contents, in order: the card shows them after the text.
+/// `Err` holds the size in bytes of the smallest layout when even it does not fit in one message:
+/// nothing may be sent then, and the caller shortens the text ([`condense`]) or refuses.
 pub fn message(
     markdown: &str,
     style: &MessageStyle,
     language: Language,
     marker: &str,
     mentions: &[(String, String)],
-) -> Option<Value> {
-    if !style.enabled {
-        return None;
-    }
+    images: &[&str],
+) -> Result<Value, usize> {
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let mut card = card(markdown, style, language);
-    let mut content = serde_json::to_string(&card).ok()?;
+    let body = format!("<attachment id=\"{id}\"></attachment>{marker}");
+    let mut size = 0;
+    for layout in [Layout::Full, Layout::Compact] {
+        let content = content(markdown, style, language, mentions, images, layout);
+        size = body.len() + content.len();
+        if size <= LIMIT {
+            return Ok(json!({
+                "body": {"contentType": "html", "content": body},
+                "attachments": [{"id": id, "contentType": CONTENT_TYPE, "content": content}],
+            }));
+        }
+    }
+    Err(size)
+}
+
+/// How much room the card's elements take.
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    /// Every line its own block, tables as tables, code with a fallback for other clients.
+    Full,
+    /// For a message that does not fit otherwise: the lines of a paragraph or list share one
+    /// block, a table is one line per row and code has no fallback. Same text, less markup.
+    Compact,
+}
+
+/// The serialized card, mentions resolved.
+fn content(
+    markdown: &str,
+    style: &MessageStyle,
+    language: Language,
+    mentions: &[(String, String)],
+    images: &[&str],
+    layout: Layout,
+) -> String {
+    let mut card = laid_out(markdown, style, language, images, layout);
+    let mut content = card.to_string();
     let mut entities = Vec::new();
     for (at, (user, shown)) in mentions.iter().enumerate() {
         let tag = format!("<at>{shown}</at>");
         let placeholder = format!("{MENTION_START}{at}{MENTION_END}");
         if content.contains(&placeholder) {
             // The tag goes into JSON strings: its JSON form, without the quotes.
-            let escaped = serde_json::to_string(&tag).ok()?;
+            let escaped = Value::from(tag.as_str()).to_string();
             content = content.replace(&placeholder, &escaped[1..escaped.len() - 1]);
             entities.push(json!({"type": "mention", "text": tag,
                 "mentioned": {"id": user, "name": shown}}));
         }
     }
-    if !entities.is_empty() {
-        card = serde_json::from_str(&content).ok()?;
+    if !entities.is_empty()
+        && let Ok(mentioned) = serde_json::from_str::<Value>(&content)
+    {
+        card = mentioned;
         card["msteams"] = json!({"entities": entities});
-        content = serde_json::to_string(&card).ok()?;
+        content = card.to_string();
     }
-    let body = format!("<attachment id=\"{id}\"></attachment>{marker}");
-    (body.len() + content.len() <= LIMIT).then(|| {
-        json!({
-            "body": {"contentType": "html", "content": body},
-            "attachments": [{"id": id, "contentType": CONTENT_TYPE, "content": content}],
-        })
-    })
+    content
 }
 
 /// The Adaptive Card for `markdown` in `style`.
 pub fn card(markdown: &str, style: &MessageStyle, language: Language) -> Value {
+    laid_out(markdown, style, language, &[], Layout::Full)
+}
+fn laid_out(
+    markdown: &str,
+    style: &MessageStyle,
+    language: Language,
+    images: &[&str],
+    layout: Layout,
+) -> Value {
     let stripe = json!({
         "url": stripe(&style.accent, style.stripe_width),
         "fillMode": "RepeatVertically",
         "horizontalAlignment": "Left",
     });
-    let mut body = elements(markdown, true);
+    let mut body = elements(markdown, true, layout);
     if style.text_size != TextSize::Default {
         body.iter_mut().for_each(|e| resize(e, style.text_size));
     }
+    body.extend(images.iter().enumerate().map(|(at, alt)| picture(at, alt)));
     let mut band = band(style, language, &stripe);
     match style.position {
         BandPosition::Top => {
@@ -133,6 +180,119 @@ pub fn message_text(message: &Value) -> String {
     }
     text.replace('\u{200b}', "")
 }
+/// `[image]` or `[image: alt]` for each image the message's cards show from its own hosted
+/// contents, in order; `message_text` leaves them out, like the images of an HTML body.
+pub fn image_labels(message: &Value) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if object.get("type").and_then(Value::as_str) == Some("Image")
+                    && object
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| url.contains("hostedContents/"))
+                {
+                    let alt = object
+                        .get("altText")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    out.push(if alt.is_empty() {
+                        "[image]".to_owned()
+                    } else {
+                        format!("[image: {alt}]")
+                    });
+                }
+                object.values().for_each(|child| walk(child, out));
+            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for attachment in message["attachments"].as_array().into_iter().flatten() {
+        if attachment["contentType"].as_str() == Some(CONTENT_TYPE)
+            && let Some(card) = attachment["content"]
+                .as_str()
+                .and_then(|c| serde_json::from_str::<Value>(c).ok())
+        {
+            walk(&card, &mut out);
+        }
+    }
+    out
+}
+
+/// What a shorter version must keep word for word: the URLs of its links and its `@[Name]`
+/// mentions.
+fn kept(text: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+    let url = regex::Regex::new(r"https?://[^\s<>\]]+").expect("valid pattern");
+    let mention = regex::Regex::new(r"@\[([^\]\n]{1,100})\]").expect("valid pattern");
+    let urls = url
+        .find_iter(text)
+        .map(|m| {
+            m.as_str()
+                .trim_end_matches(['.', ',', ';', ':', '!', '?', ')', '*', '_'])
+                .to_owned()
+        })
+        .collect();
+    let mentions = mention
+        .captures_iter(text)
+        .map(|c| c[1].trim().to_lowercase())
+        .collect();
+    (urls, mentions)
+}
+
+/// How many times a message is rewritten shorter before it is given up.
+const REWRITES: usize = 2;
+
+/// `text`, or a shorter version written by `llm` when `overflow` says its card does not fit
+/// (`overflow` measures as [`message`] does and returns the card's size in bytes, or `None`
+/// when it fits). Each rewrite asks for the length the measured size allows, must keep the same
+/// links and mentions, and is measured again; `Err` when no rewrite fits, and nothing may be
+/// sent then.
+pub async fn condense(
+    llm: &dyn LlmProvider,
+    text: &str,
+    overflow: impl Fn(&str) -> Option<usize>,
+) -> anyhow::Result<String> {
+    let Some(mut bytes) = overflow(text) else {
+        return Ok(text.to_owned());
+    };
+    let wanted = kept(text);
+    let mut current = text.to_owned();
+    for _ in 0..REWRITES {
+        let chars = current.chars().count();
+        // The card's markup grows with the text, so the text shrinks in the same proportion,
+        // with a margin.
+        let max = (chars as f64 * LIMIT as f64 / bytes as f64 * 0.85) as usize;
+        let max = max.clamp(200, chars.saturating_sub(1).max(200));
+        let rewritten = llm.condense(&current, max).await?.trim().to_owned();
+        if rewritten.is_empty() || kept(&rewritten) != wanted {
+            tracing::warn!(event = "message_condense_rejected");
+            continue;
+        }
+        match overflow(&rewritten) {
+            None => return Ok(rewritten),
+            Some(size) => {
+                bytes = size;
+                current = rewritten;
+            }
+        }
+    }
+    anyhow::bail!("the message does not fit in one Teams message, even shortened")
+}
+
+/// The card of a message as Graph receives it: what tests check of a post.
+#[cfg(test)]
+pub fn posted(message: &Value) -> Value {
+    message["attachments"][0]["content"]
+        .as_str()
+        .and_then(|c| serde_json::from_str(c).ok())
+        .unwrap_or(Value::Null)
+}
+
 fn texts(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(object) => {
@@ -202,8 +362,9 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
 }
 
 /// The answer's Markdown as card elements, with the blocks `teams::html` knows: every line of a
-/// paragraph or list is its own text block, so line breaks never depend on the client.
-fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
+/// paragraph or list is its own text block, so line breaks never depend on the client (in the
+/// compact layout they share one block, a paragraph each).
+fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
     let item = regex::Regex::new(r"^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$").unwrap();
     let lines: Vec<&str> = markdown.lines().collect();
     let mut out = Vec::new();
@@ -229,7 +390,11 @@ fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
                     .count();
                 body.push(line.chars().skip(strip).collect::<String>());
             }
-            push(&mut out, &mut gap, code(&lang.trim().to_lowercase(), &body));
+            push(
+                &mut out,
+                &mut gap,
+                code(&lang.trim().to_lowercase(), &body, layout),
+            );
             gap = Gap::Block;
             lists.clear();
             continue;
@@ -273,7 +438,7 @@ fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
                 .iter()
                 .map(|l| l.strip_prefix(' ').unwrap_or(l))
                 .collect();
-            let items = elements(&body.join("\n"), false);
+            let items = elements(&body.join("\n"), false, layout);
             if !items.is_empty() {
                 push(
                     &mut out,
@@ -300,7 +465,7 @@ fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
                 rows.push(teams::cells(row));
                 next += 1;
             }
-            push(&mut out, &mut gap, table(&header, &rows));
+            push(&mut out, &mut gap, table(&header, &rows, layout));
             gap = Gap::Block;
             lists.clear();
             continue;
@@ -328,7 +493,7 @@ fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
                 _ => ("", &c[3]),
             };
             let text = format!("{}{mark} {check}{}", pad(depth), inline(text));
-            push(&mut out, &mut gap, text_block(text));
+            push_line(&mut out, &mut gap, text, layout);
             gap = Gap::Line;
             continue;
         }
@@ -337,7 +502,7 @@ fn elements(markdown: &str, quotes: bool) -> Vec<Value> {
             0 => inline(trimmed),
             depth => format!("{}  {}", pad(depth - 1), inline(trimmed)),
         };
-        push(&mut out, &mut gap, text_block(text));
+        push_line(&mut out, &mut gap, text, layout);
         gap = Gap::Line;
     }
     out
@@ -367,8 +532,36 @@ fn push(out: &mut Vec<Value>, gap: &mut Gap, mut element: Value) {
     *gap = Gap::Block;
     out.push(element);
 }
+/// A line of a paragraph or list; in the compact layout it joins the block of the line before.
+fn push_line(out: &mut Vec<Value>, gap: &mut Gap, text: String, layout: Layout) {
+    if layout == Layout::Compact
+        && *gap == Gap::Line
+        && let Some(last) = out.last_mut().and_then(Value::as_object_mut)
+        && last.get("type").and_then(Value::as_str) == Some("TextBlock")
+        && last
+            .keys()
+            .all(|k| matches!(k.as_str(), "type" | "text" | "wrap" | "spacing"))
+        && let Some(Value::String(previous)) = last.get_mut("text")
+    {
+        previous.push_str("\n\n");
+        previous.push_str(&text);
+        *gap = Gap::Block;
+        return;
+    }
+    push(out, gap, text_block(text));
+}
 fn text_block(text: String) -> Value {
     json!({"type": "TextBlock", "text": text, "wrap": true})
+}
+/// The message's image `at` (0-based), its hosted content `at + 1`; Teams lets the reader
+/// open it full size.
+fn picture(at: usize, alt: &str) -> Value {
+    let mut image = json!({"type": "Image", "url": format!("../hostedContents/{}/$value", at + 1),
+        "msTeams": {"allowExpand": true}});
+    if !alt.trim().is_empty() {
+        image["altText"] = json!(alt);
+    }
+    image
 }
 /// Indentation for a nested list: non-breaking spaces, which Markdown keeps.
 fn pad(depth: usize) -> String {
@@ -377,7 +570,7 @@ fn pad(depth: usize) -> String {
 
 /// A code block. Teams has its own `CodeBlock`; other clients get the lines in a monospace
 /// font, as plain text runs that no Markdown touches.
-fn code(lang: &str, lines: &[String]) -> Value {
+fn code(lang: &str, lines: &[String], layout: Layout) -> Value {
     let language = match lang {
         "sh" | "shell" | "bash" | "curl" => "Bash",
         "cs" | "c#" | "csharp" => "C#",
@@ -396,6 +589,11 @@ fn code(lang: &str, lines: &[String]) -> Value {
         "xml" => "XML",
         _ => "PlainText",
     };
+    let snippet =
+        json!({"type": "CodeBlock", "codeSnippet": lines.join("\n"), "language": language});
+    if layout == Layout::Compact {
+        return snippet;
+    }
     let runs: Vec<Value> = lines
         .iter()
         .map(|line| {
@@ -405,11 +603,34 @@ fn code(lang: &str, lines: &[String]) -> Value {
                 "inlines": [{"type": "TextRun", "text": text, "fontType": "Monospace"}]})
         })
         .collect();
-    json!({"type": "CodeBlock", "codeSnippet": lines.join("\n"), "language": language,
-        "fallback": {"type": "Container", "style": "emphasis", "items": runs}})
+    let mut full = snippet;
+    full["fallback"] = json!({"type": "Container", "style": "emphasis", "items": runs});
+    full
 }
 
-fn table(header: &[String], rows: &[Vec<String>]) -> Value {
+fn table(header: &[String], rows: &[Vec<String>], layout: Layout) -> Value {
+    if layout == Layout::Compact {
+        // One line per row, each value after its column's name.
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|cells| {
+                header
+                    .iter()
+                    .zip(
+                        cells
+                            .iter()
+                            .map(String::as_str)
+                            .chain(std::iter::repeat("")),
+                    )
+                    .filter(|(_, value)| !value.trim().is_empty())
+                    .map(|(name, value)| format!("**{}:** {}", inline(name), inline(value)))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            })
+            .filter(|line| !line.is_empty())
+            .collect();
+        return text_block(lines.join("\n\n"));
+    }
     let row = |cells: &[String], bold: bool| {
         let cells: Vec<Value> = (0..header.len())
             .map(|k| {
@@ -768,10 +989,15 @@ mod tests {
     }
 
     #[test]
-    fn a_styled_message_attaches_the_card_and_reads_back_without_the_band() {
-        assert!(message("Hola", &MessageStyle::default(), Language::Es, "", &[]).is_none());
+    fn a_message_is_always_a_card_and_reads_back_without_the_band() {
+        // The retired switch changes nothing.
+        let off = MessageStyle {
+            enabled: false,
+            ..MessageStyle::default()
+        };
+        assert!(message("Hola", &off, Language::Es, "", &[], &[]).is_ok());
         let marker = "<p><a href=\"https://personalteams.invalid/output/n\">PTA</a></p>";
-        let sent = message("Hola **mundo**", &style(), Language::Es, marker, &[]).unwrap();
+        let sent = message("Hola **mundo**", &style(), Language::Es, marker, &[], &[]).unwrap();
         let id = sent["attachments"][0]["id"].as_str().unwrap();
         assert_eq!(
             sent["body"]["content"],
@@ -784,10 +1010,153 @@ mod tests {
         // A plain message reads as before.
         let plain = json!({"body": {"contentType": "html", "content": "<p>Hola</p>"}});
         assert_eq!(message_text(&plain), "Hola");
-        // A card too large for one message falls back to plain HTML.
+        // A card too large in the full layout fits in the compact one: one block, same lines.
         let long = "a\n".repeat(1_500);
-        assert!(teams::html(&long).len() <= 27_800);
-        assert!(message(&long, &style(), Language::Es, "", &[]).is_none());
+        let sent = message(&long, &style(), Language::Es, "", &[], &[]).unwrap();
+        let card: Value =
+            serde_json::from_str(sent["attachments"][0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(body_texts(&card), [vec!["a"; 1_500].join("\n\n")]);
+        // One too large even then is never sent: the error says how large it is.
+        let huge = "palabra ".repeat(20_000);
+        let size = message(&huge, &style(), Language::Es, "", &[], &[]).unwrap_err();
+        assert!(size > LIMIT, "{size}");
+    }
+
+    #[test]
+    fn the_compact_layout_keeps_the_text_with_less_markup() {
+        let markdown = "Uno\ndos\n\n- a\n- b\n\n| Nombre | Estado |\n|---|---|\n| ms.usuario | listo |\n| ms.solicitud | |\n\n```sh\necho hola\n```";
+        let full = laid_out(markdown, &style(), Language::Es, &[], Layout::Full);
+        let compact = laid_out(markdown, &style(), Language::Es, &[], Layout::Compact);
+        assert!(compact.to_string().len() < full.to_string().len());
+        let body = compact["body"].as_array().unwrap();
+        assert_eq!(body[0]["text"], "Uno\n\ndos");
+        assert_eq!(body[1]["text"], "• a\n\n• b");
+        // A table is one line per row, each value after its column; empty cells are left out.
+        assert_eq!(
+            body[2]["text"],
+            "**Nombre:** ms.usuario · **Estado:** listo\n\n**Nombre:** ms.solicitud"
+        );
+        assert_eq!(body[3]["type"], "CodeBlock");
+        assert_eq!(body[3]["codeSnippet"], "echo hola");
+        assert!(body[3].get("fallback").is_none());
+        let code = full["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["type"] == "CodeBlock");
+        assert!(code.unwrap()["fallback"].is_object());
+    }
+
+    #[test]
+    fn images_follow_the_text_inside_the_card_and_read_back_as_labels() {
+        let sent = message(
+            "Mira",
+            &style(),
+            Language::Es,
+            "",
+            &[],
+            &["Captura\n de Loki", " "],
+        )
+        .unwrap();
+        let card: Value =
+            serde_json::from_str(sent["attachments"][0]["content"].as_str().unwrap()).unwrap();
+        let body = card["body"].as_array().unwrap();
+        assert_eq!(body[0]["text"], "Mira");
+        assert_eq!(
+            body[1],
+            json!({"type": "Image", "url": "../hostedContents/1/$value",
+                "altText": "Captura\n de Loki", "msTeams": {"allowExpand": true}})
+        );
+        assert_eq!(body[2]["url"], "../hostedContents/2/$value");
+        assert!(body[2].get("altText").is_none());
+        // The band stays last; the stripe is a background, never read as an image.
+        assert_eq!(body[3]["id"], BAND);
+        assert_eq!(image_labels(&sent), ["[image: Captura de Loki]", "[image]"]);
+        assert!(!message_text(&sent).contains("image"));
+        // Graph returns each image at its own URL.
+        let mut stored = card.clone();
+        stored["body"][1]["url"] =
+            json!("https://graph.microsoft.com/v1.0/chats/c/messages/1/hostedContents/aW1n/$value");
+        let mut read_back = sent.clone();
+        read_back["attachments"][0]["content"] = json!(stored.to_string());
+        assert_eq!(image_labels(&read_back).len(), 2);
+        // Images only: the card holds them and the band.
+        let only = message("", &style(), Language::Es, "", &[], &["Uno"]).unwrap();
+        let card: Value =
+            serde_json::from_str(only["attachments"][0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(card["body"][0]["type"], "Image");
+    }
+
+    /// A model that answers each rewrite with the next of `answers`.
+    struct Rewrites {
+        answers: std::sync::Mutex<Vec<String>>,
+        asked: std::sync::Mutex<Vec<usize>>,
+    }
+    impl Rewrites {
+        fn new(answers: &[&str]) -> Self {
+            Self {
+                answers: std::sync::Mutex::new(
+                    answers.iter().rev().map(|a| (*a).to_owned()).collect(),
+                ),
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for Rewrites {
+        fn name(&self) -> &str {
+            "rewrites"
+        }
+        async fn generate(&self, _: crate::llm::GenerationInput<'_>) -> anyhow::Result<String> {
+            anyhow::bail!("unused")
+        }
+        async fn condense(&self, _: &str, max_chars: usize) -> anyhow::Result<String> {
+            self.asked.lock().unwrap().push(max_chars);
+            self.answers
+                .lock()
+                .unwrap()
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("no more"))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_message_that_does_not_fit_is_shortened_keeping_links_and_mentions() {
+        // Fits when it has at most 70 characters.
+        let overflow = |text: &str| (text.chars().count() > 70).then_some(LIMIT * 2);
+        let long = format!(
+            "@[Luis] {} ver [la release](https://dev.azure.com/o/p/_release?id=1).",
+            "muy ".repeat(300)
+        );
+        // A text that fits is never sent to a model.
+        let model = Rewrites::new(&[]);
+        assert_eq!(condense(&model, "corto", overflow).await.unwrap(), "corto");
+        assert!(model.asked.lock().unwrap().is_empty());
+        // A rewrite that drops the link, or adds a mention, is rejected; the next one counts.
+        let model = Rewrites::new(&[
+            "@[Luis] listo.",
+            "@[Luis] @[Ana] [release](https://dev.azure.com/o/p/_release?id=1)",
+        ]);
+        assert!(condense(&model, &long, overflow).await.is_err());
+        let model = Rewrites::new(&[
+            "@[Luis] listo, ver https://evil.example",
+            " @[luis] ver [release](https://dev.azure.com/o/p/_release?id=1). ",
+        ]);
+        assert_eq!(
+            condense(&model, &long, overflow).await.unwrap(),
+            "@[luis] ver [release](https://dev.azure.com/o/p/_release?id=1)."
+        );
+        // It asks for the length the measured size allows, with a margin.
+        let chars = long.chars().count();
+        assert_eq!(
+            model.asked.lock().unwrap()[0],
+            (chars as f64 * 0.5 * 0.85) as usize
+        );
+        // Two rewrites at most, then nothing is sent.
+        let (first, second) = (long.replacen("muy ", "", 10), long.replacen("muy ", "", 20));
+        let model = Rewrites::new(&[&first, &second, "corto"]);
+        assert!(condense(&model, &long, overflow).await.is_err());
+        assert_eq!(model.asked.lock().unwrap().len(), REWRITES);
     }
 
     #[test]
@@ -797,7 +1166,7 @@ mod tests {
             ("user-2".to_owned(), "Luis".to_owned()),
         ];
         let text = "\u{e000}0\u{e001} y \u{e000}1\u{e001}: **listo**";
-        let sent = message(text, &style(), Language::Es, "", &mentions).unwrap();
+        let sent = message(text, &style(), Language::Es, "", &mentions, &[]).unwrap();
         let id = sent["attachments"][0]["id"].as_str().unwrap();
         assert_eq!(
             sent["body"]["content"],
@@ -828,7 +1197,7 @@ mod tests {
         assert_eq!(read.trim(), "Ana \"Pérez\" y Luis: **listo**");
         // Without mentions, a marked index stays as written and the card has no entities.
         let card: Value = serde_json::from_str(
-            message(text, &style(), Language::Es, "", &[]).unwrap()["attachments"][0]["content"]
+            message(text, &style(), Language::Es, "", &[], &[]).unwrap()["attachments"][0]["content"]
                 .as_str()
                 .unwrap(),
         )

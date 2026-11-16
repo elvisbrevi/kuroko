@@ -669,12 +669,10 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await context.close();
 }
 {
-  // Message style: hidden while off; a combination fills the colors, the preview follows and Save sends the section.
+  // Message style: always on; a combination fills the colors, the preview follows and Save sends the section.
   const { context, page, errors } = await open({ axe: true });
   await page.evaluate(() => showTab('settings', 'panel-message-style'));
-  check('message style fields stay hidden while it is off', !await page.isVisible('#style-fields'));
-  await page.check('#style-enabled');
-  check('turning the message style on shows its fields and the default label', await page.isVisible('#style-preview')
+  check('the message style shows its fields and the default label with no switch', !await page.$('#style-enabled') && await page.isVisible('#style-preview')
     && await page.textContent('#style-preview-label') === 'Respuesta generada con IA' && await page.inputValue('#style-preset') === 'teams');
   await page.selectOption('#style-preset', 'green');
   await page.selectOption('#style-position', 'top');

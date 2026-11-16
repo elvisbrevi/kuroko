@@ -191,7 +191,9 @@ impl Pipeline {
             return Err(DraftRefusal::NotDraftable.into());
         }
         let answer = audit.proposed.clone().unwrap_or_default();
-        if !self.valid_answer(&answer) {
+        // The user approved this very text: one whose card no longer fits (the style changed)
+        // is regenerated, which shortens it, rather than rewritten here.
+        if !self.valid_answer(&answer) || self.adapter.card_overflow(&answer).is_some() {
             return Err(DraftRefusal::Unsafe.into());
         }
         let message = self.adapter.fetch(resource).await?;
@@ -1661,6 +1663,17 @@ impl Pipeline {
             audit.reason = "supported_answer".into();
             answer
         };
+        // Every answer is a Teams card: one that does not fit is rewritten shorter, keeping its
+        // links, or withheld; the draft and what is sent are the version that fits.
+        let proposal = match self.fit_card(&proposal, &mut audit).await {
+            Some(fitted) => fitted,
+            None => {
+                audit.proposed = Some(self.redactor.redact(&proposal));
+                return self
+                    .withhold(resource, &message, &mut audit, "card_too_long".into())
+                    .await;
+            }
+        };
         audit.proposed = Some(self.redactor.redact(&proposal));
         if !self.valid_answer(&proposal) {
             return self
@@ -3096,6 +3109,29 @@ impl Pipeline {
         saved.reason = stage.into();
         self.store.record(resource, &saved)
     }
+    /// `answer`, or a shorter version a model wrote when its Teams card would not fit in one
+    /// message (`card::condense` checks it keeps the links and measures it again). `None` when
+    /// no version fits: it is not sent.
+    async fn fit_card(&self, answer: &str, audit: &mut Audit) -> Option<String> {
+        let Some(size) = self.adapter.card_overflow(answer) else {
+            return Some(answer.to_owned());
+        };
+        tracing::info!(event = "answer_card_too_long", bytes = size);
+        match crate::adapters::card::condense(self.llm.as_ref(), answer, |text| {
+            self.adapter.card_overflow(text)
+        })
+        .await
+        {
+            Ok(shorter) => {
+                audit.step(
+                    "shortened",
+                    "the answer did not fit in one Teams card; a model rewrote it shorter, with the same links",
+                );
+                Some(shorter)
+            }
+            Err(_) => None,
+        }
+    }
     fn valid_answer(&self, answer: &str) -> bool {
         // No character cap; the rendered Teams HTML must still fit Graph's body limit.
         !answer.trim().is_empty()
@@ -3494,6 +3530,12 @@ fn withheld_reason(reason: &str, language: Language) -> &'static str {
     let unsafe_answer = matches!(reason, "unsafe_proposal" | "unsafe_answer");
     let references = reason.starts_with("invalid_references");
     match language {
+        Language::Es if reason == "card_too_long" => {
+            "no cabía en un mensaje de Teams, ni siquiera acortada"
+        }
+        Language::En if reason == "card_too_long" => {
+            "didn't fit in a Teams message, even shortened"
+        }
         Language::Es if unsafe_answer => {
             "contenía datos sensibles o no cabía en un mensaje de Teams"
         }

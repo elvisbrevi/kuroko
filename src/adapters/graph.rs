@@ -208,6 +208,27 @@ fn registration_message(
 }
 impl Graph {
     /// The message style and reply language to send with: the saved ones, else `config`'s.
+    /// The size in bytes of the card `post_chat` or `send` would build for `markdown` and
+    /// `images` when it does not fit in one message; `None` when it fits. It measures with the
+    /// longest output marker, and with each `@[Name]` as a mention of a long display name, so
+    /// a text that fits here fits when sent.
+    pub fn card_overflow(&self, markdown: &str, images: &[super::images::Image]) -> Option<usize> {
+        let (style, language) = self.message_style();
+        let marker = format!(
+            "<p><a href=\"https://personalteams.invalid/output/{}\">PTA</a></p>",
+            "0".repeat(64)
+        );
+        let pattern = regex::Regex::new(r"@\[([^\]\n]{1,100})\]").ok()?;
+        let mut mentions: Vec<(String, String)> = Vec::new();
+        let text = markdown.replace(['\u{e000}', '\u{e001}'], "");
+        let text = pattern.replace_all(&text, |c: &regex::Captures| {
+            let shown = format!("{:<100}", c[1].trim());
+            mentions.push(("0".repeat(36), shown));
+            format!("\u{e000}{}\u{e001}", mentions.len() - 1)
+        });
+        let alts: Vec<&str> = images.iter().map(|i| i.alt.as_str()).collect();
+        super::card::message(&text, &style, language, &marker, &mentions, &alts).err()
+    }
     pub(super) fn message_style(&self) -> (MessageStyle, Language) {
         self.config_path
             .as_deref()
@@ -1131,13 +1152,6 @@ impl Graph {
         if let Some(refusal) = failure {
             return Err(refusal.into());
         }
-        let mut content = teams::html(&text);
-        for (at, (_, shown)) in mentioned.iter().enumerate() {
-            content = content.replace(
-                &format!("\u{e000}{at}\u{e001}"),
-                &format!("<at id=\"{at}\">{}</at>", teams::escape_text(shown)),
-            );
-        }
         let own = notes || own_chat == Some(id);
         let conversation = format!("chats/{id}");
         let nonce = if own {
@@ -1151,24 +1165,13 @@ impl Graph {
                 format!("<p><a href=\"https://personalteams.invalid/output/{nonce}\">PTA</a></p>")
             })
             .unwrap_or_default();
-        // The configured style, like the assistant's answers; the card carries the mentions
-        // itself. Graph's hosted images live in the HTML body, so a message with images, or a
-        // card that does not fit, stays plain HTML. The card never carries an image.
+        // Always a card in the configured style, like the assistant's answers: it carries the
+        // mentions itself and shows the images of the message's hosted contents. One that does
+        // not fit is refused before anything is sent; `card_overflow` lets a caller shorten it.
         let (style, language) = self.message_style();
-        let card = if images.is_empty() {
-            super::card::message(&text, &style, language, &marker, &mentioned)
-        } else {
-            None
-        };
-        content.push_str(&image_tags(images));
-        content.push_str(&marker);
-        ensure!(
-            card.is_some() || content.len() <= 27_800,
-            PostRefusal::TooLong
-        );
-        let styled = card.is_some();
-        let mut body =
-            card.unwrap_or_else(|| json!({"body":{"contentType":"html","content":content}}));
+        let alts: Vec<&str> = images.iter().map(|i| i.alt.as_str()).collect();
+        let mut body = super::card::message(&text, &style, language, &marker, &mentioned, &alts)
+            .map_err(|_| PostRefusal::TooLong)?;
         if !images.is_empty() {
             body["hostedContents"] = hosted_contents(images);
         }
@@ -1181,17 +1184,6 @@ impl Graph {
                 images.iter().map(|i| i.bytes.len()).sum::<usize>()
             )
         };
-        // Graph mentions point at the `<at id>` tags of the HTML body; a card has its own.
-        if !styled && !mentioned.is_empty() {
-            body["mentions"] = mentioned
-                .iter()
-                .enumerate()
-                .map(|(at, (user, shown))| {
-                    json!({"id":at,"mentionText":shown,
-                        "mentioned":{"user":{"id":user,"displayName":shown,"userIdentityType":"aadUser"}}})
-                })
-                .collect();
-        }
         // Never retry a send: Graph provides no idempotency guarantee for this endpoint.
         let result = self
             .request(
@@ -1238,10 +1230,6 @@ impl Graph {
             "mentions":mentioned.iter().map(|(_, n)| n).collect::<Vec<_>>()});
         if !images.is_empty() {
             result["images"] = images.iter().map(super::images::Image::describe).collect();
-            if style.enabled {
-                result["style"] =
-                    json!("plain: a message with images is sent without the message style card");
-            }
         }
         Ok(result)
     }
@@ -1432,6 +1420,9 @@ impl Graph {
 }
 #[async_trait]
 impl MessageAdapter for Graph {
+    fn card_overflow(&self, text: &str) -> Option<usize> {
+        Graph::card_overflow(self, text, &[])
+    }
     async fn fetch(&self, resource: &str) -> Result<IncomingMessage> {
         let resource = teams::canonical_resource(resource)?;
         let collection = teams::collection(&resource)?;
@@ -1595,12 +1586,6 @@ impl MessageAdapter for Graph {
         Ok(found)
     }
     async fn send(&self, m: &IncomingMessage, text: &str) -> Result<String> {
-        // Teams renders HTML bodies: titled links, lists and code blocks instead of raw Markdown.
-        let content = teams::html(text);
-        ensure!(
-            content.len() <= 27_800,
-            "Graph answer body exceeds the transport byte limit"
-        );
         let resource = teams::canonical_resource(&m.resource)?;
         ensure!(
             self.allowed_collection(&teams::collection(&resource)?),
@@ -1624,10 +1609,15 @@ impl MessageAdapter for Graph {
                 format!("<p><a href=\"https://personalteams.invalid/output/{nonce}\">PTA</a></p>")
             })
             .unwrap_or_default();
-        // The configured style, or plain HTML when it is off or the card does not fit.
+        // Always a card in the configured style. The pipeline shortened an answer that did not
+        // fit (`card_overflow`); one that still does not fit is not sent.
         let (style, language) = self.message_style();
-        let body = super::card::message(text, &style, language, &marker, &[])
-            .unwrap_or_else(|| json!({"body":{"contentType":"html","content":content + &marker}}));
+        let body =
+            super::card::message(text, &style, language, &marker, &[], &[]).map_err(|bytes| {
+                anyhow::anyhow!(
+                    "the answer does not fit in one Teams card ({bytes} bytes); nothing was sent"
+                )
+            })?;
         // Never retry a send: Graph provides no idempotency guarantee for this endpoint.
         let result = self.request(Method::POST, &path, Some(body), false).await?;
         let id = result["id"]
@@ -1640,24 +1630,8 @@ impl MessageAdapter for Graph {
     }
 }
 
-/// The images of a posted message after its text, each in its own paragraph, pointing at the
-/// hosted content of the same number. Only the escaped alt text comes from the caller.
-fn image_tags(images: &[super::images::Image]) -> String {
-    images
-        .iter()
-        .enumerate()
-        .map(|(at, image)| {
-            format!(
-                "<p><img src=\"../hostedContents/{}/$value\" alt=\"{}\" width=\"{}\" height=\"{}\"></p>",
-                at + 1,
-                teams::escape_text(&image.alt),
-                image.width,
-                image.height
-            )
-        })
-        .collect()
-}
-/// Graph's hosted contents for [`image_tags`]: the bytes in base64 and the type read from them.
+/// Graph's hosted contents for the card's images, numbered as `card::message` refers to them:
+/// the bytes in base64 and the type read from them.
 fn hosted_contents(images: &[super::images::Image]) -> Value {
     use base64::Engine;
     images
@@ -1702,7 +1676,9 @@ impl std::fmt::Display for PostRefusal {
             Self::AmbiguousMention => {
                 "A mention matches several members; write the full display name."
             }
-            Self::TooLong => "The message exceeds the Teams size limit.",
+            Self::TooLong => {
+                "The message does not fit in one Teams card (27,800 bytes); shorten it. Nothing was sent."
+            }
             Self::Refused { cause } if !cause.is_empty() => {
                 return write!(f, "Teams refused the message ({cause}); nothing was sent.");
             }

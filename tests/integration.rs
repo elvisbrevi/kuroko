@@ -25,7 +25,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use tower::ServiceExt;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{body_partial_json, method, path},
+    matchers::{body_partial_json, body_string_contains, method, path},
 };
 
 struct NoTools;
@@ -97,9 +97,11 @@ async fn deterministic_greeting_sends_without_a_model() {
     support::mock_message(&server, "¡Hola!").await;
     Mock::given(method("POST"))
         .and(path("/chats/chat1/messages"))
-        .and(body_partial_json(
-            json!({"body":{"contentType":"html","content":"<p>¡Hola!</p>"}}),
+        // A card with the greeting.
+        .and(body_string_contains(
+            "application/vnd.microsoft.card.adaptive",
         ))
+        .and(body_string_contains("¡Hola!"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id":"sent1"})))
         .expect(1)
         .mount(&server)
@@ -136,9 +138,10 @@ async fn a_shared_link_is_thanked_by_name_without_a_model() {
     Mock::given(method("GET")).and(path("/chats/chat1/messages/123")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"123","messageType":"message","createdDateTime":chrono::Utc::now().to_rfc3339(),"deletedDateTime":null,"from":{"user":{"id":"sender","displayName":"Victoria Pérez"}},"body":{"contentType":"text","content":text},"mentions":[]}))).mount(&server).await;
     Mock::given(method("POST"))
         .and(path("/chats/chat1/messages"))
-        .and(body_partial_json(
-            json!({"body":{"contentType":"html","content":"<p>Gracias Victoria.</p>"}}),
+        .and(body_string_contains(
+            "application/vnd.microsoft.card.adaptive",
         ))
+        .and(body_string_contains("Gracias Victoria."))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id":"sent1"})))
         .expect(1)
         .mount(&server)
@@ -5366,7 +5369,7 @@ fn teams_members(graph: &Graph) -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn teams_post_sends_formatted_html_with_graph_mentions_once() {
+async fn teams_post_sends_formatted_markdown_in_a_card_with_its_mentions_once() {
     let server = MockServer::start().await;
     let probe = teams_post_fixture(&server, json!([])).await;
     server.reset().await;
@@ -5394,15 +5397,25 @@ async fn teams_post_sends_formatted_html_with_graph_mentions_once() {
         .unwrap()
         .body_json()
         .unwrap();
-    let html = body["body"]["content"].as_str().unwrap();
-    assert_eq!(body["body"]["contentType"], "html");
-    assert!(html.contains("<at id=\"0\">Ana Pérez</at>"), "{html}");
+    // Always the style card: the fixture never turns the style on.
     assert!(
-        html.contains("<b>revisa</b>") && html.contains("<li>"),
-        "{html}"
+        body["body"]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("<attachment id="),
+        "{body}"
     );
-    assert_eq!(body["mentions"][0]["mentioned"]["user"]["id"], "ana-id");
-    assert_eq!(body["mentions"][0]["mentionText"], "Ana Pérez");
+    assert!(body.get("mentions").is_none(), "{body}");
+    let card: serde_json::Value =
+        serde_json::from_str(body["attachments"][0]["content"].as_str().unwrap()).unwrap();
+    let text = card.to_string();
+    assert!(
+        text.contains("Hola <at>Ana Pérez</at>, **revisa** esto:"),
+        "{text}"
+    );
+    assert!(text.contains("• uno") && text.contains("• dos"), "{text}");
+    assert_eq!(card["msteams"]["entities"][0]["mentioned"]["id"], "ana-id");
+    assert_eq!(card["msteams"]["entities"][0]["text"], "<at>Ana Pérez</at>");
 }
 
 #[tokio::test]
@@ -5625,7 +5638,7 @@ async fn posted(server: &MockServer) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test]
-async fn teams_post_embeds_images_as_hosted_contents_in_plain_html_once() {
+async fn teams_post_shows_images_from_hosted_contents_inside_the_card_once() {
     use base64::Engine;
     let server = MockServer::start().await;
     let (graph, store) = styled_post_fixture(&server).await;
@@ -5648,22 +5661,29 @@ async fn teams_post_embeds_images_as_hosted_contents_in_plain_html_once() {
     assert_eq!(sent["images"][0]["type"], "image/gif");
     assert_eq!(sent["images"][0]["bytes"], 1_050_994);
     assert!(sent["images"][0].get("data").is_none());
-    assert!(sent["style"].as_str().unwrap().starts_with("plain"));
+    assert!(sent.get("style").is_none(), "{sent}");
 
     let posts = posted(&server).await;
     assert_eq!(posts.len(), 1);
     let body = &posts[0];
-    // Plain HTML even with the style on: the card never carries an image.
-    assert!(body.get("attachments").is_none(), "{body}");
+    // The card shows the images after the text; the body holds the attachment and the marker.
     let html = body["body"]["content"].as_str().unwrap();
-    assert_eq!(body["body"]["contentType"], "html");
-    let first = "<p><img src=\"../hostedContents/1/$value\" alt=\"Homero &lt;b&gt;&quot;escondido&quot;&lt;/b&gt;\" width=\"480\" height=\"400\"></p>";
-    let second =
-        "<p><img src=\"../hostedContents/2/$value\" alt=\"\" width=\"480\" height=\"400\"></p>";
-    let text = html.find("<b>Mira</b>").unwrap();
-    let (one, two) = (html.find(first).unwrap(), html.find(second).unwrap());
-    let marker = html.find("personalteams.invalid/output/").unwrap();
-    assert!(text < one && one < two && two < marker, "{html}");
+    assert!(
+        html.starts_with("<attachment id=") && html.contains("personalteams.invalid/output/"),
+        "{html}"
+    );
+    let card: serde_json::Value =
+        serde_json::from_str(body["attachments"][0]["content"].as_str().unwrap()).unwrap();
+    let items = card["body"].as_array().unwrap();
+    assert_eq!(items[0]["text"], "**Mira** esto");
+    assert_eq!(
+        items[1],
+        json!({"type": "Image", "url": "../hostedContents/1/$value",
+            "altText": "Homero <b>\"escondido\"</b>", "msTeams": {"allowExpand": true}})
+    );
+    assert_eq!(items[2]["url"], "../hostedContents/2/$value");
+    assert!(items[2].get("altText").is_none());
+    assert_eq!(items[3]["id"], "pta-band");
     let hosted = body["hostedContents"].as_array().unwrap();
     assert_eq!(hosted.len(), 2);
     for (at, image) in images.iter().enumerate() {
