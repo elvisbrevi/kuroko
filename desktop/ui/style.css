@@ -379,6 +379,12 @@ nav button, .status-row, .activity-row, .segmented button, .subnav [role=tab], .
 .case-badges { display: inline-flex; gap: .3rem; }
 .resource-facts { display: grid; gap: .1rem; margin: 0; }
 .resource-facts small { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.workflow-row { min-width: 0; }
+.workflow-row .resource-head .title { min-width: 0; overflow-wrap: anywhere; }
+.workflow-lead { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; line-height: 1.45; }
+.workflow-facts { gap: .2rem; }
+.workflow-facts small { min-width: 0; }
+.workflow-facts .workflow-lead + small { margin-top: .25rem; }
 .resource-toggles { display: flex; flex-wrap: wrap; gap: .2rem 1.2rem; }
 .resource-toggles .check { margin: .25rem 0; font-size: var(--fs-md); }
 .fold.resource-edit { margin-top: 0; border-top: 0; }

@@ -2171,7 +2171,8 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForSelector('[data-workflow="payments-features"]');
   check(`workflows ${label}: the section opens with the first view`, await page.getAttribute('#workflows-tab-list', 'aria-selected') === 'true' && await page.isVisible('#workflow-rows'));
   check(`workflows ${label}: a row summarizes project, repositories, machine, agent and blocks`,
-    /Payments.*payments-api, payments-web.*Preview server.*Claude Code.*2 bloques/.test(await page.textContent('[data-workflow="payments-features"] .resource-facts small')));
+    /Payments.*payments-api, payments-web.*Preview server.*Claude Code.*2 bloques/.test(await page.textContent('[data-workflow="payments-features"] .resource-facts')));
+  check(`workflows ${label}: a row never runs past its card`, await page.evaluate(() => [...document.querySelectorAll('.workflow-row')].every(r => r.scrollWidth <= r.clientWidth + 1)));
   // Every row's editor, open, passes axe.
   await page.evaluate(() => { for (const d of document.querySelectorAll('#workflow-rows details')) d.open = true; });
   await page.waitForTimeout(400);

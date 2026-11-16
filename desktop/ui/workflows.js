@@ -109,7 +109,7 @@ function renderWorkflows() {
   container.replaceChildren(...rows);
 }
 
-/** The row's summary line: project, repositories, machine, agent, blocks and the last change. */
+/** The row's facts, one per line: project, repositories, machine, agent, blocks and the last change. */
 function workflowFacts(workflow) {
   const agent = workflow.agent?.provider ? `${providerNames[workflow.agent.provider] || workflow.agent.provider} · ${workflow.agent.model}` : t('No agent chosen');
   return [workflow.project || t('No project chosen'),
@@ -117,13 +117,13 @@ function workflowFacts(workflow) {
     `${t('Machine')}: ${workflow.machine ? machineName(workflow.machine) : t('none')}`, agent,
     tn(workflow.blocks.length, '1 block', '{n} blocks'),
     workflow.allow?.length ? `${t('Also allowed')}: ${allowNames(workflow.allow).join(', ')}` : null,
-    workflow.updated_at ? t('Changed {when}', { when: changedAt(workflow.updated_at) }) : t('Not saved yet')].filter(Boolean).join(' · ');
+    workflow.updated_at ? t('Changed {when}', { when: changedAt(workflow.updated_at) }) : t('Not saved yet')].filter(Boolean);
 }
 
 function workflowRow(draft, saved) {
   const key = saved ? saved.id : 'new';
-  const facts = el('p', { class: 'resource-facts' });
-  const renderFacts = () => facts.replaceChildren(el('span', { textContent: draft.description || t('No description') }), el('small', { textContent: workflowFacts(draft) }));
+  const facts = el('div', { class: 'resource-facts workflow-facts' });
+  const renderFacts = () => facts.replaceChildren(el('span', { class: 'workflow-lead', textContent: draft.description || t('No description') }), ...workflowFacts(draft).map(line => el('small', { textContent: line })));
   renderFacts();
   const head = el('div', { class: 'resource-head' }, el('strong', { class: 'title', textContent: (saved ?? draft).name || t('New workflow') }),
     saved ? badge(saved.enabled ? t('Enabled') : t('Disabled'), saved.enabled ? 'ok' : 'muted') : badge(t('Not saved yet'), 'info'),
