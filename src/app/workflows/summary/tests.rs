@@ -695,6 +695,40 @@ fn created() -> ResponseTemplate {
 }
 
 #[tokio::test]
+async fn with_the_message_style_on_mentions_go_inside_the_card() {
+    let t = Sending::new(created()).await;
+    let mut graph = (*t.graph).clone();
+    let mut config = (*graph.config).clone();
+    config.message_style.enabled = true;
+    graph.config = Arc::new(config);
+    *t.host.state.activity_graph.lock().await = Some(Arc::new(graph));
+    let reply = t
+        .send(json!({"summary":"summary-1","chat":CHAT,"mentions":["ana"],"confirmed":true}))
+        .await;
+    assert!(reply.ok, "{:?}", reply.message);
+
+    // The body holds only the card; the card mentions the member itself, so the message keeps
+    // the style, and Graph's own `mentions` (which point at body tags) are left out.
+    let posts = t.posts().await;
+    assert_eq!(posts.len(), 1);
+    let body: Value = posts[0].body_json().unwrap();
+    let html = body["body"]["content"].as_str().unwrap();
+    assert!(
+        html.starts_with("<attachment id=") && !html.contains("<at id"),
+        "{html}"
+    );
+    assert!(body.get("mentions").is_none(), "{body}");
+    let card: Value =
+        serde_json::from_str(body["attachments"][0]["content"].as_str().unwrap()).unwrap();
+    assert!(card.to_string().contains("<at>Ana Pérez</at>"), "{card}");
+    assert_eq!(
+        card["msteams"]["entities"],
+        json!([{"type":"mention","text":"<at>Ana Pérez</at>",
+            "mentioned":{"id":"ana-id","name":"Ana Pérez"}}])
+    );
+}
+
+#[tokio::test]
 async fn a_send_posts_once_with_resolved_mentions_and_records_it() {
     let t = Sending::new(created()).await;
     let reply = t

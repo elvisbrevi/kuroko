@@ -5406,7 +5406,7 @@ async fn teams_post_sends_formatted_html_with_graph_mentions_once() {
 }
 
 #[tokio::test]
-async fn teams_post_uses_the_message_style_unless_it_mentions_someone() {
+async fn teams_post_uses_the_message_style_with_mentions_in_the_card() {
     let server = MockServer::start().await;
     let probe = teams_post_fixture(&server, json!([])).await;
     server.reset().await;
@@ -5456,14 +5456,26 @@ async fn teams_post_uses_the_message_style_unless_it_mentions_someone() {
         card.contains("**Hola** a mí") && card.contains("pta-band"),
         "{card}"
     );
+    // A mention keeps the card: the card mentions the member itself, and the message carries
+    // no Graph `mentions`, which would point at tags the body does not have.
     let mentioned = &posts[1];
-    assert!(mentioned.get("attachments").is_none(), "{mentioned}");
+    let body = mentioned["body"]["content"].as_str().unwrap();
     assert!(
-        mentioned["body"]["content"]
-            .as_str()
-            .unwrap()
-            .contains("<at id=\"0\">Ana Pérez</at>")
+        body.starts_with("<attachment id=") && !body.contains("<at id"),
+        "{body}"
     );
+    assert!(mentioned.get("mentions").is_none(), "{mentioned}");
+    let card: serde_json::Value =
+        serde_json::from_str(mentioned["attachments"][0]["content"].as_str().unwrap()).unwrap();
+    assert!(
+        card.to_string().contains("Hola <at>Ana Pérez</at>"),
+        "{card}"
+    );
+    assert_eq!(
+        card["msteams"]["entities"][0]["mentioned"]["name"],
+        "Ana Pérez"
+    );
+    assert_eq!(card["msteams"]["entities"][0]["text"], "<at>Ana Pérez</at>");
 }
 
 #[tokio::test]

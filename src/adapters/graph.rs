@@ -1151,12 +1151,12 @@ impl Graph {
                 format!("<p><a href=\"https://personalteams.invalid/output/{nonce}\">PTA</a></p>")
             })
             .unwrap_or_default();
-        // The configured style, like the assistant's answers. Graph mentions and images live
-        // in the HTML body, so a message with mentions or images, or a card that does not fit,
-        // stays plain HTML. The card never carries an image.
+        // The configured style, like the assistant's answers; the card carries the mentions
+        // itself. Graph's hosted images live in the HTML body, so a message with images, or a
+        // card that does not fit, stays plain HTML. The card never carries an image.
         let (style, language) = self.message_style();
-        let card = if mentioned.is_empty() && images.is_empty() {
-            super::card::message(&text, &style, language, &marker)
+        let card = if images.is_empty() {
+            super::card::message(&text, &style, language, &marker, &mentioned)
         } else {
             None
         };
@@ -1166,6 +1166,7 @@ impl Graph {
             card.is_some() || content.len() <= 27_800,
             PostRefusal::TooLong
         );
+        let styled = card.is_some();
         let mut body =
             card.unwrap_or_else(|| json!({"body":{"contentType":"html","content":content}}));
         if !images.is_empty() {
@@ -1180,7 +1181,8 @@ impl Graph {
                 images.iter().map(|i| i.bytes.len()).sum::<usize>()
             )
         };
-        if !mentioned.is_empty() {
+        // Graph mentions point at the `<at id>` tags of the HTML body; a card has its own.
+        if !styled && !mentioned.is_empty() {
             body["mentions"] = mentioned
                 .iter()
                 .enumerate()
@@ -1624,7 +1626,7 @@ impl MessageAdapter for Graph {
             .unwrap_or_default();
         // The configured style, or plain HTML when it is off or the card does not fit.
         let (style, language) = self.message_style();
-        let body = super::card::message(text, &style, language, &marker)
+        let body = super::card::message(text, &style, language, &marker, &[])
             .unwrap_or_else(|| json!({"body":{"contentType":"html","content":content + &marker}}));
         // Never retry a send: Graph provides no idempotency guarantee for this endpoint.
         let result = self.request(Method::POST, &path, Some(body), false).await?;

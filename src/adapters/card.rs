@@ -20,20 +20,45 @@ const LINK: char = '\u{e002}';
 /// Graph's limit for a message: the HTML body plus the serialized card.
 const LIMIT: usize = 27_800;
 
+/// Marks mention `n` in the Markdown a caller passes: `MENTION_START`, `n`, `MENTION_END`.
+pub const MENTION_START: char = '\u{e000}';
+pub const MENTION_END: char = '\u{e001}';
+
 /// The Graph message that sends `markdown` as a styled card, with `marker` (the output marker
-/// of the personal chat, or nothing) after it. `None` when the style is off or the card would
-/// not fit in a message: the caller then sends plain HTML, which always fits a valid answer.
+/// of the personal chat, or nothing) after it. `mentions` are the (user ID, shown name) of each
+/// mention marked in `markdown`: the card mentions them itself, as Teams cards do, so a message
+/// with mentions keeps the style. `None` when the style is off or the card would not fit in a
+/// message: the caller then sends plain HTML, which always fits a valid answer.
 pub fn message(
     markdown: &str,
     style: &MessageStyle,
     language: Language,
     marker: &str,
+    mentions: &[(String, String)],
 ) -> Option<Value> {
     if !style.enabled {
         return None;
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
-    let content = serde_json::to_string(&card(markdown, style, language)).ok()?;
+    let mut card = card(markdown, style, language);
+    let mut content = serde_json::to_string(&card).ok()?;
+    let mut entities = Vec::new();
+    for (at, (user, shown)) in mentions.iter().enumerate() {
+        let tag = format!("<at>{shown}</at>");
+        let placeholder = format!("{MENTION_START}{at}{MENTION_END}");
+        if content.contains(&placeholder) {
+            // The tag goes into JSON strings: its JSON form, without the quotes.
+            let escaped = serde_json::to_string(&tag).ok()?;
+            content = content.replace(&placeholder, &escaped[1..escaped.len() - 1]);
+            entities.push(json!({"type": "mention", "text": tag,
+                "mentioned": {"id": user, "name": shown}}));
+        }
+    }
+    if !entities.is_empty() {
+        card = serde_json::from_str(&content).ok()?;
+        card["msteams"] = json!({"entities": entities});
+        content = serde_json::to_string(&card).ok()?;
+    }
     let body = format!("<attachment id=\"{id}\"></attachment>{marker}");
     (body.len() + content.len() <= LIMIT).then(|| {
         json!({
@@ -102,7 +127,8 @@ pub fn message_text(message: &Value) -> String {
         texts(&card, &mut parts);
         if !parts.is_empty() {
             text.push(' ');
-            text.push_str(&parts.join(" "));
+            // A mention reads as the name it shows.
+            text.push_str(&parts.join(" ").replace("<at>", "").replace("</at>", ""));
         }
     }
     text.replace('\u{200b}', "")
@@ -110,7 +136,10 @@ pub fn message_text(message: &Value) -> String {
 fn texts(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(object) => {
-            if object.get("id").and_then(Value::as_str) == Some(BAND) {
+            // The band is presentation; a mention entity repeats the text it marks.
+            if object.get("id").and_then(Value::as_str) == Some(BAND)
+                || object.get("type").and_then(Value::as_str) == Some("mention")
+            {
                 return;
             }
             for key in ["text", "codeSnippet"] {
@@ -740,9 +769,9 @@ mod tests {
 
     #[test]
     fn a_styled_message_attaches_the_card_and_reads_back_without_the_band() {
-        assert!(message("Hola", &MessageStyle::default(), Language::Es, "").is_none());
+        assert!(message("Hola", &MessageStyle::default(), Language::Es, "", &[]).is_none());
         let marker = "<p><a href=\"https://personalteams.invalid/output/n\">PTA</a></p>";
-        let sent = message("Hola **mundo**", &style(), Language::Es, marker).unwrap();
+        let sent = message("Hola **mundo**", &style(), Language::Es, marker, &[]).unwrap();
         let id = sent["attachments"][0]["id"].as_str().unwrap();
         assert_eq!(
             sent["body"]["content"],
@@ -758,6 +787,52 @@ mod tests {
         // A card too large for one message falls back to plain HTML.
         let long = "a\n".repeat(1_500);
         assert!(teams::html(&long).len() <= 27_800);
-        assert!(message(&long, &style(), Language::Es, "").is_none());
+        assert!(message(&long, &style(), Language::Es, "", &[]).is_none());
+    }
+
+    #[test]
+    fn mentions_stay_in_the_card() {
+        let mentions = [
+            ("user-1".to_owned(), "Ana \"Pérez\"".to_owned()),
+            ("user-2".to_owned(), "Luis".to_owned()),
+        ];
+        let text = "\u{e000}0\u{e001} y \u{e000}1\u{e001}: **listo**";
+        let sent = message(text, &style(), Language::Es, "", &mentions).unwrap();
+        let id = sent["attachments"][0]["id"].as_str().unwrap();
+        assert_eq!(
+            sent["body"]["content"],
+            format!("<attachment id=\"{id}\"></attachment>")
+        );
+        assert!(sent.get("mentions").is_none());
+        let card: Value =
+            serde_json::from_str(sent["attachments"][0]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body_texts(&card),
+            ["<at>Ana \"Pérez\"</at> y <at>Luis</at>: **listo**"]
+        );
+        assert_eq!(
+            card["msteams"]["entities"],
+            json!([
+                {"type": "mention", "text": "<at>Ana \"Pérez\"</at>",
+                 "mentioned": {"id": "user-1", "name": "Ana \"Pérez\""}},
+                {"type": "mention", "text": "<at>Luis</at>",
+                 "mentioned": {"id": "user-2", "name": "Luis"}},
+            ])
+        );
+        // Read back, each mention is its name, once; Graph stores the key as `msTeams`.
+        let mut stored = card.clone();
+        stored["msTeams"] = stored["msteams"].take();
+        let mut read_back = sent.clone();
+        read_back["attachments"][0]["content"] = json!(stored.to_string());
+        let read = message_text(&read_back);
+        assert_eq!(read.trim(), "Ana \"Pérez\" y Luis: **listo**");
+        // Without mentions, a marked index stays as written and the card has no entities.
+        let card: Value = serde_json::from_str(
+            message(text, &style(), Language::Es, "", &[]).unwrap()["attachments"][0]["content"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(card.get("msteams").is_none());
     }
 }
