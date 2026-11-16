@@ -923,9 +923,10 @@ async fn a_preapproved_post_goes_once_to_the_saved_chat_with_the_saved_mentions_
     let body = String::from_utf8_lossy(&sent[0].body).to_string();
     assert!(!body.contains("evil.example"), "{body}");
     assert!(body.contains("Ana Pérez"), "{body}");
+    let card = crate::adapters::card::posted(&serde_json::from_str(&body).unwrap());
     assert_eq!(
-        body.matches("<at ").count(),
-        1,
+        card["msteams"]["entities"].as_array().map(Vec::len),
+        Some(1),
         "only the saved mention: {body}"
     );
     let sends = bench.run(&id).summary_sends;

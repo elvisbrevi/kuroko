@@ -618,6 +618,24 @@ pub(in crate::app) async fn post(
         }
     };
     let store = Some(graph.store.clone());
+    // A notice is the app's own text: one whose card does not fit is shortened by the models
+    // (same links and mentions), or not sent.
+    let shortened;
+    let text = if graph.card_overflow(text, &[]).is_some() {
+        match crate::app::shorter_card_text(&host.state, &graph, text, &[]).await {
+            Ok(shorter) => {
+                shortened = shorter;
+                shortened.as_str()
+            }
+            Err(_) => {
+                let reason =
+                    "The notice does not fit in one Teams card, even shortened; nothing was sent.";
+                return (Attempt::of("refused", reason), store);
+            }
+        }
+    } else {
+        text
+    };
     let attempt = match graph.post_chat(chat, text, &[]).await {
         Ok(sent) => Attempt {
             outcome: "sent",

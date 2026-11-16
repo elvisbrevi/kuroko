@@ -743,18 +743,19 @@ async fn a_send_posts_once_with_resolved_mentions_and_records_it() {
     assert_eq!(posts.len(), 1);
     assert_eq!(posts[0].url.path(), format!("/chats/{CHAT}/messages"));
     let body: Value = posts[0].body_json().unwrap();
-    let html = body["body"]["content"].as_str().unwrap();
+    let card = crate::adapters::card::posted(&body);
+    let html = card.to_string();
     assert!(
-        html.contains("<at id=\"0\">Ana Pérez</at>")
-            && html.contains("<at id=\"1\">Victoria Gómez</at>"),
+        html.contains("<at>Ana Pérez</at>") && html.contains("<at>Victoria Gómez</at>"),
         "{html}"
     );
     assert!(
-        html.contains("Primer resumen") && html.contains("<b>va bien</b>"),
+        html.contains("Primer resumen") && html.contains("**va bien**"),
         "{html}"
     );
-    assert_eq!(body["mentions"][0]["mentioned"]["user"]["id"], "ana-id");
-    assert_eq!(body["mentions"][1]["mentioned"]["user"]["id"], "vic-id");
+    let entities = &card["msteams"]["entities"];
+    assert_eq!(entities[0]["mentioned"]["id"], "ana-id");
+    assert_eq!(entities[1]["mentioned"]["id"], "vic-id");
 
     // The run keeps the record, and Graph's own record is a `teams_post` `sent` event.
     let sends = t.sends();
@@ -842,13 +843,14 @@ async fn an_edited_text_replaces_the_summary_for_that_send_and_is_kept_with_its_
         .await;
     assert!(reply.ok, "{:?}", reply.message);
     let body: Value = t.posts().await[0].body_json().unwrap();
-    let html = body["body"]["content"].as_str().unwrap();
+    let card = crate::adapters::card::posted(&body);
+    let html = card.to_string();
     assert!(
         html.contains("el resumen corregido") && !html.contains("Primer resumen"),
         "{html}"
     );
     // The mention written in the text and the one given are both resolved, once each.
-    assert_eq!(body["mentions"].as_array().unwrap().len(), 2);
+    assert_eq!(card["msteams"]["entities"].as_array().unwrap().len(), 2);
     let record = &t.sends()[0];
     assert_eq!(record["edited"], true);
     assert_eq!(record["text"], "Hola @[Ana Pérez], el resumen corregido.");
@@ -1075,10 +1077,7 @@ async fn an_agent_sends_a_stored_summary_as_written_and_the_person_may_edit_it()
     let posts = t.posts().await;
     assert_eq!(posts.len(), 2);
     let html = |n: usize| {
-        posts[n].body_json::<Value>().unwrap()["body"]["content"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+        crate::adapters::card::posted(&posts[n].body_json::<Value>().unwrap()).to_string()
     };
     assert!(html(0).contains("Primer resumen") && html(1).contains("Otro texto"));
     // The remote endpoint offers the summary send and still denies `teams_post`.
@@ -1243,7 +1242,8 @@ async fn mentions_resolve_over_the_member_list_the_post_uses_so_a_confirmed_send
     assert!(twice.ok, "{:?}", twice.message);
     assert_eq!(t.sends().last().unwrap()["mentions"], json!(["Ana Pérez"]));
     let body: Value = t.posts().await[1].body_json().unwrap();
-    assert_eq!(body["mentions"].as_array().unwrap().len(), 1);
+    let card = crate::adapters::card::posted(&body);
+    assert_eq!(card["msteams"]["entities"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -1372,13 +1372,16 @@ async fn the_cli_send_path_runs_end_to_end_against_the_host() {
     assert_eq!(body["summary"], "summary-1");
     let sent = call(&t.host, "workflow_summary_send", body).await;
     assert!(sent.ok, "{:?}", sent.message);
-    let posted: Value = t.posts().await[0].body_json().unwrap();
-    let html = posted["body"]["content"].as_str().unwrap();
+    let posted = crate::adapters::card::posted(&t.posts().await[0].body_json().unwrap());
+    let html = posted.to_string();
     assert!(
         html.contains("Primer resumen") && !html.contains("Segundo"),
         "{html}"
     );
-    assert_eq!(posted["mentions"][0]["mentionText"], "Ana Pérez");
+    assert_eq!(
+        posted["msteams"]["entities"][0]["mentioned"]["name"],
+        "Ana Pérez"
+    );
     // An edited file replaces the text for that send and is kept with its record.
     let body = summary_send(
         &words(&[

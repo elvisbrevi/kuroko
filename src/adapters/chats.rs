@@ -308,7 +308,8 @@ impl Graph {
             text = text.trim_end_matches("PTA").trim_end().to_owned();
         }
         // An image has no text of its own: it reads as `[image]`, or `[image: alt]`.
-        let images = image_labels(raw);
+        let mut images = image_labels(raw);
+        images.extend(super::card::image_labels(value));
         if !images.is_empty() {
             text = std::iter::once(text)
                 .chain(images.iter().cloned())

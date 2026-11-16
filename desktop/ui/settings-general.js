@@ -25,12 +25,11 @@ const STYLE_PRESETS = {
   gray: { accent: '#8A8A8A', band: 'emphasis', label_color: 'subtle' },
 };
 /** `[message_style]` as the host defaults it; the host omits the section while it is unchanged. */
-const STYLE_DEFAULT = { enabled: false, label: '', position: 'bottom', ...STYLE_PRESETS.teams, icon: true, emoji: '🤖', band_height: 0, stripe_width: 4, text_size: 'default', label_size: 'small' };
+const STYLE_DEFAULT = { label: '', position: 'bottom', ...STYLE_PRESETS.teams, icon: true, emoji: '🤖', band_height: 0, stripe_width: 4, text_size: 'default', label_size: 'small' };
 const DEFAULT_EMOJI = '🤖';
 
 function renderMessageStyle() {
   const style = { ...STYLE_DEFAULT, ...current.config.message_style };
-  $('#style-enabled').checked = style.enabled;
   field('#style-label', style.label);
   field('#style-position', style.position);
   field('#style-accent', style.accent.toLowerCase());
@@ -54,7 +53,6 @@ function stylePreset() {
 }
 
 function renderStylePreview() {
-  $('#style-fields').hidden = !$('#style-enabled').checked;
   $('#style-preset').value = stylePreset();
   const preview = $('#style-preview');
   preview.className = `teams-card band-${$('#style-band').value} label-${$('#style-label-color').value} at-${$('#style-position').value} text-${$('#style-text-size').value} label-size-${$('#style-label-size').value}`;
@@ -106,7 +104,8 @@ function collectMessageStyle() {
   const emoji = $('#style-emoji').value.trim();
   if (!validEmoji(emoji)) throw t('The emoji is a single emoji, without words or spaces.');
   current.config.message_style = {
-    enabled: $('#style-enabled').checked,
+    // Retired on the host: every message is a card.
+    enabled: true,
     label: $('#style-label').value.trim(),
     position: $('#style-position').value,
     accent: $('#style-accent').value.toUpperCase(),

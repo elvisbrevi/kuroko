@@ -224,8 +224,10 @@ async fn a_done_notification_posts_once_with_rendered_placeholders_and_the_resol
     assert_eq!(teams.posts().await.len(), 1);
     let posts = teams.posts().await;
     let body: Value = serde_json::from_str(&posts[0]).unwrap();
-    let html = body["body"]["content"].as_str().unwrap();
-    assert!(html.contains("<at id=\"0\">Victoria Gómez</at>"), "{html}");
+    let card = crate::adapters::card::posted(&body);
+    let html = card.to_string();
+    let html = html.as_str();
+    assert!(html.contains("<at>Victoria Gómez</at>"), "{html}");
     assert!(html.contains("Fix rounding (#200) is done"), "{html}");
     // `{id}` and `{title}` are the item's number and title, for a link of one's own.
     assert!(html.contains("200 - Fix rounding"), "{html}");
@@ -238,7 +240,7 @@ async fn a_done_notification_posts_once_with_rendered_placeholders_and_the_resol
         "{html}"
     );
     assert!(html.contains("Shipped"), "{html}");
-    assert_eq!(body["mentions"].as_array().unwrap().len(), 1);
+    assert_eq!(card["msteams"]["entities"].as_array().unwrap().len(), 1);
     assert!(!html.contains("Ana Pérez</at>"));
     // The audit and the run's record each hold the one outcome.
     assert_eq!(teams.events("workflow_notification"), ["sent"]);

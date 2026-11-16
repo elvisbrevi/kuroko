@@ -494,7 +494,8 @@ How a workflow takes an item from its ready state to its release, and where the 
 7. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
    when the pull requests are completed, notifications with mentions when the run is done or fails.
 8. **Report on request**: `workflow_summary` asks the director for a summary of the record, and
-   `workflow_summary_send` posts it, after the person confirms the exact text, to each chat chosen.
+   `workflow_summary_send` posts it, after the person confirms the exact text, to each chat chosen
+   (a summary too long for one Teams card is refused with a shorter version to approve as `text`).
 9. **When something stops it** (`needs_attention`, `interrupted`, `failed`, `unassigned`), the run
    says why; the person fixes the cause and resumes, assigns a workflow, or cancels. Nothing that
    may already have happened is done again by a resume. When the agent stopped halfway and its

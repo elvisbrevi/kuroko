@@ -274,13 +274,15 @@ impl Llm {
         self.chain.iter().filter(|c| c.enabled).cloned().collect()
     }
 }
-/// How the assistant's messages look in Teams (`[message_style]`): off, they are plain chat
-/// HTML; on, they are an Adaptive Card with a colored stripe along the left edge and a band
-/// with a label above or below the text (`adapters::card`). Teams ignores styles in chat HTML,
-/// so a card is the only way to color a message.
+/// How the app's messages look in Teams (`[message_style]`): every one is an Adaptive Card with
+/// a colored stripe along the left edge and a band with a label above or below the text
+/// (`adapters::card`). Teams ignores styles in chat HTML, so a card is the only way to color a
+/// message.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct MessageStyle {
+    /// Retired: every message is a card, whatever it says. Kept so saved profiles load, and
+    /// written as `true` so hosts that predate the change send cards too.
     pub enabled: bool,
     /// The band's text; empty means «Respuesta generada con IA» or "AI-generated response",
     /// following `llm.language`.
@@ -312,7 +314,7 @@ pub struct MessageStyle {
 impl Default for MessageStyle {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             label: String::new(),
             position: BandPosition::Bottom,
             accent: "#5B5FC7".into(),
@@ -342,6 +344,10 @@ impl MessageStyle {
             .and_then(|saved| serde_json::from_value(saved.clone()).ok())
             .unwrap_or_default();
         let mut fields = serde_json::to_value(&style).unwrap_or_default();
+        // Retired: every message is a card.
+        if let Some(object) = fields.as_object_mut() {
+            object.remove("enabled");
+        }
         fields["emoji"] = style.emoji().into();
         fields["band_height"] = style.band_height.into();
         fields
@@ -714,8 +720,10 @@ mod tests {
             "{saved}"
         );
         // Reading the style by path shows them anyway.
-        let fields = MessageStyle::fields(Some(&serde_json::json!({"enabled": true})));
-        assert_eq!(fields["enabled"], true);
+        // `enabled` is retired: never shown, always written true.
+        let fields = MessageStyle::fields(Some(&serde_json::json!({"enabled": false})));
+        assert!(fields.get("enabled").is_none());
+        assert!(MessageStyle::default().enabled);
         assert_eq!(fields["emoji"], "🤖");
         assert_eq!(fields["band_height"], 0);
         for (height, valid) in [

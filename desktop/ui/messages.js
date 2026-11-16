@@ -32,6 +32,7 @@ const reasonLabels = {
   supported_answer: t('Answer generated.'),
   unsafe_proposal: t('Withheld: it contained sensitive data or did not fit in a Teams message.'),
   unsafe_answer: t('Withheld: it contained sensitive data or did not fit in a Teams message.'),
+  card_too_long: t('Withheld: it did not fit in a Teams message, even shortened.'),
   reference_selection_failed: t('Withheld while choosing references (earlier version).'),
   final_gate: t('Withheld by the final review (earlier version).'),
   message_changed: t('The message changed, was deleted or stopped being eligible before sending.'),

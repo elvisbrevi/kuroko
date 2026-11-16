@@ -703,6 +703,11 @@ async fn send(host: &Arc<Host>, args: SendArgs) -> Result<Value, String> {
     if message.chars().count() > 20_000 {
         return Err(invalid("The message is too long."));
     }
+    // The user approved this text: one whose card does not fit is not sent, and the refusal
+    // offers a shorter version to approve instead.
+    if let Some(refusal) = crate::app::card_refusal(state, &graph, &message, &[]).await {
+        return Err(refusal);
+    }
     // The record is `uncertain` from before the request until its result is known. The text is
     // kept when it is an edit; otherwise the summary's ID says what was sent.
     let id = uuid::Uuid::new_v4().to_string();

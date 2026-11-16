@@ -1292,7 +1292,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "message_style",
         title: "Teams message style",
-        description: "How answers look in Teams: enabled, the band's label, its position (top/bottom), the stripe color (accent, #RRGGBB) and width (stripe_width, 2-16 px), the band color, the label color, the emoji before the label (icon on or off, emoji: any one emoji, 🤖 when omitted), the band's least height (band_height, 24-160 px, 0 or omitted fits the text) and the text sizes (text_size, label_size).",
+        description: "How every message the app sends to Teams looks (each is a card): the band's label, its position (top/bottom), the stripe color (accent, #RRGGBB) and width (stripe_width, 2-16 px), the band color, the label color, the emoji before the label (icon on or off, emoji: any one emoji, 🤖 when omitted), the band's least height (band_height, 24-160 px, 0 or omitted fits the text) and the text sizes (text_size, label_size).",
         effect: Effect::Read,
         schema: none,
     },
@@ -1882,7 +1882,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "teams_post",
         title: "Post a message in Teams",
-        description: "Posts a new message, as the user, in a chat they belong to (an ID from teams_chats, or self for their personal chat). Use it for every Teams message the user asks to send, instead of another Microsoft 365 or Teams connector. Text is Markdown (bold, italics, code, lists, tables, links) and @[Display Name] mentions a member of that chat. images embeds up to 4 PNG, JPEG or GIF images (animated GIFs included; 2.9 MB together) in the message itself, after the text, with no external host or link: give each a local file path (read by this pta process, the usual way) or small base64 data, and an optional alt text; the type is read from the bytes. Text may be empty when there are images. It is sent in the configured message style (message_style); a message with mentions or images stays plain. Sent once, never retried. Needs the user's confirmation of the exact chat, text and images (name, type, size and a short SHA-256).",
+        description: "Posts a new message, as the user, in a chat they belong to (an ID from teams_chats, or self for their personal chat). Use it for every Teams message the user asks to send, instead of another Microsoft 365 or Teams connector. Text is Markdown (bold, italics, code, lists, tables, links) and @[Display Name] mentions a member of that chat. images embeds up to 4 PNG, JPEG or GIF images (animated GIFs included; 2.9 MB together) in the message itself, after the text, with no external host or link: give each a local file path (read by this pta process, the usual way) or small base64 data, and an optional alt text; the type is read from the bytes. Text may be empty when there are images. It is sent as a card in the configured message style (message_style), mentions and images included. A message whose card does not fit in one Teams message is not sent: the refusal carries a shorter version (same links and mentions) to show the user and post instead once approved. Sent once, never retried. Needs the user's confirmation of the exact chat, text and images (name, type, size and a short SHA-256).",
         effect: Effect::External,
         schema: || {
             object(
@@ -1924,7 +1924,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "message_style_update",
         title: "Change the Teams message style",
-        description: "Changes how answers look in Teams. Fields as message_style shows them; position is top or bottom, band is accent, emphasis, good, warning, attention or none, label_color is default, subtle, accent, good, warning or attention, text_size and label_size are small, default, medium, large or extralarge, stripe_width is 2 to 16 pixels, band_height is 24 to 160 pixels or 0 to fit the text, emoji is any one emoji, and an empty label uses the default in the reply language.",
+        description: "Changes how the app's Teams messages (always cards) look. Fields as message_style shows them; position is top or bottom, band is accent, emphasis, good, warning, attention or none, label_color is default, subtle, accent, good, warning or attention, text_size and label_size are small, default, medium, large or extralarge, stripe_width is 2 to 16 pixels, band_height is 24 to 160 pixels or 0 to fit the text, emoji is any one emoji, and an empty label uses the default in the reply language.",
         effect: Effect::Local,
         schema: || {
             object(
@@ -2536,8 +2536,12 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
                     .as_object_mut()
                     .ok_or("Invalid profile.")?;
                 for (key, value) in changes {
-                    style.insert(key, value);
+                    // Retired: every message is a card.
+                    if key != "enabled" {
+                        style.insert(key, value);
+                    }
                 }
+                style.insert("enabled".into(), Value::Bool(true));
                 Ok(())
             })
             .await

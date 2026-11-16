@@ -587,7 +587,47 @@ async fn teams_post(
         return Err("[invalid_input] The message is empty or too long.".into());
     }
     let graph = teams_graph(state).await.map_err(fail)?;
+    if let Some(refusal) = card_refusal(state, &graph, message, &images).await {
+        return Err(refusal);
+    }
     graph.post_chat(chat, message, &images).await.map_err(fail)
+}
+
+/// A shorter version of `text`, written by the configured models and checked by
+/// `card::condense`, whose card fits in one Teams message with `images`.
+async fn shorter_card_text(
+    state: &DesktopState,
+    graph: &crate::adapters::graph::Graph,
+    text: &str,
+    images: &[crate::adapters::images::Image],
+) -> Result<String> {
+    let config = state.settings.config()?;
+    let (llm, _) = crate::llm::from_config(&config.llm)?;
+    crate::adapters::card::condense(&llm, text, |shorter| graph.card_overflow(shorter, images))
+        .await
+}
+
+/// For a message the user approved word for word: `None` when its card fits in one Teams
+/// message. Otherwise nothing may be sent, and the refusal carries a shorter version (same
+/// links and mentions) for the user to approve and post instead, since the app never sends a
+/// text the user did not see.
+async fn card_refusal(
+    state: &DesktopState,
+    graph: &crate::adapters::graph::Graph,
+    text: &str,
+    images: &[crate::adapters::images::Image],
+) -> Option<String> {
+    let bytes = graph.card_overflow(text, images)?;
+    let limit = crate::adapters::card::LIMIT;
+    Some(match shorter_card_text(state, graph, text, images).await {
+        Ok(shorter) => format!(
+            "[invalid_input] Too long: the message takes {bytes} bytes as a Teams card and one message holds {limit}, so nothing was sent. This shorter version keeps its links and mentions and fits; post it instead once the user approves it:\n\n{shorter}"
+        ),
+        Err(_) => format!(
+            "[invalid_input] Too long: the message takes {bytes} bytes as a Teams card and one message holds {limit}, so nothing was sent, and no shorter version could be written. Shorten it by about {}% and post it again.",
+            (bytes - limit) * 100 / bytes + 1
+        ),
+    })
 }
 
 fn validate_teams_setup(config: &Config) -> Result<()> {

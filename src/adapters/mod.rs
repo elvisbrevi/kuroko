@@ -13,6 +13,12 @@ use serde::de::DeserializeOwned;
 pub trait MessageAdapter: Send + Sync {
     async fn fetch(&self, resource: &str) -> Result<teams::IncomingMessage>;
     async fn send(&self, message: &teams::IncomingMessage, text: &str) -> Result<String>;
+    /// The size in bytes of `text`'s card when it does not fit in one message, so the caller
+    /// shortens it before `send` (which refuses it); `None` when it fits or the adapter sends
+    /// no cards.
+    fn card_overflow(&self, _text: &str) -> Option<usize> {
+        None
+    }
     /// Up to `limit` messages sent before `message` in the same conversation, oldest first.
     async fn history(
         &self,
