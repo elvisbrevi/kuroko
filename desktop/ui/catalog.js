@@ -2815,6 +2815,7 @@ const UI_CATALOG = { es: {
   "Workflow run: {state}": "Ejecución de workflow: {state}",
   "Waits for you": "Te espera",
   "Waiting for a slot, position {n}": "Esperando un turno, posición {n}",
+  "Waiting for checkouts in use": "Esperando checkouts en uso",
   "Updated {time}": "Actualizada {time}",
   "Workflow run": "Ejecución de workflow",
   "Open the work item": "Abrir el work item",

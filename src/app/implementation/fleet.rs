@@ -884,6 +884,12 @@ async fn call_bounded(
                     ),
                 ));
             }
+            if method == "implementation_launch"
+                && result["ok"] != true
+                && result["refusal"] == "directories_busy"
+            {
+                anyhow::bail!("{}", super::DIRECTORIES_BUSY);
+            }
             ensure!(
                 result["ok"] == true,
                 "{}",
@@ -1011,6 +1017,14 @@ pub(in crate::app) async fn answer(
         // Why the director did not run.
         Err(error) if method == "workflow_direct" => json!({"ok":false,"failure":
             crate::llm::implementation::of_error(&error, crate::llm::implementation::Cause::Unknown)}),
+        // The directories are held by another active run: a fixed refusal, so the coordinator
+        // waits for them instead of reading a failure.
+        Err(error)
+            if method == "implementation_launch"
+                && error.to_string() == super::DIRECTORIES_BUSY =>
+        {
+            json!({"ok":false,"refusal":"directories_busy"})
+        }
         Err(_) => json!({"ok":false}),
     }
 }
