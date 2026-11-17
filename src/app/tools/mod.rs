@@ -1584,11 +1584,11 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "workflow_settings_update",
         title: "Change the workflow settings",
-        description: "Changes the workflow settings on the account's coordinator; only the fields given change. watch_interval_minutes 1-60, concurrency 1-4, pull_request_wait_days 1-60; director {machine (machine_list ID; the coordinator's own ID for it), provider codex|claude|opencode, model, effort} installed on that machine: the fields given are merged with the stored director (a new one needs all four), or null clears it; project_directors [{organization?, project, director}] sets a project's own director (director holds the fields to change, merged with that project's stored one; a new one needs all four) or clears it (director null or left out; the project then falls back to its workflows' shared agent or the account's director); ready_states [{organization?, project, states}] replaces each project's ready states (states empty clears them; a project in several organizations needs organization), and every state must be one of that project's process states (workflow_settings with project lists them). Refusals say why; what the machine cannot answer now comes back in warnings.",
+        description: "Changes the workflow settings on the account's coordinator; only the fields given change. watch_interval_minutes 1-60, concurrency 1-4, pull_request_wait_days 1-60, dependency_wait_days 1-90 (days a run waits for the dependencies of its item before a person must look); director {machine (machine_list ID; the coordinator's own ID for it), provider codex|claude|opencode, model, effort} installed on that machine: the fields given are merged with the stored director (a new one needs all four), or null clears it; project_directors [{organization?, project, director}] sets a project's own director (director holds the fields to change, merged with that project's stored one; a new one needs all four) or clears it (director null or left out; the project then falls back to its workflows' shared agent or the account's director); ready_states [{organization?, project, states}] replaces each project's ready states (states empty clears them; a project in several organizations needs organization), and every state must be one of that project's process states (workflow_settings with project lists them). Refusals say why; what the machine cannot answer now comes back in warnings.",
         effect: Effect::Local,
         schema: || {
             object(
-                json!({"watch_interval_minutes": {"type": "integer", "minimum": 1, "maximum": 60}, "concurrency": {"type": "integer", "minimum": 1, "maximum": 4}, "pull_request_wait_days": {"type": "integer", "minimum": 1, "maximum": 60}, "director": {"type": ["object", "null"], "description": "The director's fields to change, {machine, provider, model, effort} (all four for a new director), or null to clear it."}, "project_directors": {"type": "array", "items": {"type": "object"}, "description": "[{organization?, project, director: {machine?, provider?, model?, effort?} or null}]."}, "ready_states": {"type": "array", "items": {"type": "object"}, "description": "[{organization?, project, states}]; states empty clears that project's."}, "source": string("Enabled Azure source ID the states are read from; optional when exactly one is enabled.")}),
+                json!({"watch_interval_minutes": {"type": "integer", "minimum": 1, "maximum": 60}, "concurrency": {"type": "integer", "minimum": 1, "maximum": 4}, "pull_request_wait_days": {"type": "integer", "minimum": 1, "maximum": 60}, "dependency_wait_days": {"type": "integer", "minimum": 1, "maximum": 90}, "director": {"type": ["object", "null"], "description": "The director's fields to change, {machine, provider, model, effort} (all four for a new director), or null to clear it."}, "project_directors": {"type": "array", "items": {"type": "object"}, "description": "[{organization?, project, director: {machine?, provider?, model?, effort?} or null}]."}, "ready_states": {"type": "array", "items": {"type": "object"}, "description": "[{organization?, project, states}]; states empty clears that project's."}, "source": string("Enabled Azure source ID the states are read from; optional when exactly one is enabled.")}),
                 &[],
             )
         },
@@ -1620,7 +1620,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "workflow_runs",
         title: "Workflow runs",
-        description: "The workflow runs, newest first (id, workflow, item with its verified link, state, stage, attention, children, pull requests with their links and status, dates), filtered by state (classifying, unassigned, planning, plan_review, creating_children, coding, pull_requests, blocks, done, failed, cancelled, interrupted, needs_attention) or workflow; limit 1-100 (default 20). attention lists the runs waiting on the user (plan_review, unassigned, needs_attention, interrupted, failed).",
+        description: "The workflow runs, newest first (id, workflow, item with its verified link, state, stage, attention, children, pull requests with their links and status, dates), filtered by state (classifying, unassigned, planning, plan_review, creating_children, coding, waiting_dependency, pull_requests, blocks, done, failed, cancelled, interrupted, needs_attention) or workflow; a run in waiting_dependency waits, without a slot, for the predecessors of its work item (waiting_for: what it waits for; dependencies: each predecessor's link and whether it is met) and goes on by itself; limit 1-100 (default 20). attention lists the runs waiting on the user (plan_review, unassigned, needs_attention, interrupted, failed).",
         effect: Effect::Read,
         schema: || {
             object(
@@ -1632,7 +1632,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "workflow_run_status",
         title: "A workflow run",
-        description: "The whole record of one workflow run: the workflow's definition and blocks as they were when the run got it, the item and its verified link, the state and the stage, the stage timeline (stage, started_at, finished_at, outcome), the planning run and each child's coding run (IDs and machine, and failure: the cause its machine reported when it did not end with its answer; implementation_runs shows them), the creation ledger entry (implementation_creation), the children with their links, repository, branch and pull requests (links and status), the block outcomes (each acting block's outcome at each occurrence of its stage: sent, refused or uncertain for a notification; succeeded, failed, timed_out, not_started or uncertain for a launcher, with the reason, exit code and duration, never a launcher's output), the director's classification (with failure when its session gave no answer) and what the user must look at (attention, naming the cause) or what went wrong (error).",
+        description: "The whole record of one workflow run (with dependencies and wait: the predecessors of its work item, and of each child in children[].dependencies, each with its verified link, state, pull requests, whether it is met and code's reason): the workflow's definition and blocks as they were when the run got it, the item and its verified link, the state and the stage, the stage timeline (stage, started_at, finished_at, outcome), the planning run and each child's coding run (IDs and machine, and failure: the cause its machine reported when it did not end with its answer; implementation_runs shows them), the creation ledger entry (implementation_creation), the children with their links, repository, branch and pull requests (links and status), the block outcomes (each acting block's outcome at each occurrence of its stage: sent, refused or uncertain for a notification; succeeded, failed, timed_out, not_started or uncertain for a launcher, with the reason, exit code and duration, never a launcher's output), the director's classification (with failure when its session gave no answer) and what the user must look at (attention, naming the cause) or what went wrong (error).",
         effect: Effect::Read,
         schema: || object(json!({"run": string("The workflow run's ID.")}), &["run"]),
     },
@@ -1644,6 +1644,18 @@ pub(super) const TOOLS: &[Tool] = &[
         schema: || {
             object(
                 json!({"run": string("The workflow run's ID."), "confirmed": confirmed()}),
+                &["run"],
+            )
+        },
+    },
+    Tool {
+        name: "workflow_run_skip_dependency",
+        title: "Skip a run's wait for its dependencies",
+        description: "Lets a workflow run that waits for the dependencies of its work item (waiting_dependency), or that stopped in needs_attention because of them (a predecessor that cannot be read, of another project, removed, a cycle, a wait past dependency_wait_days), go on without them: for one predecessor (dependency, its work item ID; the others are still judged) or for all of them. Its agent may then start without code it needs. Nothing is written to Azure DevOps.",
+        effect: Effect::External,
+        schema: || {
+            object(
+                json!({"run": string("The workflow run's ID."), "dependency": {"type": "integer", "minimum": 1, "description": "One predecessor's work item ID; leave it out to skip every dependency of the work item the run waits on."}, "confirmed": confirmed()}),
                 &["run"],
             )
         },
@@ -2506,7 +2518,7 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
         | "workflow_run_restart" | "workflow_runs_pause" | "workflow_runs_unpause"
         | "workflow_summary" | "workflow_summary_send" | "workflow_supervise"
         | "workflow_supervision" | "workflow_supervision_act" | "workflow_supervision_dismiss"
-        | "workflow_run_requeue" => ipc(name, args.clone()).await,
+        | "workflow_run_requeue" | "workflow_run_skip_dependency" => ipc(name, args.clone()).await,
         "answer_rate" => ipc("answer_feedback", json!({"resource": text(args, "resource")?, "rating": args.get("rating"),
             "comment": args.get("comment"), "example": args.get("example"), "context": args.get("context")})).await,
         "answer_draft" => ipc("answer_refine", json!({"resource": text(args, "resource")?, "context": args.get("context").and_then(Value::as_str).unwrap_or(""),
@@ -2809,6 +2821,13 @@ pub(super) fn confirmation(name: &str, args: &Value) -> Option<String> {
         "workflow_run_resume" => format!(
             "Resume workflow run {} from the stage it stopped in, accepting what stopped it (a started coding run is not started again and no plan is submitted again)?",
             args["run"].as_str().unwrap_or("this")
+        ),
+        "workflow_run_skip_dependency" => format!(
+            "Let workflow run {} go on without waiting for {}? Its agent may start without code it needs.",
+            args["run"].as_str().unwrap_or("this"),
+            args["dependency"]
+                .as_u64()
+                .map_or("its dependencies".to_owned(), |id| format!("dependency #{id}"))
         ),
         "workflow_run_cancel" => format!(
             "Cancel workflow run {} and its active implementation run, keeping its file changes, and stop every session it started that is still alive? It stops advancing for good.",
@@ -3165,6 +3184,7 @@ mod tests {
             ("workflow_supervision_act", "needs confirmation"),
             ("workflow_supervision_dismiss", "local"),
             ("workflow_run_requeue", "local"),
+            ("workflow_run_skip_dependency", "needs confirmation"),
         ] {
             assert_eq!(effect(name), (json!(expected), json!("offered")), "{name}");
             assert!(super::super::workflows::handles(name), "{name}");

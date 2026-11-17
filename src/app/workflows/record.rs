@@ -39,9 +39,12 @@ pub(in crate::app) enum State {
     Interrupted,
     /// Stopped on something the user must look at (`attention` says what).
     NeedsAttention,
+    /// Waiting, without a slot, for the dependencies of its item or of the next child to be
+    /// met (`dependencies`); it goes on by itself.
+    WaitingDependency,
 }
 impl State {
-    pub(in crate::app) const ALL: [State; 13] = [
+    pub(in crate::app) const ALL: [State; 14] = [
         State::Classifying,
         State::Unassigned,
         State::Planning,
@@ -55,6 +58,7 @@ impl State {
         State::Cancelled,
         State::Interrupted,
         State::NeedsAttention,
+        State::WaitingDependency,
     ];
     pub(in crate::app) fn word(self) -> &'static str {
         match self {
@@ -71,6 +75,7 @@ impl State {
             State::Cancelled => "cancelled",
             State::Interrupted => "interrupted",
             State::NeedsAttention => "needs_attention",
+            State::WaitingDependency => "waiting_dependency",
         }
     }
     pub(in crate::app) fn parse(word: &str) -> Option<State> {
@@ -113,6 +118,7 @@ impl State {
                 | State::Coding
                 | State::PullRequests
                 | State::Blocks
+                | State::WaitingDependency
         )
     }
     /// The stages that take one of the `concurrency` slots: those where a coding or planning
@@ -218,6 +224,9 @@ pub(in crate::app) struct Child {
     /// done (its record says how it ended) or past a missing pull request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    /// Its predecessors as the engine last judged them before coding it (a planned child's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<super::dependencies::Dependency>,
 }
 impl Child {
     pub(in crate::app) fn accepted(&self) -> bool {
@@ -403,6 +412,22 @@ pub(in crate::app) struct Run {
     /// mark is cleared when it takes a slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ahead_since: Option<i64>,
+    /// The predecessors of its item as the engine last judged them (a task's are its child's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<super::dependencies::Dependency>,
+    /// While `waiting_dependency`: what it waits for and where it goes on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<super::dependencies::Wait>,
+    /// The work item whose dependencies were judged last (the item, or a child).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_for: Option<u64>,
+    /// The work item whose dependencies were met (or skipped): its stage goes on without
+    /// judging them again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies_met: Option<u64>,
+    /// The predecessors the person skipped: they no longer count for this run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_dependencies: Vec<u64>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -451,9 +476,26 @@ impl Run {
             preapproved_restart: false,
             supervision: Vec::new(),
             ahead_since: None,
+            dependencies: Vec::new(),
+            wait: None,
+            dependencies_for: None,
+            dependencies_met: None,
+            skipped_dependencies: Vec::new(),
             created_at: now,
             updated_at: now,
             finished_at: None,
+        }
+    }
+    /// The dependencies judged last: those of the child being coded or waited for, else the
+    /// item's.
+    pub(in crate::app) fn subject_dependencies(&self) -> &[super::dependencies::Dependency] {
+        match self.dependencies_for {
+            Some(id) if id != self.item.id || self.task() => self
+                .children
+                .iter()
+                .find(|c| c.id == id)
+                .map_or(&self.dependencies[..], |c| &c.dependencies[..]),
+            _ => &self.dependencies,
         }
     }
     /// A task-category item has no children: it is coded itself.
@@ -582,6 +624,8 @@ impl Run {
                 "not_verified": l.checks.iter().filter(|c| c.result == "not_verified").count(),
             })),
             "ahead": self.ahead_since.is_some(),
+            "waiting_for": self.wait.as_ref().map(|w| json!({"subject": w.subject, "text": w.text, "since": w.since})),
+            "dependencies": self.subject_dependencies().iter().map(|d| json!({"id": d.id, "url": d.url, "satisfied": d.satisfied})).collect::<Vec<_>>(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "finished_at": self.finished_at,

@@ -479,33 +479,43 @@ How a workflow takes an item from its ready state to its release, and where the 
    task type) in a ready state and starts one run, and the project's director checks which workflow fits it (also
    when only one starts by itself; one that does not fit waits `unassigned`); or the person starts
    one from Implement or with `pta workflows run ID`.
-3. **The run plans** with the workflow's machine, checkouts, agent, instructions and instruction
+3. **Dependencies first.** Before planning an HU or bug, and before coding each child (a task's
+   own item included), the run reads the work item's Predecessor links in Azure DevOps. A
+   predecessor not yet met puts the run in `waiting_dependency` (no slot; judged again every watch
+   interval; it goes on by itself, in its place in the queue): a predecessor is met when every
+   known pull request of it (linked to it, or recorded by its run), abandoned ones aside, is
+   completed into the repository's default branch, or, with none, when its state is in the
+   `Completed` category; the pull requests decide when the two disagree. A predecessor that cannot
+   be read, of another project or organization, removed, a cycle, or a wait past
+   `dependency_wait_days` (default 14) stops the run in `needs_attention`. The person may skip the
+   wait with `pta workflows skip-wait RUN [--dependency ID] --confirmed`.
+4. **The run plans** with the workflow's machine, checkouts, agent, instructions and instruction
    blocks, and stops at `plan_review`. A `plan_ready` block may tell the person.
-4. **The gate.** The person reviews the proposed children (GUI Runs › Review plan, or Implement) and
+5. **The gate.** The person reviews the proposed children (GUI Runs › Review plan, or Implement) and
    confirms them; only that `implementation_create` writes to Azure DevOps. Nothing passes the gate
    without it. A task has no plan and goes straight to coding.
-5. **Children are coded one by one** in the checkout of the repository each names, each with its
+6. **Children are coded one by one** in the checkout of the repository each names, each with its
    own guide; each coding agent opens its pull request and reports its branch. A task is coded in
    the repository it names and is given every checkout of the workflow: it may change the others
    too, each on its own branch with its own pull request, reported on one `Branch REPOSITORY: NAME`
    line each after its `Branch: NAME`.
-6. **Pull requests are read** (never merged) until all are completed, one for each reported branch;
+7. **Pull requests are read** (never merged) until all are completed, one for each reported branch;
    an abandoned one, a missing branch or the wait (`pull_request_wait_days`) stops the run in `needs_attention`.
-7. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
+8. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
    when the pull requests are completed, notifications with mentions when the run is done or fails.
-8. **Report on request**: `workflow_summary` asks the director for a summary of the record, and
+9. **Report on request**: `workflow_summary` asks the director for a summary of the record, and
    `workflow_summary_send` posts it, after the person confirms the exact text, to each chat chosen
    (a summary too long for one Teams card is refused with a shorter version to approve as `text`).
-9. **When something stops it** (`needs_attention`, `interrupted`, `failed`, `unassigned`), the run
+10. **When something stops it** (`needs_attention`, `interrupted`, `failed`, `unassigned`), the run
    says why; the person fixes the cause and resumes, assigns a workflow, or cancels. Nothing that
    may already have happened is done again by a resume. When the agent stopped halfway and its
    work must go on without being repeated, restart the run with a handover note instead
    (`workflows restart`), written with the person from the run's record and what they know.
-10. **When the network to the customer drops** or two sessions would collide, pause the runs
+11. **When the network to the customer drops** or two sessions would collide, pause the runs
    (`workflows pause`, every project or one, stopping the live sessions or letting them finish)
    and unpause when it is back; restart each interrupted run with its note, in the order that
    makes sense.
-11. **Let the supervisor follow the runs** (Settings › Workflows, `--set supervisor.*`): when a
+12. **Let the supervisor follow the runs** (Settings › Workflows, `--set supervisor.*`): when a
    run stops, waits too long, loses its machine or disagrees with its session, it reads what the
    agents did, checks their final reports and drafts the handover note, work items and a
    summary; read its look (`workflows supervision RUN`) and carry out what the person agrees to
@@ -627,7 +637,9 @@ run (any state but `done` and `cancelled`).
   `coding.failure`, and a classification without an answer in `classification.failure`
   (`{cause, exit_code?, stderr?}`, the vocabulary of `implementation_runs`). Report links as they are.
 - **States:** `classifying`, `unassigned`, `planning`, `plan_review`, `creating_children`,
-  `coding`, `pull_requests`, `blocks` (the `pull_requests_completed` and `done` blocks run here),
+  `coding`, `waiting_dependency` (no slot; `wait` says what it waits for, `dependencies` and each
+  child's `dependencies` hold every predecessor with its link, state, pull requests, whether it is
+  met and code's reason), `pull_requests`, `blocks` (the `pull_requests_completed` and `done` blocks run here),
   `done`, `failed`, `cancelled`, `interrupted`, `needs_attention`. A coding run that ends
   `permission_prompt`, `failed`, `needs_attention` or `interrupted`, an abandoned pull request, a
   session that reported no branch, an uncertain creation, a run that delivered no child and a

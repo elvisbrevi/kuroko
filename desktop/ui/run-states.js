@@ -25,6 +25,7 @@ const LABELS = {
   plan_review: () => t('Plan to review'),
   creating_children: () => t('Creating the children'),
   coding: () => t('Coding'),
+  waiting_dependency: () => t('Waiting for dependencies'),
   pull_requests: () => t('Waiting for pull requests'),
   blocks: () => t('Running the workflow\'s blocks'),
   done: () => t('Done'),

@@ -30,6 +30,9 @@ pub struct PullRequest {
     pub created_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
+    /// The branch it merges into (`refs/heads/NAME`), when it was read (0.14.0 and later).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// The person resumed the run with this pull request abandoned: it no longer stops it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
@@ -142,6 +145,9 @@ pub(crate) async fn pull_requests(
             closed_at: pull["closedDate"]
                 .is_string()
                 .then(|| text(&pull["closedDate"], 40)),
+            target: pull["targetRefName"]
+                .is_string()
+                .then(|| text(&pull["targetRefName"], 300)),
             accepted: false,
         });
     }

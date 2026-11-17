@@ -1,4 +1,5 @@
 //! Bounded, read-only evidence from Azure DevOps. The catalog lives in the private knowledge repo.
+pub(crate) mod dependencies;
 pub mod detail;
 pub(crate) mod implementation;
 pub mod link;

@@ -204,6 +204,57 @@ impl Azure {
             Self::Synthetic(catalog) => Ok((catalog.sessions(&runs), false)),
         }
     }
+    /// The predecessor graph of a work item of the run's organization, read now.
+    pub(in crate::app) async fn dependencies(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        id: u64,
+    ) -> Result<crate::ado::dependencies::Graph, String> {
+        match self {
+            Self::Live => {
+                tools::todo::dependencies(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    id,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => catalog.graph(id),
+        }
+    }
+    /// The default branch of each repository of the run's project, by lowercase ID (cached for
+    /// five minutes like the catalog `workflow_repositories` reads).
+    pub(in crate::app) async fn default_branches(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+    ) -> Result<HashMap<String, String>, String> {
+        match self {
+            Self::Live => {
+                let catalog = tools::todo::repositories(
+                    state,
+                    run.item.source.as_deref(),
+                    Some(&run.item.organization),
+                    &run.item.project,
+                )
+                .await?;
+                Ok(catalog["repositories"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| {
+                        let branch = r["default_branch"].as_str().filter(|b| !b.is_empty())?;
+                        Some((r["id"].as_str()?.to_lowercase(), branch.to_owned()))
+                    })
+                    .collect())
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.default_branches()),
+        }
+    }
     /// Whether a branch exists in a workflow repository now (the workflow supervisor).
     pub(in crate::app) async fn branch_exists(
         &self,
@@ -832,6 +883,7 @@ async fn step(
         Phase::CreatingChildren => creating(host, run, now).await,
         Phase::Coding => coding(host, azure, run, &workflow, now, paused).await,
         Phase::PullRequests => pull_requests(host, azure, run, now, poll).await,
+        Phase::WaitingDependency => waiting(host, azure, run, now).await,
         // Paused, its blocks have not run: the stage waits for the pause to end.
         Phase::Blocks if paused => Ok(false),
         Phase::Blocks => {
@@ -1096,6 +1148,13 @@ async fn planning(
     paused: bool,
 ) -> std::result::Result<bool, String> {
     let Some(planned) = run.planning.clone() else {
+        // The item's dependencies first: planning waits, without a slot, until they are met.
+        if paused {
+            return Ok(false);
+        }
+        if let Some(changed) = gate(host, azure, run, None, Phase::Planning, now).await? {
+            return Ok(changed);
+        }
         // Recorded before the machine is asked, so a restart asks for this same run.
         run.planning = Some(Implementation {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1213,6 +1272,173 @@ async fn planning(
             Ok(true)
         }
     }
+}
+
+/// Judge the dependencies of the run's item (`child` none) or of one child, read now.
+async fn judge_dependencies(
+    host: &Arc<Host>,
+    azure: &Azure,
+    run: &Run,
+    subject: u64,
+) -> std::result::Result<
+    (
+        super::dependencies::Verdict,
+        Vec<super::dependencies::Dependency>,
+    ),
+    String,
+> {
+    let graph = azure.dependencies(&host.state, run, subject).await?;
+    if graph.direct.is_empty() && graph.foreign.is_empty() {
+        return Ok((super::dependencies::Verdict::Met, Vec::new()));
+    }
+    let runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
+    let known = super::dependencies::known_pulls(&runs);
+    // A catalog that cannot be read does not hold the run: each completed pull request then
+    // counts whatever branch it went into.
+    let defaults = azure
+        .default_branches(&host.state, run)
+        .await
+        .unwrap_or_default();
+    Ok(super::dependencies::evaluate(
+        &graph,
+        &run.item.project,
+        &known,
+        &defaults,
+        None,
+        &run.skipped_dependencies,
+    ))
+}
+
+/// Record the dependencies judged for `subject` on the run (the item's) or on its child.
+fn record_dependencies(
+    run: &mut Run,
+    subject: u64,
+    dependencies: Vec<super::dependencies::Dependency>,
+) {
+    run.dependencies_for = Some(subject);
+    if let Some(child) = run.children.iter_mut().find(|c| c.id == subject) {
+        child.dependencies = dependencies;
+    } else {
+        run.dependencies = dependencies;
+    }
+}
+
+/// Before a planning run or a child's coding run is recorded: go on (none) when the work item's
+/// dependencies are met, or wait for them in `waiting_dependency`, or stop in `needs_attention`
+/// on what waiting cannot fix; returns whether the run changed.
+async fn gate(
+    host: &Arc<Host>,
+    azure: &Azure,
+    run: &mut Run,
+    child: Option<usize>,
+    stage: Phase,
+    now: i64,
+) -> std::result::Result<Option<bool>, String> {
+    use super::dependencies::Verdict;
+    let subject = child.map_or(run.item.id, |i| run.children[i].id);
+    if run.dependencies_met == Some(subject) {
+        return Ok(None);
+    }
+    let (verdict, dependencies) = match judge_dependencies(host, azure, run, subject).await {
+        Ok(judged) => judged,
+        Err(error) => return wait(run, error).map(Some),
+    };
+    record_dependencies(run, subject, dependencies);
+    run.error = None;
+    match verdict {
+        Verdict::Met => {
+            run.dependencies_met = Some(subject);
+            Ok(None)
+        }
+        Verdict::Waiting(text) => {
+            run.wait = Some(super::dependencies::Wait {
+                continue_to: stage,
+                subject,
+                since: now,
+                checked_at: now,
+                text,
+            });
+            run.advance(Phase::WaitingDependency, now, "waiting for dependencies");
+            Ok(Some(true))
+        }
+        Verdict::Blocked(reason) => {
+            run.stop(
+                Phase::NeedsAttention,
+                now,
+                format!(
+                    "{reason} Fix the links, then resume; or skip the dependency (workflow_run_skip_dependency)."
+                ),
+            );
+            run.cause = Some("dependency".into());
+            Ok(Some(true))
+        }
+    }
+}
+
+/// A run waiting for its dependencies: they are judged again every watch interval, and it goes
+/// on to its stage once they are met.
+async fn waiting(
+    host: &Arc<Host>,
+    azure: &Azure,
+    run: &mut Run,
+    now: i64,
+) -> std::result::Result<bool, String> {
+    use super::dependencies::Verdict;
+    let wait = run.wait.clone().ok_or("The run has no dependency wait.")?;
+    let settings = host.state.settings.map().map_err(fail)?.workflow_settings;
+    let days = i64::from(settings.dependency_wait_days);
+    if now - wait.since >= days * 86_400 {
+        run.stop(
+            Phase::NeedsAttention,
+            now,
+            format!(
+                "The dependencies of #{} were not met within {days} days ({}) Resume to wait again, or skip the dependency (workflow_run_skip_dependency).",
+                wait.subject, wait.text
+            ),
+        );
+        run.cause = Some("dependency_timeout".into());
+        return Ok(true);
+    }
+    if now - wait.checked_at < i64::from(settings.watch_interval_minutes) * 60 {
+        return Ok(false);
+    }
+    let (verdict, dependencies) = match judge_dependencies(host, azure, run, wait.subject).await {
+        Ok(judged) => judged,
+        Err(error) => {
+            // Read again at the next interval.
+            if let Some(w) = run.wait.as_mut() {
+                w.checked_at = now;
+            }
+            run.error = Some(error);
+            return Ok(true);
+        }
+    };
+    record_dependencies(run, wait.subject, dependencies);
+    run.error = None;
+    match verdict {
+        Verdict::Met => {
+            run.dependencies_met = Some(wait.subject);
+            run.wait = None;
+            run.advance(wait.continue_to, now, "dependencies met");
+        }
+        Verdict::Waiting(text) => {
+            if let Some(w) = run.wait.as_mut() {
+                w.checked_at = now;
+                w.text = text;
+            }
+        }
+        Verdict::Blocked(reason) => {
+            run.stop(
+                Phase::NeedsAttention,
+                now,
+                format!(
+                    "{reason} Fix the links, then resume; or skip the dependency (workflow_run_skip_dependency)."
+                ),
+            );
+            run.cause = Some("dependency".into());
+        }
+    }
+    Ok(true)
 }
 
 /// The children the ledger created, in order.
@@ -1481,6 +1707,14 @@ async fn coding(
     let parent = (!run.task()).then(|| run.item.url.clone());
     let child = run.children[index].clone();
     let Some(coding) = child.coding.clone() else {
+        // The child's dependencies first (a task's are its own): it waits, without a slot,
+        // until they are met.
+        if paused {
+            return Ok(false);
+        }
+        if let Some(changed) = gate(host, azure, run, Some(index), Phase::Coding, now).await? {
+            return Ok(changed);
+        }
         // Recorded before the machine is asked: never a second run for this child.
         run.children[index].coding = Some(Implementation {
             id: uuid::Uuid::new_v4().to_string(),
@@ -1876,6 +2110,14 @@ pub(in crate::app) async fn resume(host: &Arc<Host>, run: &mut Run, now: i64) ->
                         .push(json!({"child": child.url, "coding_run": coding.id, "ended": ended}));
                 }
             }
+        }
+        // Waiting for its dependencies: the wait starts again, judged at once.
+        (Phase::WaitingDependency, _) => {
+            if let Some(wait) = run.wait.as_mut() {
+                wait.since = now;
+                wait.checked_at = 0;
+            }
+            accepted.push(json!({"dependencies": "waited for again"}));
         }
         (Phase::PullRequests, _) => {
             for child in &mut run.children {

@@ -2670,6 +2670,25 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   const heldScan = await scan(page);
   check(`runs ${label}: the list with a run waiting for checkouts passes WCAG 2.2 AA`, heldScan.length === 0, JSON.stringify(heldScan));
   await page.evaluate(() => window.__ptaHoldRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', null));
+  // A run waiting for its dependencies says what it waits for, in the list and in its detail, and may skip the wait.
+  await page.evaluate(() => window.__ptaWaitRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', true));
+  await page.selectOption('#runs-state', 'done');
+  await page.selectOption('#runs-state', '');
+  await page.waitForFunction(() => /Esperando dependencias/.test(document.querySelector('#run-rows')?.innerText ?? ''));
+  check(`runs ${label}: a run waiting for its dependencies says what it waits for`, /Waiting for #4998/.test(await page.locator('#run-rows').innerText()));
+  await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
+  await page.waitForSelector('#run-detail-content #run-dependencies');
+  check(`runs ${label}: the detail lists the predecessor with its link, its pull request and that it is not met`,
+    await page.locator('#run-dependencies [data-dependency="4998"] :is(a, .ref)').count() === 2 && /Sin cumplir/.test(await page.locator('#run-dependencies').innerText()) && await page.locator('#run-wait').count() === 1);
+  const waitScan = await scan(page);
+  check(`runs ${label}: a run waiting for its dependencies passes WCAG 2.2 AA`, waitScan.length === 0, JSON.stringify(waitScan));
+  await page.click('#run-skip-wait');
+  await page.click('#run-skip-wait');
+  await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_skip_dependency' && c.confirmed === true));
+  check(`runs ${label}: skipping the wait takes a second press and the host's confirmed operation`, true);
+  await page.evaluate(() => window.__ptaWaitRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
+  await page.click('#run-detail-back');
+  await page.waitForSelector('#run-rows [data-run]');
   await page.selectOption('#runs-state', '');
   await page.waitForFunction(() => document.querySelectorAll('#run-rows [data-run]').length === 5);
   // The detail of the coding run: timeline, children with sessions and pull requests, block outcomes, a summary and its send.

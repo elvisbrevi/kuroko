@@ -426,6 +426,36 @@ pub(in crate::app) async fn pull_requests(
     .await
 }
 
+/// The predecessor graph of a work item (`ado::dependencies`), read with the enabled Azure
+/// source's read credential (the workflow engine; only the states' categories are cached,
+/// nothing written).
+pub(in crate::app) async fn dependencies(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    root: u64,
+) -> Result<crate::ado::dependencies::Graph, String> {
+    project_read(
+        state,
+        source,
+        "reading a work item's dependencies",
+        "work item dependencies",
+        60,
+        |azure, cache| async move {
+            crate::ado::dependencies::graph(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                &cache,
+                organization,
+                root,
+            )
+            .await
+        },
+    )
+    .await
+}
+
 /// Whether a reported branch exists in a workflow repository now, read with the enabled Azure
 /// source's read credential (the workflow supervisor; never cached, nothing written).
 pub(in crate::app) async fn branch_exists(
