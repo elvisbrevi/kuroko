@@ -298,7 +298,9 @@ function permissionMode(mode) {
  * and one button that creates the selected ones only on a second press, through `create(chosen)`.
  */
 function planChildrenReview(run, azure, create) {
-  const children = run.plan.children.map(child => {
+  // Each child's key (c1, c2…) and the earlier children it needs first, as the plan proposed them; the person may change them.
+  const keys = run.plan.children.map((child, index) => child.key || `c${index + 1}`);
+  const children = run.plan.children.map((child, index) => {
     const selected = el('input', { type: 'checkbox', checked: true });
     const title = el('input', { value: child.title, maxLength: 200 });
     const description = el('textarea', { value: child.description, rows: 3, maxLength: 16000 });
@@ -312,9 +314,14 @@ function planChildrenReview(run, azure, create) {
         : el('input', { value: proposed.value, spellcheck: false });
       return { reference: proposed.reference, value, row: el('label', {}, el('span', {}, known?.name || proposed.reference, ' ', el('code', { textContent: proposed.reference })), value) };
     });
-    const fieldset = el('fieldset', {}, el('legend', {}, el('label', { class: 'check' }, selected, t('Create this child'))), el('label', {}, t('Title'), title), el('label', {}, t('Description'), description),
-      ...(azure ? [el('label', {}, t('Work item type'), kind), ...values.map(v => v.row)] : []));
-    return { selected, title, description, kind, values, fieldset };
+    const depends = keys.slice(0, index).map((key, earlier) => {
+      const box = el('input', { type: 'checkbox', checked: (child.depends_on ?? []).includes(key) });
+      return { key, box, title: run.plan.children[earlier].title, row: el('label', { class: 'check' }, box, `${key} · ${run.plan.children[earlier].title}`) };
+    });
+    const needs = depends.length ? el('fieldset', { class: 'plan-depends', 'data-key': keys[index] }, el('legend', { textContent: t('Depends on (its code is needed first)') }), ...depends.map(d => d.row)) : null;
+    const fieldset = el('fieldset', {}, el('legend', {}, el('label', { class: 'check' }, selected, t('Create this child'), ` · ${keys[index]}`)), el('label', {}, t('Title'), title), el('label', {}, t('Description'), description),
+      ...(azure ? [el('label', {}, t('Work item type'), kind), ...values.map(v => v.row)] : []), needs);
+    return { key: keys[index], selected, title, description, kind, values, depends, fieldset };
   });
   const button = el('button', { type: 'button', class: 'secondary', textContent: t('Create selected children') });
   const review = el('div', { class: 'plan-review' }, ...children.map(c => c.fieldset), button);
@@ -322,7 +329,13 @@ function planChildrenReview(run, azure, create) {
   review.addEventListener('input', () => { reviewed = false; button.textContent = t('Create selected children'); });
   button.onclick = () => busy(button, async () => {
     if (!reviewed) { reviewed = true; button.textContent = t('Confirm child creation'); return; }
-    const chosen = children.filter(c => c.selected.checked).map(c => ({ title: c.title.value, description: c.description.value,
+    const picked = children.filter(c => c.selected.checked);
+    // A chosen child cannot depend on one left out: the dependency is removed, or that child chosen too.
+    for (const c of picked) {
+      const missing = c.depends.find(d => d.box.checked && !picked.some(p => p.key === d.key));
+      if (missing) throw t('{child} depends on {other}, which is not selected: select it too, or remove the dependency.', { child: c.key, other: missing.key });
+    }
+    const chosen = picked.map(c => ({ title: c.title.value, description: c.description.value, key: c.key, depends_on: c.depends.filter(d => d.box.checked).map(d => d.key),
       ...(azure ? { type: c.kind.value.trim(), fields: c.values.map(v => ({ reference: v.reference, value: v.value.value.trim() })).filter(v => v.value) } : {}) }));
     if (!chosen.length) throw t('Select at least one child.');
     await create(chosen);

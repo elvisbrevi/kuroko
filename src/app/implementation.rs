@@ -1475,6 +1475,7 @@ async fn run(host: &Arc<Host>, launch: Launch) {
             for child in children {
                 validate_child(child)?;
             }
+            validate_order(children)?;
             Ok((true, String::new(), Some(plan), Vec::new(), None))
         }
         .await
@@ -1700,6 +1701,7 @@ async fn create(host: &Arc<Host>, args: &Value) -> Result<Value> {
     for child in children {
         validate_child(child)?;
     }
+    validate_order(children)?;
     if selection.provider == "azure" {
         super::azure_cli::require().await?;
     }
@@ -1768,8 +1770,21 @@ async fn send_children(
     children: Vec<Value>,
 ) -> Result<()> {
     let state = &host.state.implementation;
-    let mut created = Vec::new();
+    let mut created: Vec<Value> = Vec::new();
+    // Each created child by its plan key: a later child's Predecessor links name them.
+    let mut keyed: HashMap<String, Value> = HashMap::new();
     for child in &children {
+        let predecessors: Vec<Value> = child["depends_on"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str().and_then(|k| keyed.get(k)).cloned())
+            .collect();
+        let mut child = child.clone();
+        if !predecessors.is_empty() {
+            child["predecessors"] = json!(predecessors);
+        }
+        let child = &child;
         ensure!(
             authority::invocation(&host.state)?.scope.owner,
             "Account binding changed."
@@ -1789,8 +1804,20 @@ async fn send_children(
         let mut data = state.registry.lock().await;
         let record = data.creations.get_mut(id).unwrap();
         match result {
-            Ok(item) => {
+            Ok(mut item) => {
                 let linked = item["state"] == "created";
+                if let Some(key) = child["key"].as_str() {
+                    keyed.insert(key.to_owned(), item.clone());
+                }
+                let ids: Vec<Value> = child["predecessors"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|p| p["id"].clone())
+                    .collect();
+                if !ids.is_empty() {
+                    item["depends_on"] = json!(ids);
+                }
                 created.push(item);
                 record["created"] = json!(created);
                 if !linked {
@@ -1810,6 +1837,53 @@ async fn send_children(
     let mut data = state.registry.lock().await;
     data.creations.get_mut(id).unwrap()["state"] = json!("created");
     state.save(&data)?;
+    Ok(())
+}
+/// The order of a plan's children and their dependencies: each `key` (when given) is a short
+/// plain name used once, and `depends_on` names only keys of earlier children, so the list is
+/// an order in which every child comes after those it needs (no cycle can be declared).
+fn validate_order(children: &[Value]) -> Result<()> {
+    let mut earlier: Vec<&str> = Vec::new();
+    for (index, child) in children.iter().enumerate() {
+        let key = match &child["key"] {
+            Value::Null => None,
+            Value::String(key) => {
+                ensure!(
+                    !key.is_empty()
+                        && key.len() <= 16
+                        && key
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "_-".contains(c)),
+                    "A child's key is a short plain name such as c1."
+                );
+                ensure!(
+                    !earlier.contains(&key.as_str()),
+                    "Two children have the key {key}."
+                );
+                Some(key.as_str())
+            }
+            _ => anyhow::bail!("A child's key is a short plain name such as c1."),
+        };
+        match &child["depends_on"] {
+            Value::Null => {}
+            Value::Array(keys) => {
+                ensure!(keys.len() < 20, "A child depends on at most 19 others.");
+                for wanted in keys {
+                    let wanted = wanted.as_str().context("depends_on lists child keys.")?;
+                    ensure!(
+                        earlier.contains(&wanted),
+                        "Child {} ({}) depends on {wanted}, which is not an earlier child of this plan: keep that child before it, or remove the dependency.",
+                        index + 1,
+                        child["title"].as_str().unwrap_or_default()
+                    );
+                }
+            }
+            _ => anyhow::bail!("depends_on lists child keys."),
+        }
+        if let Some(key) = key {
+            earlier.push(key);
+        }
+    }
     Ok(())
 }
 fn validate_child(child: &Value) -> Result<()> {
@@ -1851,6 +1925,33 @@ fn validate_child(child: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_plan_declares_dependencies_only_on_earlier_children() {
+        let child = |key: &str, depends: &[&str]| json!({"title": format!("Child {key}"), "key": key, "depends_on": depends});
+        assert!(
+            validate_order(&[child("c1", &[]), child("c2", &[]), child("c3", &["c1"])]).is_ok()
+        );
+        // A plan saved by an older host has neither keys nor dependencies.
+        assert!(validate_order(&[json!({"title": "Old"}), json!({"title": "Older"})]).is_ok());
+        let later = validate_order(&[child("c1", &["c2"]), child("c2", &[])]).unwrap_err();
+        assert!(
+            later
+                .to_string()
+                .contains("depends on c2, which is not an earlier child"),
+            "{later}"
+        );
+        // The person left out the child another one depends on: refused, naming it.
+        let removed = validate_order(&[child("c1", &[]), child("c3", &["c2"])]).unwrap_err();
+        assert!(
+            removed
+                .to_string()
+                .contains("Child 2 (Child c3) depends on c2"),
+            "{removed}"
+        );
+        assert!(validate_order(&[child("c1", &["c1"])]).is_err());
+        assert!(validate_order(&[child("c1", &[]), child("c1", &[])]).is_err());
+        assert!(validate_order(&[child("c 1", &[])]).is_err());
+    }
     #[test]
     fn a_reconnected_session_keeps_the_name_of_its_purpose_and_item() {
         let name = |record: Value| recorded_name(&record).as_str().to_owned();

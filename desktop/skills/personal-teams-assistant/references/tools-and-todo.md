@@ -229,7 +229,8 @@ children and run installed coding agents.
 5. `implementation_start` on an HU/bug/Epic proposes children. Review/edit/select them and
    confirm `implementation_create`; no child is written just because a model proposed it.
    Each Azure child may carry `type` (a task type of the project; empty uses the default) and
-   `fields` (`[{"reference":"Custom.Month","value":"Noviembre"}]`), proposed from the work item
+   `fields` (`[{"reference":"Custom.Month","value":"Noviembre"}]`), and every child `key` and
+   `depends_on` (keys of earlier children only), proposed from the work item
    guides; only fields the type's guide marks `fill` and values valid for the live type are
    accepted, and every child is checked before anything is written. The agents start from the
    editable agent instructions (`pta prompts`) plus fixed rules, and also receive the
@@ -493,7 +494,11 @@ How a workflow takes an item from its ready state to its release, and where the 
    blocks, and stops at `plan_review`. A `plan_ready` block may tell the person.
 5. **The gate.** The person reviews the proposed children (GUI Runs › Review plan, or Implement) and
    confirms them; only that `implementation_create` writes to Azure DevOps. Nothing passes the gate
-   without it. A task has no plan and goes straight to coding.
+   without it. A task has no plan and goes straight to coding. Each proposed child has a `key`
+   (`c1`, `c2`… in the order they must be done) and `depends_on` (keys of earlier children whose
+   code it needs); the person may change them (a chosen child that depends on one left out is
+   refused), and the confirmation creates the children in that order with their Predecessor links
+   (GitHub: «blocked by»), so a child waits for the pull request of the one it depends on.
 6. **Children are coded one by one** in the checkout of the repository each names, each with its
    own guide; each coding agent opens its pull request and reports its branch. A task is coded in
    the repository it names and is given every checkout of the workflow: it may change the others

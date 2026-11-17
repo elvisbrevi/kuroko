@@ -251,3 +251,59 @@ async fn an_item_without_links_reads_its_dependencies_once_and_is_coded_as_befor
     let stages: Vec<&str> = run.timeline.iter().map(|s| s.stage.word()).collect();
     assert_eq!(stages, ["classifying", "coding", "pull_requests"]);
 }
+
+#[tokio::test]
+async fn a_planned_child_that_depends_on_an_earlier_one_waits_for_its_pull_request() {
+    let bench = Bench::new().await;
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflow_settings.watch_interval_minutes = 1;
+    bench.host.state.settings.save_map(&map).unwrap();
+    // The plan's third child depends on the first: the creation linked it (Predecessor).
+    bench.catalog.add(
+        synthetic::detail(103, "Task", "task", "Receipt totals", "In payments-web."),
+        true,
+    );
+    bench.catalog.link(103, 101);
+    bench
+        .catalog
+        .set_node(node(101, "In Progress", "InProgress"));
+    let id = bench.start(HU).await;
+    let run = bench.state(&id, Phase::PlanReview).await;
+    // The first child's pull request is open from the start; the second's is completed.
+    bench.pulls(WEB, "payments-web", "feature/child-1", 11, "active");
+    bench.pulls(API, "payments-api", "feature/child-2", 12, "completed");
+    bench.confirm(&run, "created", &[101, 102, 103]).await;
+    // The first two are coded in order; the third waits, without a slot, for the first's PR.
+    let waiting = bench.state(&id, Phase::WaitingDependency).await;
+    assert_eq!(bench.count("starts"), 2);
+    assert!(!waiting.admitted);
+    let wait = waiting.wait.clone().unwrap();
+    assert_eq!((wait.subject, wait.continue_to), (103, Phase::Coding));
+    assert!(
+        wait.text.contains("#101 (Pull request !11 is active)"),
+        "{}",
+        wait.text
+    );
+    assert_eq!(waiting.children[2].dependencies[0].id, 101);
+    assert!(waiting.children[2].coding.is_none());
+    // Still active after an interval: still waiting, the sibling's pull request read again.
+    let reads = bench.reads("feature/child-1");
+    later(&bench);
+    bench.tick().await;
+    assert_eq!(bench.run(&id).state, Phase::WaitingDependency);
+    assert!(bench.reads("feature/child-1") > reads);
+    // Completed: the third child is coded, after both others.
+    bench.pulls(WEB, "payments-web", "feature/child-1", 11, "completed");
+    later(&bench);
+    let run = bench.state(&id, Phase::PullRequests).await;
+    assert_eq!(bench.count("starts"), 3);
+    let coded: Vec<u64> = run.children.iter().map(|c| c.id).collect();
+    assert_eq!(coded, vec![101, 102, 103]);
+    assert!(run.children[2].started_at.unwrap() >= run.children[1].finished_at.unwrap());
+    assert!(run.children[2].dependencies[0].satisfied);
+    let stages: Vec<&str> = run.timeline.iter().map(|s| s.stage.word()).collect();
+    assert!(
+        stages.ends_with(&["coding", "waiting_dependency", "coding", "pull_requests"]),
+        "{stages:?}"
+    );
+}

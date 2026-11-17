@@ -481,6 +481,17 @@ async fn child_body(
         json!({"op":"add","path":"/fields/System.AssignedTo","value":source.author_email}),
         json!({"op":"add","path":"/relations/-","value":{"rel":"System.LinkTypes.Hierarchy-Reverse","url":parent_api.as_str()}}),
     ];
+    // Its predecessors among the children already created (Predecessor links, as the plan the
+    // person confirmed declares them).
+    for predecessor in child["predecessors"].as_array().into_iter().flatten() {
+        let id = predecessor["id"]
+            .as_u64()
+            .filter(|id| *id > 0)
+            .context("Invalid predecessor.")?;
+        let mut api = organization_url(&source, &["_apis", "wit", "workItems", &id.to_string()])?;
+        api.set_query(None);
+        body.push(json!({"op":"add","path":"/relations/-","value":{"rel":crate::ado::dependencies::PREDECESSOR,"url":api.as_str()}}));
+    }
     for reference in ["System.AreaPath", "System.IterationPath"] {
         if let Some(field) = parent
             .fields
@@ -718,7 +729,8 @@ mod tests {
             catalog,
             &[],
             &parent,
-            &json!({"title":"Implement receipt fix","description":"Keep <script> as text.","type":"","fields":[]}),
+            &json!({"title":"Implement receipt fix","description":"Keep <script> as text.","type":"","fields":[],
+                "key":"c2","depends_on":["c1"],"predecessors":[{"id":87,"url":"https://dev.azure.com/example/Payments/_workitems/edit/87"}]}),
         )
         .await
         .unwrap();
@@ -743,6 +755,15 @@ mod tests {
                 .is_some_and(|s| s.contains("&lt;script&gt;"))
         }));
         assert!(requests[1].url.path().contains("Development%20Task"));
+        // The predecessor the confirmed plan declares is linked in the same creation request.
+        assert!(body.as_array().unwrap().iter().any(|op| {
+            op["path"] == "/relations/-"
+                && op["value"]["rel"] == "System.LinkTypes.Dependency-Reverse"
+                && op["value"]["url"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("/example/_apis/wit/workItems/87")
+        }));
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
     fn live(kind: &str, allowed: &[&str]) -> LiveField {
