@@ -214,17 +214,17 @@ pub(in crate::app) fn open_pulls(runs: &[Run], workflow: &str, repository: &str)
 }
 
 /// An older run of the same workflow that waits for the open pull requests of the same
-/// repository: it goes first.
+/// repository: it goes first. `runs` is newest first, as the store lists them (creation order,
+/// which a timestamp in seconds cannot tell apart).
 pub(in crate::app) fn queued_before<'a>(
     runs: &'a [Run],
     run: &Run,
     repository: &str,
 ) -> Option<&'a Run> {
-    runs.iter().find(|other| {
-        other.id != run.id
-            && other.workflow == run.workflow
+    let at = runs.iter().position(|r| r.id == run.id).unwrap_or(0);
+    runs.iter().skip(at + 1).find(|other| {
+        other.workflow == run.workflow
             && other.state == Phase::WaitingDependency
-            && (other.created_at, &other.id) < (run.created_at, &run.id)
             && other.wait.as_ref().is_some_and(|w| {
                 w.reason == "open_pull_requests" && w.repository.as_deref() == Some(repository)
             })
@@ -858,12 +858,13 @@ mod tests {
             });
             r
         };
-        let runs = vec![waiting(4, 200), waiting(5, 201)];
+        // Newest first, as the store lists them; created in the same second.
+        let runs = vec![waiting(5, 200), waiting(4, 200)];
         assert_eq!(
-            queued_before(&runs, &runs[1], REPO).map(|r| r.item.id),
+            queued_before(&runs, &runs[0], REPO).map(|r| r.item.id),
             Some(4)
         );
-        assert!(queued_before(&runs, &runs[0], REPO).is_none());
+        assert!(queued_before(&runs, &runs[1], REPO).is_none());
     }
 
     #[test]

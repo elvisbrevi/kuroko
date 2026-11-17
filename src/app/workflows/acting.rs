@@ -637,7 +637,7 @@ pub(in crate::app) fn reviewer_mentions(
 }
 
 /// The message a notification posts: the members the block mentions, then its rendered text.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(in crate::app) fn compose(
     run: &Run,
     block: &Block,

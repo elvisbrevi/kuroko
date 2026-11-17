@@ -1563,11 +1563,14 @@ async fn limit(
     // One run decides at a time, and a run that passes records it before the next decides.
     let _deciding = host.state.workflows.admission.lock().await;
     let mut runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
-    runs.retain(|r| r.id != run.id);
-    // Its own reservation does not count against it.
+    // This run as it is now, in its place by creation; its own reservation does not count
+    // against it.
     let mut own = run.clone();
     own.coding_into = None;
-    runs.push(own);
+    match runs.iter_mut().find(|r| r.id == run.id) {
+        Some(slot) => *slot = own,
+        None => runs.insert(0, own),
+    }
     let open = super::dependencies::open_pulls(&runs, &workflow.id, &id);
     let ahead = super::dependencies::queued_before(&runs, run, &id).map(|r| r.id.clone());
     if open.len() < max && ahead.is_none() {

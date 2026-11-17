@@ -75,10 +75,10 @@ if grep -q 'Return only JSON matching this schema' "$prompt"; then
   exit 0
 fi
 if grep -q 'Review round' "$prompt"; then
-  echo x >> "$LOG/rounds"
-  r=$(wc -l < "$LOG/rounds" | tr -d ' ')
+  r=$(( $(cat "$LOG/rounds" 2>/dev/null | wc -l) + 1 ))
   cp "$prompt" "$LOG/round.$r"
   printf '%s\n' "$@" > "$LOG/round_args.$r"
+  echo x >> "$LOG/rounds"
   case "$(cat "$LOG/review_mode" 2>/dev/null)" in
     exit) rm -f "$LOG/review_mode"; exit_at_start ;;
     block) while [ ! -f "$LOG/review_release" ]; do sleep 0.05; done ;;
