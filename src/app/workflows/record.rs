@@ -645,10 +645,95 @@ pub(in crate::app) fn line<'a>(runs: &'a [Run], now: i64, pauses: &[Pause]) -> V
                 || (r.state == State::Classifying && r.retry_at.is_none_or(|at| at <= now))
         })
         .filter(|r| !paused(pauses, &r.item.project))
+        // A run whose next launch needs directories another run's agent holds on that machine
+        // waits out of the line, so it takes no slot it could not use and holds up no run of
+        // another machine or checkout; it is back in its place by creation once they are free.
+        .filter(|r| held_by(runs, r).is_none())
         .collect();
     // Stable: equal keys keep their order by creation.
     line.sort_by_key(|r| (r.ahead_since.is_none(), r.ahead_since.unwrap_or_default()));
     line
+}
+
+/// The machine and directories the implementation run `run` has launched holds now: its
+/// planning run (every checkout of its workflow), or the coding run of the child being coded
+/// (a task's run is given every checkout, a planned child its own), while its state as last
+/// observed is not an ending.
+pub(in crate::app) fn holds(run: &Run) -> Option<(&str, Vec<PathBuf>)> {
+    if run.state.finished() {
+        return None;
+    }
+    let active = run.active_implementation()?;
+    let running = active
+        .state
+        .as_deref()
+        .is_none_or(|s| matches!(s, "running" | "planning"));
+    if !active.started || !running {
+        return None;
+    }
+    Some((active.machine.as_str(), directories(run)))
+}
+
+/// The machine and directories the next launch of `run` will need: a planning run not yet
+/// launched, or the coding run of the next child not yet launched. A planned child's checkout
+/// is chosen when it is launched, so until then it counts as needing every checkout.
+pub(in crate::app) fn needs(run: &Run) -> Option<(&str, Vec<PathBuf>)> {
+    let definition = run.definition.as_ref()?;
+    let pending = match run.state {
+        State::Planning => run.planning.as_ref().is_none_or(|p| !p.started),
+        State::Coding => run
+            .children
+            .iter()
+            .find(|c| c.outcome.is_none())
+            .is_some_and(|c| c.coding.as_ref().is_none_or(|i| !i.started)),
+        _ => false,
+    };
+    pending.then(|| (definition.machine.as_str(), directories(run)))
+}
+
+/// The directories a run's agent works in: its child's checkout when the child being coded is a
+/// planned one already placed, otherwise every checkout of its workflow.
+fn directories(run: &Run) -> Vec<PathBuf> {
+    let child = (run.stopped_in.unwrap_or(run.state) == State::Coding && !run.task())
+        .then(|| run.children.iter().find(|c| c.outcome.is_none()))
+        .flatten()
+        .and_then(|c| c.directory.clone());
+    match child {
+        Some(directory) => vec![directory],
+        None => run
+            .definition
+            .iter()
+            .flat_map(|d| d.checkouts.values().cloned())
+            .collect(),
+    }
+}
+
+/// Whether two directories, as their machine spells them, are one inside the other (the
+/// machine's own check), whatever system reads them: separators and, for a Windows path,
+/// letter case are compared alike.
+fn overlap(a: &Path, b: &Path) -> bool {
+    let spell = |p: &Path| {
+        let text = p.to_string_lossy().replace('\\', "/");
+        let text = if text.contains(':') || text.starts_with("//") {
+            text.to_lowercase()
+        } else {
+            text
+        };
+        format!("{}/", text.trim_end_matches('/'))
+    };
+    let (a, b) = (spell(a), spell(b));
+    a.starts_with(&b) || b.starts_with(&a)
+}
+
+/// The run whose launched agent holds, on the machine `run` will launch on, a directory its next
+/// launch needs; none when it needs nothing or nothing it needs is held.
+pub(in crate::app) fn held_by<'a>(runs: &'a [Run], run: &Run) -> Option<&'a Run> {
+    let (machine, wanted) = needs(run)?;
+    runs.iter().filter(|r| r.id != run.id).find(|other| {
+        holds(other).is_some_and(|(at, held)| {
+            at == machine && held.iter().any(|h| wanted.iter().any(|w| overlap(h, w)))
+        })
+    })
 }
 
 /// Whether run `id` takes a slot now: fewer runs are ahead of it in the line than slots are
@@ -817,9 +902,21 @@ impl Store {
         let words: Vec<&str> = states.iter().map(|s| s.word()).collect();
         let filter = serde_json::to_string(&words)?;
         let mut query = db.prepare(
-            "SELECT payload FROM workflow_runs WHERE (?1 = '[]' OR state IN (SELECT value FROM json_each(?1))) AND (?2 IS NULL OR workflow_id=?2) ORDER BY created_at DESC, rowid DESC LIMIT ?3",
+            "SELECT id, payload FROM workflow_runs WHERE (?1 = '[]' OR state IN (SELECT value FROM json_each(?1))) AND (?2 IS NULL OR workflow_id=?2) ORDER BY created_at DESC, rowid DESC LIMIT ?3",
         )?;
-        let rows = query.query_map(params![filter, workflow, limit], |r| r.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        let rows = query.query_map(params![filter, workflow, limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut runs = Vec::new();
+        for row in rows {
+            let (id, payload) = row?;
+            // A record this version cannot read (written by a newer one, before a rollback) is
+            // left out rather than failing every list: the engine keeps driving the others.
+            match serde_json::from_str(&payload) {
+                Ok(run) => runs.push(run),
+                Err(_) => tracing::warn!(event = "workflow_run_unreadable", run = %id),
+            }
+        }
+        Ok(runs)
     }
 }

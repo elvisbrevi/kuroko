@@ -922,6 +922,10 @@ fn build_launch(
 
 /// An implementation run the workflow engine asks for: an ID it chose and recorded before
 /// asking, an Azure item it read, its machine, agent and directories, and its context.
+/// Why a machine refuses to launch a run whose directories another active run holds. A worker
+/// answers it as the fixed refusal `directories_busy`, which the coordinator turns back into this
+/// text, so the workflow engine waits for the directories instead of failing the run.
+pub(super) const DIRECTORIES_BUSY: &str = "Another run is using these directories.";
 pub(super) struct Planned {
     pub id: String,
     pub machine: String,
@@ -1243,7 +1247,7 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
                             .directories
                             .iter()
                             .any(|q| p.starts_with(q) || q.starts_with(p)))),
-                "Another run is using these directories."
+                "{DIRECTORIES_BUSY}"
             );
             let id = launch.id.clone();
             state.db.insert(&Run {

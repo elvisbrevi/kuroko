@@ -157,9 +157,10 @@ function runLinkFor(item) {
   return button;
 }
 
-/** A run in a stage that takes one of the `concurrency` slots, without one: its place in the line (1 is next). */
+/** Waiting for checkouts in use, or for a slot: its place (1 is next). */
 function slotBadge(run) {
-  return run.waiting_for_slot ? badge(t('Waiting for a slot, position {n}', { n: run.queue_position }), 'muted') : null;
+  return run.waiting_for_checkouts ? badge(t('Waiting for checkouts in use'), 'muted')
+    : run.waiting_for_slot ? badge(t('Waiting for a slot, position {n}', { n: run.queue_position }), 'muted') : null;
 }
 
 /** A run the supervisor or the person moved ahead in the queue. */

@@ -493,7 +493,8 @@ Knowledge
                            --director lets the workflow director choose (none leaves it unassigned).
   workflows runs [--state STATE] [--workflow WORKFLOW] [--limit N]
                            Runs, newest first, and those waiting on you (attention); a run waiting
-                           for a slot has waiting_for_slot and its queue_position (1 is next); the
+                           for a slot has waiting_for_slot and its queue_position (1 is next), one
+                           waiting for checkouts another run is using has waiting_for_checkouts; the
                            pauses in force are in paused, and a run one holds has paused: true.
   workflows status RUN                   One run: stages, implementation runs, children, pull requests.
                            A session that did not end with its answer shows why (failure: a fixed cause).

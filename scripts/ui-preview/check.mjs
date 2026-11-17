@@ -2661,7 +2661,15 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   check(`runs ${label}: a run waiting for a slot shows its place in the line`, /Esperando un turno, posición 2/.test(await page.locator('#run-rows').innerText()));
   const queuedScan = await scan(page);
   check(`runs ${label}: the list with a run waiting for a slot passes WCAG 2.2 AA`, queuedScan.length === 0, JSON.stringify(queuedScan));
-  await page.evaluate(() => window.__ptaQueueRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', null));
+  // A run waiting for the checkouts another run's agent is using says so instead of a place.
+  await page.evaluate(() => window.__ptaHoldRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e01'));
+  await page.selectOption('#runs-state', 'done');
+  await page.selectOption('#runs-state', 'coding');
+  await page.waitForFunction(() => /Esperando checkouts en uso/.test(document.querySelector('#run-rows')?.innerText ?? ''));
+  check(`runs ${label}: a run waiting for checkouts in use says so instead of a place in the line`, !/posición/.test(await page.locator('#run-rows').innerText()));
+  const heldScan = await scan(page);
+  check(`runs ${label}: the list with a run waiting for checkouts passes WCAG 2.2 AA`, heldScan.length === 0, JSON.stringify(heldScan));
+  await page.evaluate(() => window.__ptaHoldRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', null));
   await page.selectOption('#runs-state', '');
   await page.waitForFunction(() => document.querySelectorAll('#run-rows [data-run]').length === 5);
   // The detail of the coding run: timeline, children with sessions and pull requests, block outcomes, a summary and its send.
