@@ -2213,6 +2213,7 @@ async fn a_ledger_entry_for_another_parent_is_planned_again_on_resume_not_looped
 }
 
 mod acting;
+mod dependencies;
 mod limits;
 mod pause;
 

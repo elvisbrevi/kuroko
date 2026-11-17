@@ -132,6 +132,8 @@ struct UpdateArgs {
     concurrency: Option<u32>,
     #[serde(default)]
     pull_request_wait_days: Option<u32>,
+    #[serde(default)]
+    dependency_wait_days: Option<u32>,
     /// The director's fields to change, merged with the stored director; `null` clears it.
     #[serde(default)]
     director: Option<DirectorChange>,
@@ -164,6 +166,7 @@ fn view(settings: &Settings) -> Value {
         "watch_interval_minutes": settings.watch_interval_minutes,
         "concurrency": settings.concurrency,
         "pull_request_wait_days": settings.pull_request_wait_days,
+        "dependency_wait_days": settings.dependency_wait_days,
         "director": settings.director,
         "ready_states": settings.ready_states,
         "project_directors": settings.project_directors,
@@ -220,6 +223,7 @@ fn bounds() -> Value {
         "watch_interval_minutes": range(core::WATCH_INTERVAL_MINUTES),
         "concurrency": range(core::CONCURRENCY),
         "pull_request_wait_days": range(core::PULL_REQUEST_WAIT_DAYS),
+        "dependency_wait_days": range(core::DEPENDENCY_WAIT_DAYS),
         "ready_states_per_project": core::MAX_READY_STATES,
         "projects_with_ready_states": core::MAX_READY_PROJECTS,
         "supervisor": {
@@ -303,6 +307,9 @@ fn apply(settings: &mut Settings, args: &UpdateArgs, resolved: &Resolved) {
     }
     if let Some(value) = args.pull_request_wait_days {
         settings.pull_request_wait_days = value;
+    }
+    if let Some(value) = args.dependency_wait_days {
+        settings.dependency_wait_days = value;
     }
     if let Some(director) = &resolved.director {
         settings.director = director.clone();
@@ -555,6 +562,7 @@ pub(super) async fn update(
     if args.watch_interval_minutes.is_none()
         && args.concurrency.is_none()
         && args.pull_request_wait_days.is_none()
+        && args.dependency_wait_days.is_none()
         && args.director.is_none()
         && !clear_director
         && args.ready_states.is_empty()
@@ -563,7 +571,7 @@ pub(super) async fn update(
         && !clear_supervisor
     {
         return Err(invalid(
-            "Give at least one setting to change: watch_interval_minutes, concurrency, pull_request_wait_days, director, ready_states, project_directors or supervisor.",
+            "Give at least one setting to change: watch_interval_minutes, concurrency, pull_request_wait_days, dependency_wait_days, director, ready_states, project_directors or supervisor.",
         ));
     }
     let map = state.settings.map().map_err(fail)?;

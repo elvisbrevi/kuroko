@@ -470,7 +470,8 @@ Knowledge
                            --project, the states that project's process has.
   workflows settings --set KEY VALUE [--set KEY VALUE…] [--source ID]
                            KEY: watch_interval_minutes (1-60), concurrency (1-4),
-                           pull_request_wait_days (1-60), director.machine|provider|model|effort,
+                           pull_request_wait_days (1-60), dependency_wait_days (1-90),
+                           director.machine|provider|model|effort,
                            director none, ready_states.PROJECT \"STATE,STATE\" (empty clears),
                            ready_states with JSON {organization?, project, states},
                            project_director.PROJECT.machine|provider|model|effort,
@@ -501,6 +502,10 @@ Knowledge
   workflows resume RUN --confirmed       Continues a failed, interrupted or needs_attention run from its
                            stage, accepting what stopped it; never submits a plan or starts a started
                            coding run again.
+  workflows skip-wait RUN [--dependency ID] --confirmed
+                           Lets a run waiting for the dependencies of its work item
+                           (waiting_dependency), or stopped by them in needs_attention, go on without
+                           one predecessor (--dependency) or without all of them.
   workflows cancel RUN --confirmed       Cancels the run and its active implementation run, and stops
                            every session the run started that is still alive.
   workflows restart RUN [--note TEXT | --note-file PATH] --confirmed
@@ -1112,7 +1117,10 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
                     }
                 }
             }
-            "watch_interval_minutes" | "concurrency" | "pull_request_wait_days" => {
+            "watch_interval_minutes"
+            | "concurrency"
+            | "pull_request_wait_days"
+            | "dependency_wait_days" => {
                 let number: u32 = value
                     .parse()
                     .with_context(|| format!("{key} takes a whole number"))?;
@@ -1431,6 +1439,24 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 return Ok(reply);
             }
             (method, json!({"run":run,"confirmed":true}))
+        }
+        (Some("skip-wait"), _) => {
+            let mut body = json!({"run":id(2)?});
+            if let Some(dependency) = option(args, "--dependency") {
+                let dependency: u64 = dependency
+                    .parse()
+                    .ok()
+                    .filter(|d| *d > 0)
+                    .context("--dependency is a work item ID")?;
+                body["dependency"] = json!(dependency);
+            }
+            let question = super::tools::confirmation("workflow_run_skip_dependency", &body)
+                .unwrap_or_default();
+            if let Some(reply) = unconfirmed(args, question) {
+                return Ok(reply);
+            }
+            body["confirmed"] = json!(true);
+            ("workflow_run_skip_dependency", body)
         }
         (Some("restart"), _) => {
             let mut body = json!({"run":id(2)?});

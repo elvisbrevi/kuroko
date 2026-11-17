@@ -97,6 +97,11 @@ pub(super) fn input(run: &Run, language: crate::config::Language, now: i64) -> V
         json!({"stage": s.stage.word(), "started_at": time(s.started_at),
             "finished_at": s.finished_at.and_then(time), "outcome": s.outcome})
     };
+    // A predecessor as code judged it: the director reads it as context and decides nothing.
+    let dependency = |d: &super::dependencies::Dependency| {
+        json!({"id": d.id, "title": bounded(&d.title, 200), "url": d.url, "state": d.state,
+            "met": d.satisfied, "rule": d.rule, "reason": bounded(&d.reason, 300)})
+    };
     let child = |c: &super::record::Child| {
         json!({
             "id": c.id, "title": bounded(&c.title, 200), "url": c.url, "type": c.kind,
@@ -112,6 +117,7 @@ pub(super) fn input(run: &Run, language: crate::config::Language, now: i64) -> V
                 "id": p.id, "title": bounded(&p.title, 200), "status": p.status, "url": p.url,
                 "created_at": p.created_at, "closed_at": p.closed_at, "accepted": p.accepted,
             })).collect::<Vec<_>>(),
+            "dependencies": c.dependencies.iter().take(20).map(dependency).collect::<Vec<_>>(),
         })
     };
     let item = &run.item;
@@ -130,6 +136,9 @@ pub(super) fn input(run: &Run, language: crate::config::Language, now: i64) -> V
         "classification": run.classification.as_ref().map(|c| json!({
             "outcome": c["outcome"], "reason": c["reason"].as_str().map(|r| bounded(r, 300)),
         })),
+        "dependencies": run.dependencies.iter().take(20).map(dependency).collect::<Vec<_>>(),
+        "waiting_for": run.wait.as_ref().map(|w| json!({"work_item": w.subject,
+            "since": time(w.since), "text": bounded(&w.text, 500)})),
         "children": run.children.iter().take(50).map(child).collect::<Vec<_>>(),
         "blocks": run.block_outcomes.iter().take(50).map(|b| json!({
             "block": b.block, "kind": b.kind, "stage": b.stage, "outcome": bounded(&b.outcome, 300),
@@ -149,7 +158,8 @@ struct Link {
     url: String,
 }
 
-/// The links the run record verifies: the item, its children and their pull requests.
+/// The links the run record verifies: the item, its children, the predecessors read for them
+/// and their pull requests.
 fn links(run: &Run) -> Vec<Link> {
     let mut found: Vec<Link> = Vec::new();
     let mut work_item = |id: u64, title: &str, url: &str| {
@@ -166,6 +176,15 @@ fn links(run: &Run) -> Vec<Link> {
     work_item(run.item.id, &run.item.title, &run.item.url);
     for child in &run.children {
         work_item(child.id, &child.title, &child.url);
+    }
+    // The predecessors code read with their verified links.
+    for dependency in run
+        .dependencies
+        .iter()
+        .chain(run.children.iter().flat_map(|c| &c.dependencies))
+        .filter(|d| !d.url.is_empty())
+    {
+        work_item(dependency.id, &dependency.title, &dependency.url);
     }
     for pull in run.children.iter().flat_map(|c| &c.pull_requests) {
         if !found.iter().any(|l| l.url == pull.url) {

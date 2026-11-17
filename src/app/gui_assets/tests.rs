@@ -270,7 +270,7 @@ fn no_file_exceeds_its_agreed_size() {
     const KIB: usize = 1024;
     for asset in ASSETS {
         let limit = match asset.file {
-            "catalog.js" => 320 * KIB,
+            "catalog.js" => 384 * KIB,
             "index.html" | "style.css" => 128 * KIB,
             file if file.ends_with(".js") => 40 * KIB,
             _ => 512 * KIB,

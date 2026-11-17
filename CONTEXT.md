@@ -209,6 +209,10 @@ _Avoid_: comment, handoff comment
 A workflow state of a project's process, among those of its requirement, bug and task types, that the user chose in the workflow settings as «ready to develop»: an assigned item that reaches it can start its workflow. Chosen from the states the process has, never typed.
 _Avoid_: trigger state, start state
 
+**Dependency** (of a work item):
+A Predecessor link in Azure DevOps from a work item to another one whose code it needs. A workflow run reads it before planning the item or coding a child, never infers it, and waits for it without a slot until the predecessor's pull requests are completed into the default branch (or, without pull requests, until its state is completed); a missing, removed or other-project predecessor or a cycle needs the user, who may also skip the wait.
+_Avoid_: blocker, prerequisite, related item (Related links are not dependencies)
+
 **Workflow watcher**:
 The coordinator's task that, every few minutes, reads the items assigned to the user in the ready states and starts a run for each it has not seen in that state (a seen ledger), only through a workflow that starts by itself. It only starts runs: the plan-review gate stands, and it never runs on a worker or a shared account.
 _Avoid_: poller, trigger

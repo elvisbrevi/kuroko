@@ -11,7 +11,7 @@
 // confirmation (a proposed restart, resume or cancel replaces that run action while it waits), a
 // run moved ahead or back in the queue (`workflow_run_requeue`); the pauses above the list are
 // `workflow-pause.js`.
-import { t, tn, tx, uiLocale } from './i18n.js';
+import { t, tn, tx } from './i18n.js';
 import { invoke } from './control.js';
 import { $, badge, el, icon } from './dom.js';
 import { current } from './state.js';
@@ -20,12 +20,12 @@ import { selectTab, showTab } from './nav.js';
 import { chooseFromList } from './directory-sheet.js';
 import { link, markdown } from './markdown.js';
 import { allowNames, failureText, runStateLabel } from './run-states.js';
-import { openAgentSession, sessionLifeBadge } from './sessions.js';
+import { openAgentSession } from './sessions.js';
 import { planChildrenReview } from './implementation.js';
-import { STAGE_NAMES } from './workflow-blocks.js';
 import { renderPauses } from './workflow-pause.js';
 import { ensureWorkflowSettings, workflowSettings } from './settings-workflows.js';
 import { act, proposal, renderAudit, supervision } from './workflow-supervisor.js';
+import { blocks, children, dependencies, otherBranches, timeline, when } from './workflow-run-parts.js';
 
 /** The states in which a run waits on the person (src/app/workflows/record.rs `waits_on_user`). */
 const WAITING = ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'];
@@ -62,10 +62,6 @@ function tone(state) {
   if (WAITING.includes(state)) return 'warn';
   if (state === 'cancelled') return 'muted';
   return 'info';
-}
-/** Unix seconds in the device's locale. */
-function when(seconds) {
-  return seconds ? new Date(seconds * 1000).toLocaleString(uiLocale()) : t('Not recorded');
 }
 function message(error) {
   return tx(String(error?.message ?? error)).replace(/^\[[a-z_]+\] /, '');
@@ -182,6 +178,7 @@ function runRow(run) {
       el('strong', { class: 'run-row-title', textContent: `#${run.item.id} · ${run.item.title}` }),
       el('span', { class: 'run-row-kind', textContent: tx(run.item.kind) }),
       run.attention ? el('span', { class: 'card-text', textContent: tx(run.attention).slice(0, 160) }) : null,
+      run.waiting_for ? el('span', { class: 'card-text', textContent: tx(run.waiting_for.text).slice(0, 160) }) : null,
       el('small', { class: 'run-row-facts', textContent: [workflowName(run.workflow), tn(run.children ?? 0, '1 child', '{n} children'), t('Updated {time}', { time: when(run.updated_at) })].join(' · ') })),
     icon('arrow'));
   row.onclick = () => openWorkflowRun(run.id, row);
@@ -300,7 +297,7 @@ function renderRunDetail(run, sessions) {
   const refresh = async () => { runsData.holding = false; runsData.record = null; await loadRunDetail(); };
   const shared = { twice, when, hold: held => { runsData.holding = held; }, restart: proposed => showRestart(run, area, refresh, proposed) };
   detail.replaceChildren(head, facts, ...notes, runActions(run, sessionButton, area, refresh), supervision(run, area, refresh, shared),
-    timeline(run), children(run, sessionButton, sessions), blocks(run), summaries(run));
+    timeline(run), dependencies(run), children(run, sessionButton, sessions), blocks(run), summaries(run));
   if (focusId) /** @type {HTMLElement | null} */ (document.getElementById(focusId))?.focus({ preventScroll: true });
 }
 
@@ -324,6 +321,16 @@ function runActions(run, sessionButton, area, refresh) {
       done(reply.accepted ? t('Run resumed; what stopped it was accepted.') : t('Run resumed.'));
       await refresh();
     }));
+  }
+  // A run waiting for its dependencies, or stopped by them, may go on without them.
+  if (run.state === 'waiting_dependency' || (run.state === 'needs_attention' && /^dependency/.test(run.cause ?? ''))) {
+    const skip = twice(t('Skip the wait'), t('Confirm: go on without the dependencies'), async () => {
+      await invoke('workflow_run_skip_dependency', { run: run.id, confirmed: true });
+      done(t('The run goes on without waiting for its dependencies.'));
+      await refresh();
+    });
+    skip.id = 'run-skip-wait';
+    actions.append(skip);
   }
   if (!FINAL.includes(run.state) && run.workflow && !proposal(run, 'restart')) {
     const restart = el('button', { type: 'button', class: 'secondary', textContent: t('Restart with a note'), id: 'run-restart-open' });
@@ -403,10 +410,6 @@ async function showPlanReview(run, area, refresh) {
   area.replaceChildren(panel);
 }
 
-/** A task's branches in the workflow's other repositories, as its session reported them. */
-function otherBranches(child) {
-  return (child.branches ?? []).map(b => t('Branch {name} in {repository}', { name: b.branch, repository: b.repository.name }));
-}
 /** A starting point for the handover note from what the record holds: the stages reached, each child's branch and pull requests. */
 function handoverDraft(run) {
   const reached = [...new Set((run.timeline ?? []).map(s => s.stage).filter(s => !FINAL.includes(s) && !WAITING.includes(s)))].map(runStateLabel);
@@ -477,45 +480,6 @@ function showAssign(run, area, refresh) {
 }
 
 // ---- Timeline, children, blocks ----
-
-function timeline(run) {
-  const items = (run.timeline ?? []).map((stage, index, all) => {
-    const current = index === all.length - 1 && !FINAL.includes(run.state);
-    return el('li', { class: current ? 'current' : '' },
-      el('i', { class: `dot ${/fail|needs|interrupt|cancel|uncertain|refused|timed|missing|abandon|permission/.test(stage.outcome ?? '') ? 'warn' : stage.finished_at ? 'ok' : 'info'}`, 'aria-hidden': 'true' }),
-      el('div', {}, el('strong', { textContent: runStateLabel(stage.stage) }),
-        el('small', { textContent: `${when(stage.started_at)}${stage.finished_at ? ` → ${when(stage.finished_at)}` : ''}${stage.outcome ? ` · ${tx(stage.outcome)}` : ''}` })));
-  });
-  return el('details', { class: 'fold', open: true, id: 'run-timeline' }, el('summary', { textContent: tn(items.length, 'Timeline (1 stage)', 'Timeline ({n} stages)') }),
-    items.length ? el('ol', { class: 'run-timeline' }, ...items) : el('p', { class: 'hint', textContent: t('No stage yet.') }));
-}
-
-function children(run, sessionButton, sessions) {
-  const rows = (run.children ?? []).map(child => {
-    const life = sessionLifeBadge(sessions.find(s => s.id === child.coding?.id));
-    const state = child.coding?.state ?? (child.coding ? t('Starting') : t('Waiting'));
-    const prs = child.pull_requests ?? [];
-    return el('div', { class: 'resource run-child', 'data-child': String(child.id) },
-      el('div', { class: 'resource-head' }, badge(tx(state), state === 'done' ? 'ok' : ['failed', 'permission_prompt', 'interrupted', 'needs_attention', 'missing'].includes(state) ? 'warn' : 'info'),
-        link(`#${child.id} ${child.title}`, child.url), el('span', { class: 'grow' }), life, sessionButton(child.coding)),
-      el('p', { class: 'resource-facts' }, el('small', { textContent: [child.repository?.name, child.branch ? t('Branch {name}', { name: child.branch }) : null, ...otherBranches(child), child.outcome ? tx(child.outcome) : null].filter(Boolean).join(' · ') })),
-      child.ignored_branches?.length ? el('p', { class: 'hint run-child-ignored', textContent: t('Ignored branch lines for repositories this workflow does not have: {names}', { names: child.ignored_branches.join(', ') }) }) : null,
-      child.coding?.failure ? el('p', { class: 'hint run-child-failure', textContent: failureText(child.coding.failure) }) : null,
-      prs.length ? el('ul', { class: 'run-pulls' }, ...prs.map(pr => el('li', {}, link(pr.title ? `!${pr.id} ${pr.title}` : pr.url, pr.url), ' ', badge(tx(pr.status), pr.status === 'completed' ? 'ok' : pr.status === 'abandoned' ? 'warn' : 'info')))) : null);
-  });
-  return el('details', { class: 'fold', open: true, id: 'run-children' }, el('summary', { textContent: tn(rows.length, 'Children (1)', 'Children ({n})') }),
-    rows.length ? el('div', { class: 'list' }, ...rows) : el('p', { class: 'hint', textContent: run.state === 'plan_review' ? t('The children are created once you confirm the plan.') : t('No child yet.') }));
-}
-
-function blocks(run) {
-  const names = Object.fromEntries((run.blocks ?? []).map(b => [b.id, b.name]));
-  const rows = (run.block_outcomes ?? []).map(o => el('div', { class: 'resource run-block' },
-    el('div', { class: 'resource-head' }, badge(tx(o.outcome), ['sent', 'succeeded'].includes(o.outcome) ? 'ok' : ['attempting', 'skipped'].includes(o.outcome) ? 'muted' : ['refused', 'failed', 'timed_out', 'stopped', 'uncertain'].includes(o.outcome) ? 'warn' : 'info'),
-      el('strong', { textContent: names[o.block] ?? o.block }), o.stage ? badge(STAGE_NAMES[o.stage] ?? o.stage, 'muted') : null),
-    el('p', { class: 'resource-facts' }, el('small', { textContent: [when(o.at), o.reason ? tx(o.reason) : null, o.exit_code != null ? t('Exit code {code}', { code: String(o.exit_code) }) : null, o.duration_ms != null ? t('{n} ms', { n: String(o.duration_ms) }) : null].filter(Boolean).join(' · ') }))));
-  if (!rows.length) return el('div', {});
-  return el('details', { class: 'fold', id: 'run-blocks' }, el('summary', { textContent: tn(rows.length, 'Block outcomes (1)', 'Block outcomes ({n})') }), el('div', { class: 'list' }, ...rows));
-}
 
 // ---- Summaries and sending ----
 

@@ -376,7 +376,7 @@
   ] : [];
   const runSummary = run => ({ id: run.id, workflow: run.workflow, item: { id: run.item.id, title: run.item.title, url: run.item.url, kind: run.item.kind, category: run.item.category, project: run.item.project }, state: run.state, stage: run.stopped_in ?? run.state, attention: run.attention,
     waits_on_user: ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'].includes(run.state), children: run.children.length, pull_requests: run.children.flatMap(c => c.pull_requests.map(p => ({ url: p.url, status: p.status }))), created_at: run.created_at, updated_at: run.updated_at, finished_at: run.finished_at,
-    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, waiting_for_checkouts: run.waiting_for_checkouts ?? null, paused: pausedRun(run), continues: run.continues ?? null, restarted_as: run.restarted_as ?? null });
+    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, waiting_for_checkouts: run.waiting_for_checkouts ?? null, waiting_for: run.wait ? { subject: run.wait.subject, text: run.wait.text, since: run.wait.since } : null, paused: pausedRun(run), continues: run.continues ?? null, restarted_as: run.restarted_as ?? null });
   const runView = run => { const view = { ...structuredClone(run), stage: run.stopped_in ?? run.state, waits_on_user: runSummary(run).waits_on_user, paused: pausedRun(run),
     waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, waiting_for_checkouts: run.waiting_for_checkouts ?? null, supervision: structuredClone(run.supervision ?? []), supervising: structuredClone(run.supervising ?? []) }; delete view.fresh; return view; };
   // The pauses in force (`workflow_runs_pause`): every project's, or one project's by name.
@@ -399,6 +399,14 @@
     found.summary_sends.push({ id: crypto.randomUUID(), summary: latest.id, chat: { id: chat, topic: teamsChats.find(c => c.id === chat)?.topic, type: 'group' }, mentions: [], chars: latest.text.length, edited: false, outcome: 'uncertain', at: secs(Date.now()) }); };
   // A run in the line for one of the `concurrency` slots (its place, 1 next), or out of it with null.
   window.__ptaQueueRun = (run, position) => { workflowRuns.find(r => r.id === run).queue_position = position; };
+  // A run waiting for the predecessor of its work item (`waiting_dependency`), or back to coding.
+  window.__ptaWaitRun = (id, waiting) => {
+    const run = findRun(id);
+    run.state = waiting ? 'waiting_dependency' : 'coding';
+    run.wait = waiting ? { continue_to: 'coding', subject: run.item.id, since: secs(NOW - 600_000), checked_at: secs(NOW - 60_000), text: 'Waiting for #4998 (Pull request !36 is active).' } : null;
+    run.dependencies = waiting ? [{ id: 4998, url: `${org}/Payments/_workitems/edit/4998`, title: 'Expose receipt totals', kind: 'Task', project: 'Payments', state: 'In Progress', category: 'InProgress',
+      pull_requests: [{ id: 36, url: `${org}/Payments/_git/payments-api/pullrequest/36`, status: 'active', target: 'refs/heads/main' }], satisfied: false, rule: 'pull_requests', reason: 'Pull request !36 is active.' }] : [];
+  };
   // A run waiting for the checkouts another run's agent holds (`waiting_for_checkouts`).
   window.__ptaHoldRun = (run, holder) => { const held = workflowRuns.find(r => r.id === run); held.queue_position = null; held.waiting_for_checkouts = holder ? { run: holder, item: findRun(holder).item.url } : null; };
   // A task's child that reported branches in two repositories and one the workflow does not have, as a resume past its
@@ -486,6 +494,14 @@
       const run = findRun(args.run); run.state = run.stopped_in ?? 'coding'; run.stopped_in = null; run.attention = null; run.updated_at = secs(Date.now());
       run.timeline.push({ stage: run.state, started_at: secs(Date.now()), finished_at: null, outcome: null });
       return { run: runView(run), resumed: true, accepted: true };
+    },
+    workflow_run_skip_dependency: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_run_skip_dependency', ...structuredClone(args) });
+      if (!args.confirmed) throw new Error('[invalid_input] Confirm skipping the wait with the user, then call again with confirmed: true.');
+      const run = findRun(args.run);
+      if (run.state !== 'waiting_dependency') throw new Error(`[conflict] Workflow run ${run.id} does not wait for its dependencies (it is ${run.state}).`);
+      run.state = run.wait.continue_to; run.wait = null; run.updated_at = secs(Date.now());
+      return { run: runView(run), skipped: args.dependency ?? 'all' };
     },
     workflow_run_cancel: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_run_cancel', ...structuredClone(args) });

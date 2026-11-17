@@ -29,6 +29,8 @@ pub const DEFAULT_CONCURRENCY: u32 = 2;
 pub const CONCURRENCY: std::ops::RangeInclusive<u32> = 1..=4;
 pub const DEFAULT_PULL_REQUEST_WAIT_DAYS: u32 = 7;
 pub const PULL_REQUEST_WAIT_DAYS: std::ops::RangeInclusive<u32> = 1..=60;
+pub const DEFAULT_DEPENDENCY_WAIT_DAYS: u32 = 14;
+pub const DEPENDENCY_WAIT_DAYS: std::ops::RangeInclusive<u32> = 1..=90;
 /// At most this many projects have ready states, with at most this many states each.
 pub const MAX_READY_PROJECTS: usize = 50;
 pub const MAX_READY_STATES: usize = 20;
@@ -58,6 +60,10 @@ pub struct Settings {
     pub concurrency: u32,
     /// Days a run waits for its pull requests to be completed or abandoned (1 to 60).
     pub pull_request_wait_days: u32,
+    /// Days a run waits for the dependencies of its item or child before a person must look
+    /// (1 to 90). Left out while it is the default, so an older host keeps loading the map.
+    #[serde(skip_serializing_if = "is_default_dependency_wait")]
+    pub dependency_wait_days: u32,
     /// The model-backed selector and summarizer; none until the user chooses it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub director: Option<Director>,
@@ -77,12 +83,16 @@ impl Default for Settings {
             watch_interval_minutes: DEFAULT_WATCH_INTERVAL_MINUTES,
             concurrency: DEFAULT_CONCURRENCY,
             pull_request_wait_days: DEFAULT_PULL_REQUEST_WAIT_DAYS,
+            dependency_wait_days: DEFAULT_DEPENDENCY_WAIT_DAYS,
             director: None,
             ready_states: Vec::new(),
             project_directors: Vec::new(),
             supervisor: Supervisor::default(),
         }
     }
+}
+fn is_default_dependency_wait(days: &u32) -> bool {
+    *days == DEFAULT_DEPENDENCY_WAIT_DAYS
 }
 impl Settings {
     pub fn is_default(&self) -> bool {
@@ -312,6 +322,12 @@ pub fn validate(settings: &Settings) -> Result<()> {
         "pull_request_wait_days is between {} and {} days.",
         PULL_REQUEST_WAIT_DAYS.start(),
         PULL_REQUEST_WAIT_DAYS.end()
+    );
+    ensure!(
+        DEPENDENCY_WAIT_DAYS.contains(&settings.dependency_wait_days),
+        "dependency_wait_days is between {} and {} days.",
+        DEPENDENCY_WAIT_DAYS.start(),
+        DEPENDENCY_WAIT_DAYS.end()
     );
     ensure!(
         settings.ready_states.len() <= MAX_READY_PROJECTS,

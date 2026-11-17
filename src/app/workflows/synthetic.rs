@@ -18,6 +18,9 @@ pub(in crate::app) struct Catalog {
     branches: Mutex<BTreeSet<(String, String)>>,
     /// Session summaries by implementation run, as the supervisor reads them.
     summaries: Mutex<BTreeMap<String, serde_json::Value>>,
+    /// Predecessor links by successor, and the predecessors' facts (a test's dependencies).
+    links: Mutex<BTreeMap<u64, Vec<u64>>>,
+    nodes: Mutex<BTreeMap<u64, crate::ado::dependencies::Node>>,
     /// Every request, as `GET what`.
     pub requests: Mutex<Vec<String>>,
     /// The items whose reads fail, as during an outage.
@@ -106,6 +109,64 @@ impl Catalog {
         runs.iter()
             .filter_map(|run| summaries.get(run).cloned())
             .collect()
+    }
+    /// `successor` needs `predecessor` (a Predecessor link), as the next read returns it.
+    #[cfg(unix)]
+    pub(in crate::app) fn link(&self, successor: u64, predecessor: u64) {
+        self.links
+            .lock()
+            .unwrap()
+            .entry(successor)
+            .or_default()
+            .push(predecessor);
+    }
+    /// A predecessor's facts (state, category, linked pull requests), as the next read
+    /// returns them; one without facts reads as missing.
+    #[cfg(unix)]
+    pub(in crate::app) fn set_node(&self, node: crate::ado::dependencies::Node) {
+        self.nodes.lock().unwrap().insert(node.id, node);
+    }
+    /// The predecessor graph of `root`, as `ado::dependencies::graph` reads it.
+    pub(in crate::app) fn graph(
+        &self,
+        root: u64,
+    ) -> Result<crate::ado::dependencies::Graph, String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET dependencies {root}"));
+        let links = self.links.lock().unwrap();
+        let nodes = self.nodes.lock().unwrap();
+        let direct = links.get(&root).cloned().unwrap_or_default();
+        let mut graph = crate::ado::dependencies::Graph {
+            root,
+            direct: direct.clone(),
+            ..Default::default()
+        };
+        let mut queue: Vec<u64> = direct;
+        while let Some(id) = queue.pop() {
+            if id == root || graph.nodes.contains_key(&id) {
+                continue;
+            }
+            let mut node = nodes
+                .get(&id)
+                .cloned()
+                .unwrap_or(crate::ado::dependencies::Node {
+                    id,
+                    problem: Some("missing".into()),
+                    ..Default::default()
+                });
+            if node.problem.is_none() {
+                node.predecessors = links.get(&id).cloned().unwrap_or_default();
+                queue.extend(node.predecessors.iter().copied());
+            }
+            graph.nodes.insert(id, node);
+        }
+        Ok(graph)
+    }
+    /// Every repository's default branch: `main`.
+    pub(in crate::app) fn default_branches(&self) -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::new()
     }
     /// A branch that exists in a repository, as the next read returns it.
     #[cfg(unix)]
