@@ -11,14 +11,16 @@ import { chooseFromList } from './directory-sheet.js';
 import { changedAt, loadWorkflows, slug, workflowData } from './workflows.js';
 
 const KIND_NAMES = { instruction: t('Instruction'), teams_notification: t('Teams notification'), launcher: t('Launcher') };
-const STAGES = ['before_planning', 'plan_ready', 'children_created', 'coding_started', 'child_done', 'pull_requests_completed', 'done', 'failed'];
+const STAGES = ['before_planning', 'plan_ready', 'children_created', 'coding_started', 'child_done', 'pull_requests_completed', 'done', 'failed', 'review_rejected', 'review_resubmitted'];
 const STAGE_NAMES = {
   before_planning: t('Before planning'), plan_ready: t('Plan ready for review'), children_created: t('Children created'),
   coding_started: t('Each coding run started'), child_done: t('Each child done'), pull_requests_completed: t('Pull requests completed'), done: t('Run done'), failed: t('Run failed'),
+  review_rejected: t('A reviewer asked for changes'), review_resubmitted: t('Sent back for review'),
 };
 /** The placeholders a notification's template may hold; code fills them in when it posts. */
 const PLACEHOLDERS = {
   item: t('the work item\'s number and title'), id: t('the work item\'s number alone'), title: t('the work item\'s title alone'), link: t('its link'), pull_requests: t('the links of its pull requests'), summary: t('the director\'s progress summary'), state: t('the run\'s state'),
+  reviewers: t('the reviewers who asked for changes (review stages)'), round: t('the review round\'s number (review stages)'),
 };
 /** Card blocks a notification may hold (Teams draws them as parts of the card), each with what it inserts. */
 const CARD_BLOCKS = () => [
@@ -132,7 +134,7 @@ function counted(input, max) {
 function payload(draft, saved) {
   const base = { id: saved ? saved.id : draft.id, name: draft.name.trim(), kind: draft.kind, updated_at: saved?.updated_at ?? 0 };
   if (draft.kind === 'instruction') return { ...base, text: draft.text };
-  if (draft.kind === 'teams_notification') return { ...base, stage: draft.stage, chat: draft.chat, mentions: draft.mentions, template: draft.template };
+  if (draft.kind === 'teams_notification') return { ...base, stage: draft.stage, chat: draft.chat, mentions: draft.mentions, template: draft.template, ...(draft.mention_reviewers && /^review_/.test(draft.stage) ? { mention_reviewers: true } : {}) };
   return { ...base, stage: draft.stage, launcher: draft.launcher };
 }
 
@@ -179,7 +181,12 @@ function blockEditor(draft, saved) {
     touched();
   };
   const stage = el('select', {}, ...STAGES.map(value => el('option', { value, textContent: STAGE_NAMES[value] })));
-  stage.onchange = () => { draft.stage = stage.value; touched(); };
+  stage.onchange = () => {
+    draft.stage = stage.value;
+    // Mentioning the reviewers is offered at a review stage only.
+    body.querySelector('[data-mention-reviewers]')?.closest('label')?.toggleAttribute('hidden', !/^review_/.test(stage.value));
+    touched();
+  };
   const stageField = el('label', {}, t('Stage'), el('small', { textContent: t('When in a run the block acts; each block acts at most once each time that stage occurs.') }), stage);
   const body = el('div', {});
 
@@ -265,6 +272,7 @@ function blockEditor(draft, saved) {
     return [el('div', { class: 'field-block' }, el('label', { id: `block-chat-label-${key}`, textContent: t('Teams chat') }), chat, chatProblem,
       el('small', { class: 'hint', textContent: t('Only chats you belong to; channels are not offered. It posts once each time its stage occurs, as you.') })),
     mentions,
+    reviewersField(draft, touched),
     el('label', {}, t('Message'), el('small', { textContent: t('The members you mention are matched to the chat\'s members again when it posts.') }), template, counted(template, LIMITS.template)),
     el('p', { class: 'hint', textContent: t('Placeholders: {item} the work item, {link} its link, {pull_requests} its pull requests, {summary} the director\'s summary, {state} the run\'s state. Select one to insert it.') }),
     placeholders, placeholderProblem,
@@ -421,5 +429,13 @@ function newBlock() {
 }
 
 $('#block-new').onclick = newBlock;
+
+/** At a review stage, a notification may also mention the round's reviewers who are members of the chat. */
+function reviewersField(draft, touched) {
+  const box = el('input', { type: 'checkbox', checked: Boolean(draft.mention_reviewers), 'data-mention-reviewers': '' });
+  box.onchange = () => { draft.mention_reviewers = box.checked; touched(); };
+  return el('label', { class: 'check', hidden: !/^review_/.test(draft.stage ?? '') }, box,
+    el('span', {}, t('Also mention the reviewers'), el('small', { textContent: t('At a review stage: the reviewers of the round who are members of the chat; the others are written by name.') })));
+}
 
 export { KIND_NAMES, STAGE_NAMES, PLACEHOLDERS, blockSummary, loadLaunchers, renderBlocks };

@@ -689,7 +689,7 @@ pub(crate) async fn direct(
         &[directory],
         &task.prompt(instructions, input),
         Some(task.schema()),
-        (&[], false),
+        (&[], false, None),
         name,
         observer,
         remote,
@@ -735,7 +735,39 @@ pub(crate) async fn execute(
         directories,
         prompt,
         None,
-        (allow, true),
+        (allow, true, None),
+        name,
+        observer,
+        remote,
+    )
+    .await
+}
+
+/// One more autonomous turn of a coding session that already exists (`session`, its native ID):
+/// the agent keeps the context of its earlier turns (a review round). The provider's own resume:
+/// Claude `--resume`, a Codex `thread/resume`, an OpenCode `--session` of that ID. A session the
+/// provider no longer has ends as its CLI reports it, never as a new session.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn execute_resumed(
+    provider: &str,
+    model: &str,
+    effort: &str,
+    directories: &[PathBuf],
+    prompt: &str,
+    allow: &[Allow],
+    session: &str,
+    name: &SessionName,
+    observer: SessionObserver<'_>,
+    remote: mobile::Observer,
+) -> Result<Outcome> {
+    let binary = locate(provider).ok_or_else(unavailable)?;
+    execute_allowing(
+        &binary,
+        (provider, model, effort),
+        directories,
+        prompt,
+        None,
+        (allow, true, Some(session)),
         name,
         observer,
         remote,
@@ -971,7 +1003,7 @@ async fn execute_at(
         directories,
         prompt,
         schema,
-        (&[], true),
+        (&[], true, None),
         name,
         observer,
         remote,
@@ -987,22 +1019,27 @@ async fn execute_allowing(
     directories: &[PathBuf],
     prompt: &str,
     schema: Option<Value>,
-    (allow, keep): (&[Allow], bool),
+    (allow, keep, resume): (&[Allow], bool, Option<&str>),
     name: &SessionName,
     observer: SessionObserver<'_>,
     remote: mobile::Observer,
 ) -> Result<Outcome> {
     let (provider, model, effort) = choice;
-    let requested = if provider == "opencode" {
-        format!("ses_{}", uuid::Uuid::new_v4().simple())
-    } else {
-        uuid::Uuid::new_v4().to_string()
+    let requested = match resume {
+        Some(session) => session.to_owned(),
+        None if provider == "opencode" => format!("ses_{}", uuid::Uuid::new_v4().simple()),
+        None => uuid::Uuid::new_v4().to_string(),
     };
     let temporary = tempfile::tempdir()?;
     let planning = schema.is_some();
     let mut args = arguments(provider, model, effort, directories, planning)?;
     if provider == "claude" {
-        args.extend(["--session-id".into(), requested.clone().into()]);
+        let flag = if resume.is_some() {
+            "--resume"
+        } else {
+            "--session-id"
+        };
+        args.extend([flag.into(), requested.clone().into()]);
     }
     if provider == "opencode" {
         args.push(format!("--session={requested}").into());
@@ -1051,7 +1088,7 @@ async fn execute_allowing(
                     .execute(
                         (model, effort),
                         directories,
-                        prompt,
+                        (prompt, resume),
                         schema,
                         name,
                         observer,

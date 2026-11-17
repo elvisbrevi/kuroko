@@ -2701,6 +2701,21 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_skip_dependency' && c.confirmed === true));
   check(`runs ${label}: skipping the wait takes a second press and the host's confirmed operation`, true);
   await page.evaluate(() => window.__ptaWaitRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
+  // A review round in the detail, and a run stopped on a conflict offering to update the branch.
+  await page.evaluate(() => window.__ptaReviewRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', 'conflict'));
+  await page.click('#run-detail-back');
+  await page.waitForSelector('#run-rows [data-run]');
+  await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
+  await page.waitForSelector('#run-detail-content #run-rounds');
+  check(`runs ${label}: the detail lists the review round with its reviewer, vote and outcome`,
+    /Rita Revisora: rechazado/.test(await page.locator('#run-rounds').innerText()) && /reenviado/.test(await page.locator('#run-rounds').innerText()));
+  const roundScan = await scan(page);
+  check(`runs ${label}: the review rounds pass WCAG 2.2 AA`, roundScan.length === 0, JSON.stringify(roundScan));
+  await page.click('#run-update-branch');
+  await page.click('#run-update-branch');
+  await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_update_branch' && c.confirmed === true));
+  check(`runs ${label}: updating the branch after a conflict takes a second press and the host's confirmed operation`, true);
+  await page.evaluate(() => window.__ptaReviewRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', null));
   await page.click('#run-detail-back');
   await page.waitForSelector('#run-rows [data-run]');
   await page.selectOption('#runs-state', '');

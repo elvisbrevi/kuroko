@@ -426,6 +426,38 @@ pub(in crate::app) async fn pull_requests(
     .await
 }
 
+/// The comment threads of a workflow run's pull request, read with the enabled Azure source's
+/// read credential (never cached, nothing written).
+pub(in crate::app) async fn threads(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    project: &str,
+    repository: &str,
+    pull_request: u64,
+) -> Result<Vec<crate::ado::workflow::Thread>, String> {
+    project_read(
+        state,
+        source,
+        "reading a pull request's threads",
+        "pull request threads",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::threads(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                organization,
+                project,
+                repository,
+                pull_request,
+            )
+            .await
+        },
+    )
+    .await
+}
+
 /// The files a workflow run's pull request conflicts on with its target branch, read with the
 /// enabled Azure source's read credential (never cached, nothing written).
 pub(in crate::app) async fn conflicts(

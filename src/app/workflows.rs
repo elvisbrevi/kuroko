@@ -38,6 +38,7 @@ pub(super) mod implement;
 pub(super) mod record;
 #[cfg(all(test, unix))]
 mod rehearsal;
+pub(super) mod review;
 pub(super) mod runs;
 pub(super) mod summary;
 pub(super) mod supervisor;

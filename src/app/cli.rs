@@ -448,7 +448,8 @@ Knowledge
                            what its coding runs may do that the fixed rules forbid (work_items, teams,
                            merge, deploy; empty by default; any of them needs --confirmed), and
                            delivery (optional): {dependency_policy wait_for_pull_request|stack,
-                           max_open_pull_requests 0-10, target_branch}. A run gets
+                           max_open_pull_requests 0-10, target_branch, review_rounds 0-5 (default
+                           2), review_on_threads}. A run gets
                            its instructions and instruction blocks whole: a workflow whose largest run
                            context would exceed 100000 characters is refused with the numbers. Checked
                            against the project's catalog, the machine's roots and checkouts and its
@@ -508,6 +509,10 @@ Knowledge
                            Lets a run waiting for the dependencies of its work item
                            (waiting_dependency), or stopped by them in needs_attention, go on without
                            one predecessor (--dependency) or without all of them.
+  workflows update-branch RUN --confirmed
+                           For a run stopped because its pull request conflicts with its target
+                           branch: the agent that coded it updates that branch and resolves the
+                           conflicts in the same pull request (a conflict round).
   workflows cancel RUN --confirmed       Cancels the run and its active implementation run, and stops
                            every session the run started that is still alive.
   workflows restart RUN [--note TEXT | --note-file PATH] --confirmed
@@ -1441,6 +1446,18 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 return Ok(reply);
             }
             (method, json!({"run":run,"confirmed":true}))
+        }
+        (Some("update-branch"), _) => {
+            let body = json!({"run":id(2)?});
+            let question =
+                super::tools::confirmation("workflow_run_update_branch", &body).unwrap_or_default();
+            if let Some(reply) = unconfirmed(args, question) {
+                return Ok(reply);
+            }
+            (
+                "workflow_run_update_branch",
+                json!({"run":id(2)?,"confirmed":true}),
+            )
         }
         (Some("skip-wait"), _) => {
             let mut body = json!({"run":id(2)?});

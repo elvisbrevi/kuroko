@@ -40,9 +40,64 @@ pub struct PullRequest {
     /// The commit of the target branch that merge status was computed against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_commit: Option<String>,
+    /// The last commit of its source branch it was evaluated with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
+    /// Who opened it (the Azure DevOps identity ID): the run's own account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    /// Its reviewers and their votes, as read (10 approved, 5 with suggestions, 0 none, -5
+    /// waiting for the author, -10 rejected).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reviewers: Vec<Reviewer>,
     /// The person resumed the run with this pull request abandoned: it no longer stops it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
+}
+
+/// A reviewer of a pull request and the vote it cast.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Reviewer {
+    /// The Azure DevOps identity ID.
+    pub id: String,
+    pub name: String,
+    pub vote: i32,
+}
+
+/// A comment thread of a pull request, as the review rounds read it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Thread {
+    pub id: u64,
+    /// `active`, `pending`, `fixed`, `wontFix`, `closed`, `byDesign` or `unknown`.
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// Its first comment: who wrote it, when and what (third-party text, untrusted).
+    pub author_id: String,
+    pub author: String,
+    pub text: String,
+    pub published_at: String,
+    /// Every later comment: who wrote it and when.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<Reply>,
+    /// A thread Azure DevOps writes itself (a vote, a push): never a request for a change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub system: bool,
+}
+
+/// A later comment of a thread.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Reply {
+    pub author_id: String,
+    pub at: String,
+    /// Its first characters (a summary comment starts with a fixed heading).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 /// Whether a branch name a coding session reported is one this read asks for: a plain Git
@@ -161,10 +216,119 @@ pub(crate) async fn pull_requests(
             target_commit: pull["lastMergeTargetCommit"]["commitId"]
                 .is_string()
                 .then(|| text(&pull["lastMergeTargetCommit"]["commitId"], 64)),
+            source_commit: pull["lastMergeSourceCommit"]["commitId"]
+                .is_string()
+                .then(|| text(&pull["lastMergeSourceCommit"]["commitId"], 64)),
+            created_by: pull["createdBy"]["id"]
+                .is_string()
+                .then(|| text(&pull["createdBy"]["id"], 64)),
+            reviewers: pull["reviewers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(50)
+                .filter_map(|r| {
+                    Some(Reviewer {
+                        id: text(&r["id"], 64),
+                        name: text(&r["displayName"], 200),
+                        vote: i32::try_from(r["vote"].as_i64()?).ok()?,
+                    })
+                })
+                .filter(|r| !r.id.is_empty())
+                .collect(),
             accepted: false,
         });
     }
     found.sort_by_key(|a| std::cmp::Reverse(a.id));
+    Ok(found)
+}
+
+/// The comment threads of a pull request of `repository` (its catalog ID), read-only: at most
+/// 200, each comment's text cut to 2000 characters. Deleted threads and comments are left out.
+pub(crate) async fn threads(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    repository: &str,
+    pull_request: u64,
+) -> Result<Vec<Thread>> {
+    ensure!(
+        uuid::Uuid::parse_str(repository).is_ok() && repository.len() == 36,
+        "invalid repository ID"
+    );
+    let source = source(catalog, organization)?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &[
+            "_apis",
+            "git",
+            "repositories",
+            repository,
+            "pullRequests",
+            &pull_request.to_string(),
+            "threads",
+        ],
+    )?;
+    let value = request(client, key, Method::GET, url, None).await?;
+    let mut found = Vec::new();
+    for thread in value["value"]
+        .as_array()
+        .context("invalid Azure DevOps threads")?
+        .iter()
+        .take(200)
+    {
+        let Some(id) = thread["id"].as_u64() else {
+            continue;
+        };
+        if thread["isDeleted"] == true {
+            continue;
+        }
+        let comments: Vec<&serde_json::Value> = thread["comments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["isDeleted"] != true)
+            .collect();
+        let Some(first) = comments.first() else {
+            continue;
+        };
+        let line = thread["threadContext"]["rightFileStart"]["line"]
+            .as_u64()
+            .or_else(|| thread["threadContext"]["leftFileStart"]["line"].as_u64());
+        found.push(Thread {
+            id,
+            status: text(&thread["status"], 20),
+            file: thread["threadContext"]["filePath"]
+                .is_string()
+                .then(|| text(&thread["threadContext"]["filePath"], 400)),
+            line,
+            author_id: text(&first["author"]["id"], 64),
+            author: text(&first["author"]["displayName"], 200),
+            text: first["content"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .filter(|c| !c.is_control() || *c == '\n')
+                .take(2000)
+                .collect(),
+            published_at: text(&first["publishedDate"], 40),
+            replies: comments
+                .iter()
+                .skip(1)
+                .map(|c| Reply {
+                    author_id: text(&c["author"]["id"], 64),
+                    at: text(&c["publishedDate"], 40),
+                    text: text(&c["content"], 80),
+                })
+                .collect(),
+            system: first["commentType"] == "system"
+                || thread["properties"]["CodeReviewThreadType"]["$value"].is_string(),
+        });
+    }
     Ok(found)
 }
 

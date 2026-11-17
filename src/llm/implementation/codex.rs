@@ -202,17 +202,26 @@ impl Client {
         mut self,
         choice: (&str, &str),
         directories: &[PathBuf],
-        prompt: &str,
+        (prompt, resume): (&str, Option<&str>),
         schema: Option<Value>,
         name: &SessionName,
         observer: SessionObserver<'_>,
         remote: mobile::Observer,
     ) -> Result<Outcome> {
         let (model, effort) = choice;
-        let params = self
+        let mut params = self
             .parameters(choice, directories, schema.is_some())
             .await?;
-        let started = self.rpc("thread/start", params).await?;
+        // One more turn of an existing thread (a review round), or a new thread.
+        let started = match resume {
+            Some(thread) => {
+                uuid::Uuid::parse_str(thread)?;
+                params["threadId"] = json!(thread);
+                params["excludeTurns"] = json!(true);
+                self.rpc("thread/resume", params).await?
+            }
+            None => self.rpc("thread/start", params).await?,
+        };
         let thread = started["thread"]["id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Codex did not report a thread ID."))?
@@ -536,7 +545,7 @@ mod tests {
                 .execute(
                     ("synthetic", "low"),
                     &[directory],
-                    "Synthetic task",
+                    ("Synthetic task", None),
                     None,
                     &SessionName::default(),
                     &|_| Ok(()),
@@ -640,7 +649,7 @@ mod tests {
             .execute(
                 ("synthetic", "low"),
                 &[root.path().into()],
-                "Synthetic request",
+                ("Synthetic request", None),
                 Some(json!({"type":"object"})),
                 &SessionName::request("hu"),
                 &|id| {
@@ -726,7 +735,7 @@ mod tests {
             .execute(
                 ("synthetic", "low"),
                 &[root.path().into()],
-                "Synthetic task",
+                ("Synthetic task", None),
                 None,
                 &SessionName::item(4211, "Fix rounding"),
                 &|_| Ok(()),

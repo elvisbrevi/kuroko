@@ -170,6 +170,16 @@ pub(in crate::app) fn open_pulls(runs: &[Run], workflow: &str, repository: &str)
         .iter()
         .filter(|r| !r.state.finished() && r.workflow.as_deref() == Some(workflow))
     {
+        // Its next child passed the limit for this repository and is about to be coded there.
+        let reserved = run.coding_into.as_deref() == Some(repository)
+            && run
+                .children
+                .iter()
+                .find(|c| c.outcome.is_none())
+                .is_some_and(|c| c.coding.as_ref().is_none_or(|i| !i.started));
+        if reserved {
+            open.push(run.item.url.clone());
+        }
         for child in &run.children {
             let pulls: Vec<&PullRequest> = child
                 .pull_requests
