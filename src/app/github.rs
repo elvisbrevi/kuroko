@@ -7,21 +7,26 @@ pub(super) async fn create_child(
     parent: &crate::tools::todo::Detail,
     child: &serde_json::Value,
 ) -> Result<serde_json::Value> {
-    use serde_json::json;
     crate::tools::todo::validate_repository(&parent.item.project)?;
     ensure!(
         parent.item.kind.eq_ignore_ascii_case("Epic"),
         "Only an Epic can create child issues in this flow."
     );
     let token = access_token().await?;
-    let client = client()?;
-    let base = format!(
-        "https://api.github.com/repos/{}/issues",
-        parent.item.project
-    );
+    create_child_at(&client()?, &token, "https://api.github.com/", parent, child).await
+}
+async fn create_child_at(
+    client: &reqwest::Client,
+    token: &str,
+    api: &str,
+    parent: &crate::tools::todo::Detail,
+    child: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let base = format!("{api}repos/{}/issues", parent.item.project);
     let response = client
         .post(&base)
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .json(&json!({"title":child["title"],"body":child["description"]}))
         .send()
         .await?;
@@ -40,13 +45,29 @@ pub(super) async fn create_child(
     // The issue exists even if linking fails: retain its link and never create it again.
     let linked = client
         .post(format!("{base}/{}/sub_issues", parent.item.id))
-        .bearer_auth(&token)
+        .bearer_auth(token)
         .json(&json!({"sub_issue_id":id}))
         .send()
         .await
         .is_ok_and(|r| r.status().is_success());
+    // Its predecessors among the children already created: «blocked by» each, as the plan the
+    // person confirmed declares them (GitHub's issue dependencies).
+    let mut blocked = true;
+    for predecessor in child["predecessors"].as_array().into_iter().flatten() {
+        let Some(issue) = predecessor["issue_id"].as_u64() else {
+            blocked = false;
+            continue;
+        };
+        blocked &= client
+            .post(format!("{base}/{number}/dependencies/blocked_by"))
+            .bearer_auth(token)
+            .json(&json!({"issue_id":issue}))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success());
+    }
     Ok(
-        json!({"id":number,"title":child["title"],"url":url.as_str(),"state":if linked { "created" } else { "created_unlinked" }}),
+        json!({"id":number,"issue_id":id,"title":child["title"],"url":url.as_str(),"state":if linked && blocked { "created" } else { "created_unlinked" }}),
     )
 }
 /// The caller verifies the repository against the GitHub CLI catalog before sending.
@@ -737,6 +758,50 @@ mod todo_tests {
         matchers::{method, path},
     };
 
+    #[tokio::test]
+    async fn a_child_is_blocked_by_its_predecessors_and_a_failed_link_is_never_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/repos/example/work/issues")).respond_with(ResponseTemplate::new(201)
+            .set_body_json(json!({"number":12,"id":9012,"html_url":"https://github.com/example/work/issues/12"}))).expect(2).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/repos/example/work/issues/5/sub_issues"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/repos/example/work/issues/12/dependencies/blocked_by",
+            ))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let parent: crate::tools::todo::Detail = serde_json::from_value(json!({"item":{"id":5,"title":"Receipts","url":"https://github.com/example/work/issues/5","project":"example/work","state":"open","kind":"Epic","created_at":null,"dates":[]},"fields":[],"comments":[],"relations":[],"history":[],"partial":false,"warnings":[]})).unwrap();
+        let api = format!("{}/", server.uri());
+        let child = json!({"title":"Totals","description":"Show totals.","key":"c2","depends_on":["c1"],"predecessors":[{"id":11,"issue_id":9011}]});
+        let created = create_child_at(&Client::new(), "synthetic-token", &api, &parent, &child)
+            .await
+            .unwrap();
+        assert_eq!(
+            (created["id"].as_u64(), created["issue_id"].as_u64()),
+            (Some(12), Some(9012))
+        );
+        assert_eq!(created["state"], "created");
+        let requests = server.received_requests().await.unwrap();
+        let blocked = requests
+            .iter()
+            .find(|r| r.url.path().ends_with("/blocked_by"))
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&blocked.body).unwrap();
+        assert_eq!(body["issue_id"], 9011);
+        // A predecessor without its issue ID cannot be linked: the issue is kept, unlinked.
+        let child =
+            json!({"title":"Totals","description":"Show totals.","predecessors":[{"id":11}]});
+        let created = create_child_at(&Client::new(), "synthetic-token", &api, &parent, &child)
+            .await
+            .unwrap();
+        assert_eq!(created["state"], "created_unlinked");
+    }
     #[tokio::test]
     async fn requests_send_epic_type_once_and_keep_links_when_type_is_dropped() {
         use wiremock::{

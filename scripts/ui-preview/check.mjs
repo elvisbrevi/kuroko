@@ -2843,8 +2843,16 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   check(`runs ${label}: Home's row opens the waiting run with Review plan`, await page.isVisible('#workflow-run-detail') && /Plan por revisar/.test(await detailText()));
   await page.click('#run-review-plan');
   await page.waitForSelector('#run-plan-review fieldset');
-  check(`runs ${label}: Review plan shows the planning run's children`, await page.locator('#run-plan-review fieldset').count() === 2);
-  await page.locator('#run-plan-review fieldset').nth(1).locator('input[type=checkbox]').uncheck();
+  check(`runs ${label}: Review plan shows the planning run's children`, await page.locator('#run-plan-review .plan-review > fieldset').count() === 2);
+  // The second child depends on the first, as the plan proposed; leaving out the first is refused, naming both.
+  check(`runs ${label}: the plan review shows what each child depends on`, await page.locator('#run-plan-review .plan-depends[data-key="c2"] input[type=checkbox]').isChecked());
+  await page.locator('#run-plan-review .plan-review > fieldset').nth(0).locator('legend input[type=checkbox]').uncheck();
+  await page.locator('#run-plan-review .plan-review > button').click();
+  await page.locator('#run-plan-review .plan-review > button').click();
+  await page.waitForFunction(() => /c2 depende de c1/.test(document.body.innerText));
+  check(`runs ${label}: a child cannot be created without the one it depends on`, !(await page.evaluate(() => window.__ptaLastChildCreation)));
+  await page.locator('#run-plan-review .plan-review > fieldset').nth(0).locator('legend input[type=checkbox]').check();
+  await page.locator('#run-plan-review .plan-review > fieldset').nth(1).locator('legend input[type=checkbox]').uncheck();
   const gateScan = await scan(page);
   check(`runs ${label}: the plan review passes WCAG 2.2 AA`, gateScan.length === 0, JSON.stringify(gateScan));
   await page.screenshot({ path: `${out}/${label}-workflow-run-gate.png`, fullPage: true });
@@ -2855,6 +2863,7 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForFunction(() => ['Creando los hijos', 'Programando'].includes(document.querySelector('#run-detail-content .run-head .badge')?.textContent));
   const creation = await page.evaluate(() => window.__ptaLastChildCreation);
   check(`runs ${label}: confirming creates the selected children through implementation_create and the run goes on`, creation?.confirmed && creation.id === 'a7d0c2f4-5e6b-4c8d-9f01-2a3b4c5d6e7f' && creation.children.length === 1
+    && creation.children[0].key === 'c1' && creation.children[0].depends_on.length === 0
     && creation.item.id === 5003 && creation.item.provider === 'azure' && creation.item.task === false, JSON.stringify(creation));
   // The To-Do card of an item with an active run links to it.
   await page.evaluate(() => showTab('todo'));

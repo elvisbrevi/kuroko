@@ -1069,6 +1069,10 @@ fn coding_context(
     blocks: &[crate::workflows::Block],
 ) -> String {
     let mut context = opening(subject, given);
+    // A run that may create work items declares their dependencies the way the engine reads them.
+    if workflow.allow.contains(&crate::workflows::Allow::WorkItems) {
+        context.push_str(DEPENDENCY_LINKS);
+    }
     match note {
         Some(Note::Person(text)) => context.push_str(&handover(text)),
         Some(Note::Drafted(text)) => context.push_str(&drafted_handover(text)),
@@ -1078,6 +1082,9 @@ fn coding_context(
     context.push_str(&instructions(workflow, blocks));
     context
 }
+
+/// How a coding run that may create work items declares that one needs another's code first.
+pub(in crate::app) const DEPENDENCY_LINKS: &str = "\nWhen a work item you create needs the code of another one first (one you created, or this run's work item), add a Predecessor link from it to that one in Azure DevOps (for example az boards work-item relation add --relation-type Predecessor), and only between work items of this project: workflow runs wait for those links before coding a work item.\n";
 
 /// The longest item text a context is measured with: an item's kind, ID, title (a run keeps at
 /// most 500 characters of it) and links.
@@ -1291,7 +1298,10 @@ async fn judge_dependencies(
     if graph.direct.is_empty() && graph.foreign.is_empty() {
         return Ok((super::dependencies::Verdict::Met, Vec::new()));
     }
-    let runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
+    let mut runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
+    // This run as it is now: its children's pull requests may have just been read again.
+    runs.retain(|r| r.id != run.id);
+    runs.push(run.clone());
     let known = super::dependencies::known_pulls(&runs);
     // A catalog that cannot be read does not hold the run: each completed pull request then
     // counts whatever branch it went into.
@@ -1401,6 +1411,13 @@ async fn waiting(
     }
     if now - wait.checked_at < i64::from(settings.watch_interval_minutes) * 60 {
         return Ok(false);
+    }
+    // A child may wait for a sibling coded before it: the sibling's pull requests are read
+    // again first, as the pull-request stage would (a failed read keeps the last ones).
+    for index in 0..run.children.len() {
+        if run.children[index].outcome.as_deref() == Some("done") {
+            let _ = detect(host, azure, run, index).await;
+        }
     }
     let (verdict, dependencies) = match judge_dependencies(host, azure, run, wait.subject).await {
         Ok(judged) => judged,

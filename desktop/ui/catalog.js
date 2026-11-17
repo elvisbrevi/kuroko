@@ -2833,6 +2833,8 @@ const UI_CATALOG = { es: {
   "Child #{id}": "Hijo #{id}",
   "Waiting since {time}; judged again every watch interval, and the run goes on by itself once they are met.": "Esperando desde {time}; se revisan en cada intervalo de vigilancia y el run sigue solo cuando se cumplen.",
   "Skip the wait": "Saltar la espera",
+  "Depends on (its code is needed first)": "Depende de (necesita antes su código)",
+  "{child} depends on {other}, which is not selected: select it too, or remove the dependency.": "{child} depende de {other}, que no está seleccionado: selecciónalo también o quita la dependencia.",
   "Confirm: go on without the dependencies": "Confirmar: seguir sin las dependencias",
   "The run goes on without waiting for its dependencies.": "El run sigue sin esperar sus dependencias.",
   "Updated {time}": "Actualizada {time}",

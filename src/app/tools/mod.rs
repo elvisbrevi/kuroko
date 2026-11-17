@@ -1085,11 +1085,11 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "implementation_create",
         title: "Create reviewed child work items",
-        description: "Create the explicitly selected and reviewed children of this new implementation plan. Azure requires its authenticated Azure CLI session; GitHub requires Issues write access. Never replays a submitted or uncertain plan.",
+        description: "Create the explicitly selected and reviewed children of this new implementation plan, in their order, each with Predecessor links to the earlier children its depends_on names (GitHub: blocked by); a child may depend only on earlier children that are also created. Azure requires its authenticated Azure CLI session; GitHub requires Issues write access. Never replays a submitted or uncertain plan.",
         effect: Effect::External,
         schema: || {
             object(
-                json!({"machine":string("Plan machine ID."),"id":string("Plan run ID."),"item":implementation_item(),"children":{"type":"array","items":object(json!({"title":string("Reviewed title."),"description":string("Reviewed description.")}), &["title","description"])},"confirmed":confirmed()}),
+                json!({"machine":string("Plan machine ID."),"id":string("Plan run ID."),"item":implementation_item(),"children":{"type":"array","items":object(json!({"title":string("Reviewed title."),"description":string("Reviewed description."),"type":string("Azure: a task type of the project; empty uses the default."),"fields":{"type":"array","items":object(json!({"reference":string("Field reference name."),"value":string("Its value.")}), &["reference","value"])},"key":string("The child's plan key (c1, c2…), in the order the children are created."),"depends_on":strings("Keys of earlier children whose code this one needs first: created as Predecessor links (GitHub: blocked by).")}), &["title","description"])},"confirmed":confirmed()}),
                 &["machine", "id", "item", "children"],
             )
         },
