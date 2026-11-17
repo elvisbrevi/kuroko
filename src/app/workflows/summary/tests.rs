@@ -529,7 +529,9 @@ fn what_the_model_wrote_is_cleaned_bounded_and_linked_by_code() {
         &run,
         Language::En,
     );
-    let links: Vec<&str> = names.lines().filter(|l| l.starts_with("- [")).collect();
+    // The links are a buttons block.
+    assert!(names.contains("```buttons\n["), "{names}");
+    let links: Vec<&str> = names.lines().filter(|l| l.starts_with('[')).collect();
     assert_eq!(links.len(), 4, "{names}");
     assert!(links[0].contains(ITEM_URL) && links[3].contains(PULL_URL));
     // Naming nothing links the item alone; a number inside another is not a mention.
@@ -553,7 +555,7 @@ fn what_the_model_wrote_is_cleaned_bounded_and_linked_by_code() {
     let bounded = compose(&format!("{everything} Resumen."), &many, Language::En);
     assert!(bounded.chars().count() <= MAX_CHARS);
     assert!(bounded.contains(&format!("]({ITEM_URL})")));
-    assert!(bounded.lines().filter(|l| l.starts_with("- [")).count() < 40);
+    assert!(bounded.lines().filter(|l| l.starts_with('[')).count() < 40);
 }
 
 // --- Sending -------------------------------------------------------------------------------

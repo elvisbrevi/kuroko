@@ -11,9 +11,10 @@
 //! prompt, through the same `workflow_direct` machine call when remote, within the same time
 //! budget) and returns `{"summary": markdown}`. Code makes what it returns safe to store and
 //! send (`compose`): every URL, link and `@[...]` mention marker the model wrote is dropped,
-//! the text is bounded and a `Links` list built from the run record (the item always, the
-//! children and pull requests the summary names) is appended, so the only links in a stored
-//! summary are the verified ones. A malformed or empty answer is an error and stores nothing.
+//! the text is bounded and a `Links` block of buttons built from the run record (the item
+//! always, the children and pull requests the summary names) is appended, so the only links in
+//! a stored summary are the verified ones. The director may shape its text with the card blocks
+//! that need no link (facts, progress, badges, details, callouts). A malformed or empty answer is an error and stores nothing.
 //!
 //! A summary is stored on the run (`Run::summaries`: `id` (the generation's ID in Agent
 //! history), `text`, `created_at`, `provider`, `model`, `session_id`; at most `MAX_SUMMARIES`,
@@ -304,9 +305,14 @@ pub(super) fn compose(summary: &str, run: &Run, language: crate::config::Languag
             .filter(|(n, l)| *n == 0 || mentioned(text, l))
             .map(|(_, l)| l)
         {
-            let entry = format!("- [{}]({})\n", label(&link.label), link.url);
-            // The header and its separator are counted once, with the first entry.
-            let used = if list.is_empty() { header.len() + 4 } else { 0 };
+            let entry = format!("[{}]({})\n", label(&link.label), link.url);
+            // The header, its separator and the block's fences are counted once, with the
+            // first entry.
+            let used = if list.is_empty() {
+                header.len() + 18
+            } else {
+                0
+            };
             if list.len() + used + entry.len() > LINKS_CHARS {
                 break;
             }
@@ -315,7 +321,8 @@ pub(super) fn compose(summary: &str, run: &Run, language: crate::config::Languag
         if list.is_empty() {
             String::new()
         } else {
-            format!("**{header}**\n{}", list.trim_end())
+            // A card block: Teams shows the links as buttons.
+            format!("**{header}**\n```buttons\n{list}```")
         }
     };
     let join = |body: &str, section: &str| match (body.is_empty(), section.is_empty()) {

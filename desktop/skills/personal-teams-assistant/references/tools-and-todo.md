@@ -646,7 +646,10 @@ run (any state but `done` and `cancelled`).
   in the workflow's order and at most once per occurrence of the stage. A notification posts once
   to the chat the user confirmed when saving the block, as the user, through the same path as
   `teams_post`: the placeholders are filled by code (`{summary}` is the run's latest stored
-  summary, empty when there is none), `@[Name]` mentions are matched to that chat's members only,
+  summary, empty when there is none; a template may use the card blocks of `message_style`'s
+  `card_blocks`, such as ```` ```facts ```` with `Item: {item}` and `State: {state}`, ```` ```buttons ````
+  with `[{id} - {title}]({link})` and `{pull_requests}`, or ```` ```details Summary ```` around `{summary}`;
+  the editor in the GUI inserts them), `@[Name]` mentions are matched to that chat's members only,
   and an unknown or ambiguous mention (a mention is a member's display name of at most 100 characters without `]`), a chat the user left, a missing Microsoft session or a
   refusal from Teams records `refused` with the reason and the run goes on; a failure after the
   request left is `uncertain` and nothing is ever retried. A launcher block runs the approved
