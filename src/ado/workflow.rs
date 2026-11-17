@@ -33,6 +33,13 @@ pub struct PullRequest {
     /// The branch it merges into (`refs/heads/NAME`), when it was read (0.14.0 and later).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Whether it merges into its target as it is (`succeeded`, `conflicts`, `queued`, ...), as
+    /// Azure DevOps last computed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_status: Option<String>,
+    /// The commit of the target branch that merge status was computed against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_commit: Option<String>,
     /// The person resumed the run with this pull request abandoned: it no longer stops it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
@@ -148,11 +155,63 @@ pub(crate) async fn pull_requests(
             target: pull["targetRefName"]
                 .is_string()
                 .then(|| text(&pull["targetRefName"], 300)),
+            merge_status: pull["mergeStatus"]
+                .is_string()
+                .then(|| text(&pull["mergeStatus"], 40)),
+            target_commit: pull["lastMergeTargetCommit"]["commitId"]
+                .is_string()
+                .then(|| text(&pull["lastMergeTargetCommit"]["commitId"], 64)),
             accepted: false,
         });
     }
     found.sort_by_key(|a| std::cmp::Reverse(a.id));
     Ok(found)
+}
+
+/// The files a pull request of `repository` (its catalog ID) conflicts on with its target
+/// branch, as Azure DevOps lists its merge conflicts (at most 100 paths).
+pub(crate) async fn conflicts(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    repository: &str,
+    pull_request: u64,
+) -> Result<Vec<String>> {
+    ensure!(
+        uuid::Uuid::parse_str(repository).is_ok() && repository.len() == 36,
+        "invalid repository ID"
+    );
+    let source = source(catalog, organization)?;
+    let mut url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &[
+            "_apis",
+            "git",
+            "repositories",
+            repository,
+            "pullRequests",
+            &pull_request.to_string(),
+            "conflicts",
+        ],
+    )?;
+    url.query_pairs_mut().append_pair("$top", "100");
+    let value = request(client, key, Method::GET, url, None).await?;
+    let mut files: Vec<String> = value["value"]
+        .as_array()
+        .context("invalid Azure DevOps conflicts")?
+        .iter()
+        .filter_map(|c| c["conflictPath"].as_str())
+        .map(|p| text(&serde_json::json!(p.trim_start_matches('/')), 400))
+        .filter(|p| !p.is_empty())
+        .collect();
+    files.sort();
+    files.dedup();
+    files.truncate(100);
+    Ok(files)
 }
 
 /// Whether `branch` exists in `repository` (its catalog ID) now: a ref named exactly

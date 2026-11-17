@@ -489,7 +489,13 @@ How a workflow takes an item from its ready state to its release, and where the 
    `Completed` category; the pull requests decide when the two disagree. A predecessor that cannot
    be read, of another project or organization, removed, a cycle, or a wait past
    `dependency_wait_days` (default 14) stops the run in `needs_attention`. The person may skip the
-   wait with `pta workflows skip-wait RUN [--dependency ID] --confirmed`.
+   wait with `pta workflows skip-wait RUN [--dependency ID] --confirmed`. A workflow's optional
+   `delivery` changes this: `target_branch` (where its pull requests go, when not each
+   repository's default branch), `dependency_policy: stack` (a child whose predecessor has one
+   open pull request starts from its branch and opens a pull request stacked on it; once that one
+   completes, the run asks to retarget the stacked one) and `max_open_pull_requests` N (a run
+   whose next child would open more than N pull requests of the workflow in that repository waits
+   its turn in `waiting_dependency`, in creation order, though it declares no dependency).
 4. **The run plans** with the workflow's machine, checkouts, agent, instructions and instruction
    blocks, and stops at `plan_review`. A `plan_ready` block may tell the person.
 5. **The gate.** The person reviews the proposed children (GUI Runs › Review plan, or Implement) and
@@ -506,6 +512,10 @@ How a workflow takes an item from its ready state to its release, and where the 
    line each after its `Branch: NAME`.
 7. **Pull requests are read** (never merged) until all are completed, one for each reported branch;
    an abandoned one, a missing branch or the wait (`pull_request_wait_days`) stops the run in `needs_attention`.
+   So does a pull request that conflicts with its target branch (Azure DevOps' merge status), naming
+   the files and the other run's pull request completed into that branch (`conflict`): nothing is
+   resolved by PTA; once its branch is updated, resume (the same conflict against the same target
+   commit does not stop it again).
 8. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
    when the pull requests are completed, notifications with mentions when the run is done or fails.
 9. **Report on request**: `workflow_summary` asks the director for a summary of the record, and

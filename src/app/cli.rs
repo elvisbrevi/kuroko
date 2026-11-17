@@ -446,7 +446,9 @@ Knowledge
                            checkouts {REPOSITORY_ID: DIRECTORY}, agent {provider, model, effort},
                            instructions (at most 20000 characters), blocks (IDs, at most 20) and allow:
                            what its coding runs may do that the fixed rules forbid (work_items, teams,
-                           merge, deploy; empty by default; any of them needs --confirmed). A run gets
+                           merge, deploy; empty by default; any of them needs --confirmed), and
+                           delivery (optional): {dependency_policy wait_for_pull_request|stack,
+                           max_open_pull_requests 0-10, target_branch}. A run gets
                            its instructions and instruction blocks whole: a workflow whose largest run
                            context would exceed 100000 characters is refused with the numbers. Checked
                            against the project's catalog, the machine's roots and checkouts and its

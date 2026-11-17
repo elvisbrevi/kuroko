@@ -14,6 +14,7 @@ import { fillAgentChoices } from './settings-models.js';
 import { blockSummary, KIND_NAMES, loadLaunchers, renderBlocks, STAGE_NAMES } from './workflow-blocks.js';
 import { ALLOWS, allowNames } from './run-states.js';
 import { preapproveField, preapproveLines, preapproveSent } from './workflow-supervisor.js';
+import { deliveryField, deliverySent } from './workflow-delivery.js';
 
 /**
  * The host's limits (src/workflows.rs), checked here before anything is sent. `context` is the
@@ -461,6 +462,8 @@ function workflowEditor(draft, saved, renderFacts) {
       agent: { ...draft.agent }, instructions: draft.instructions, blocks: [...draft.blocks], allow: [...draft.allow],
       preapprove: preapproveSent(draft.preapprove), updated_at: saved?.updated_at ?? 0,
     };
+    const delivery = deliverySent(draft.delivery);
+    if (Object.keys(delivery).length) workflow.delivery = delivery;
     if (workflow.preapprove.some(p => p.action === 'post_summary' && !p.chat)) { report({ error: t('Choose the chat the supervisor posts to.') }); return; }
     // Lifting a fixed rule, or pre-approving the supervisor, is confirmed with what it lets them do, before it is sent.
     const lifting = workflow.allow.length > 0 || workflow.preapprove.length > 0;
@@ -546,6 +549,7 @@ function workflowEditor(draft, saved, renderFacts) {
     contextUse,
     allowField,
     preapproveField(draft, () => { unreview(); touched(); }),
+    deliveryField(draft, touched),
     el('label', { class: 'check' }, autoStart, el('span', {}, t('Start by itself when an assigned item reaches a ready state'),
       el('small', { textContent: t('The ready states are chosen per project in Settings. Children are still created only after you confirm their plan.') }))),
     el('div', { class: 'actions' }, readyStates),

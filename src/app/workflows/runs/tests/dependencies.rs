@@ -226,7 +226,12 @@ async fn a_wait_survives_a_restart_of_the_host_and_a_long_one_needs_a_person() {
     // Past dependency_wait_days a person must look.
     bench.offset.fetch_add(14 * 86_400, Ordering::SeqCst);
     let run = bench.state(&id, Phase::NeedsAttention).await;
-    assert!(run.attention.as_deref().unwrap().contains("within 14 days"));
+    assert!(
+        run.attention
+            .as_deref()
+            .unwrap()
+            .contains("more than 14 days")
+    );
     assert_eq!(run.stopped_in, Some(Phase::WaitingDependency));
     // Resumed, it waits again from now (the operation's clock); met, it goes on.
     bench.offset.store(0, Ordering::SeqCst);
@@ -306,4 +311,183 @@ async fn a_planned_child_that_depends_on_an_earlier_one_waits_for_its_pull_reque
         stages.ends_with(&["coding", "waiting_dependency", "coding", "pull_requests"]),
         "{stages:?}"
     );
+}
+
+/// The bench's workflow with these delivery settings.
+fn deliver(bench: &Bench, delivery: crate::workflows::Delivery) {
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflows[0].delivery = delivery;
+    map.workflow_settings.watch_interval_minutes = 1;
+    bench.host.state.settings.save_map(&map).unwrap();
+}
+/// One pull request of a branch, as the next read returns it.
+fn pull(bench: &Bench, branch: &str, id: u64, status: &str, set: impl FnOnce(&mut PullRequest)) {
+    let mut pull = PullRequest {
+        id,
+        repository: WEB.into(),
+        title: format!("PR {id}"),
+        status: status.into(),
+        url: format!("https://dev.azure.com/example/Payments/_git/payments-web/pullrequest/{id}"),
+        target: Some("refs/heads/main".into()),
+        merge_status: Some("succeeded".into()),
+        target_commit: Some("c0".into()),
+        ..Default::default()
+    };
+    set(&mut pull);
+    bench.catalog.set_pulls(WEB, branch, vec![pull]);
+}
+
+#[tokio::test]
+async fn a_pull_request_left_in_conflict_by_another_runs_needs_attention_naming_the_files() {
+    let bench = Bench::new().await;
+    bench.catalog.add(
+        synthetic::detail(SECOND, "Task", "task", "Second task", "In payments-web."),
+        true,
+    );
+    let first = bench.start(TASK).await;
+    let second = bench.start(SECOND).await;
+    pull(&bench, "feature/child-1", 41, "active", |_| {});
+    pull(&bench, "feature/child-2", 42, "active", |_| {});
+    bench.state(&first, Phase::PullRequests).await;
+    bench.state(&second, Phase::PullRequests).await;
+    // The first is completed; the second now conflicts with main on two files.
+    pull(&bench, "feature/child-1", 41, "completed", |p| {
+        p.closed_at = Some("2026-11-16T12:00:00Z".into())
+    });
+    pull(&bench, "feature/child-2", 42, "active", |p| {
+        p.merge_status = Some("conflicts".into());
+        p.target_commit = Some("c1".into());
+    });
+    bench
+        .catalog
+        .set_conflicts(42, &["CHANGELOG.md", "package.json"]);
+    let run = bench.state(&second, Phase::NeedsAttention).await;
+    let attention = run.attention.clone().unwrap();
+    assert!(
+        attention.contains("pullrequest/42 conflicts with main in CHANGELOG.md, package.json"),
+        "{attention}"
+    );
+    assert!(
+        attention.contains(
+            "pullrequest/41 of https://dev.azure.com/example/Payments/_workitems/edit/200"
+        ),
+        "{attention}"
+    );
+    assert_eq!(run.cause.as_deref(), Some("conflict"));
+    assert_eq!(run.conflict.as_ref().unwrap().files.len(), 2);
+    // Nothing was resolved and nothing written: only reads.
+    assert_eq!(bench.state(&first, Phase::Done).await.state, Phase::Done);
+    // Resumed, it waits on; the same conflict against the same commit does not stop it again.
+    bench
+        .op(
+            "workflow_run_resume",
+            json!({"run": second, "confirmed": true}),
+        )
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        bench.tick().await;
+    }
+    assert_eq!(bench.run(&second).state, Phase::PullRequests);
+    // The target branch moves and it still conflicts: it stops again.
+    pull(&bench, "feature/child-2", 42, "active", |p| {
+        p.merge_status = Some("conflicts".into());
+        p.target_commit = Some("c2".into());
+    });
+    bench.state(&second, Phase::NeedsAttention).await;
+}
+
+#[tokio::test]
+async fn a_workflow_limited_to_one_open_pull_request_codes_the_next_run_once_it_is_completed() {
+    let bench = Bench::new().await;
+    deliver(
+        &bench,
+        crate::workflows::Delivery {
+            max_open_pull_requests: 1,
+            ..Default::default()
+        },
+    );
+    for id in [SECOND, 202] {
+        bench.catalog.add(
+            synthetic::detail(
+                id,
+                "Task",
+                "task",
+                &format!("Task {id}"),
+                "In payments-web.",
+            ),
+            true,
+        );
+    }
+    let first = bench.start(TASK).await;
+    pull(&bench, "feature/child-1", 41, "active", |_| {});
+    bench.state(&first, Phase::PullRequests).await;
+    let second = bench.start(SECOND).await;
+    let third = bench.start(202).await;
+    // Without any declared dependency, the second waits for room; the third waits behind it.
+    let waiting = bench.state(&second, Phase::WaitingDependency).await;
+    let wait = waiting.wait.unwrap();
+    assert_eq!(wait.reason, "open_pull_requests");
+    assert!(wait.text.contains("pullrequest/41"), "{}", wait.text);
+    assert!(!waiting.admitted && waiting.children[0].coding.is_none());
+    let behind = bench.state(&third, Phase::WaitingDependency).await;
+    assert_eq!(behind.wait.unwrap().reason, "open_pull_requests");
+    assert_eq!(bench.count("starts"), 1);
+    // The first pull request is completed: the second is coded, the third still waits for room.
+    pull(&bench, "feature/child-1", 41, "completed", |_| {});
+    bench.state(&first, Phase::Done).await;
+    later(&bench);
+    bench.state(&second, Phase::PullRequests).await;
+    later(&bench);
+    bench.tick().await;
+    assert_eq!(bench.run(&third).state, Phase::WaitingDependency);
+    assert_eq!(bench.count("starts"), 2);
+}
+
+#[tokio::test]
+async fn a_stacked_child_starts_from_its_predecessors_branch_and_asks_to_be_retargeted() {
+    let bench = bench_with_dependency().await;
+    deliver(
+        &bench,
+        crate::workflows::Delivery {
+            dependency_policy: crate::workflows::DependencyPolicy::Stack,
+            ..Default::default()
+        },
+    );
+    let first = bench.start(TASK).await;
+    pull(&bench, "feature/child-1", 41, "active", |_| {});
+    bench.state(&first, Phase::PullRequests).await;
+    // The second needs the first, whose one pull request is open: it is stacked on its branch.
+    let second = bench.start(SECOND).await;
+    pull(&bench, "feature/child-2", 42, "active", |p| {
+        p.target = Some("refs/heads/feature/child-1".into())
+    });
+    let run = bench.state(&second, Phase::PullRequests).await;
+    let base = run.children[0].base.clone().unwrap();
+    assert_eq!(
+        (base.branch.as_str(), base.pull_request),
+        ("feature/child-1", 41)
+    );
+    assert_eq!(run.children[0].dependencies[0].rule, "stacked");
+    let prompt = fs::read_to_string(bench.log.join("coding.2")).unwrap();
+    assert!(
+        prompt.contains("Start your branch from feature/child-1"),
+        "{prompt}"
+    );
+    // The first is completed: the stacked pull request still goes into its branch.
+    pull(&bench, "feature/child-1", 41, "completed", |_| {});
+    bench.state(&first, Phase::Done).await;
+    let run = bench.state(&second, Phase::NeedsAttention).await;
+    assert_eq!(run.cause.as_deref(), Some("retarget"));
+    assert!(run.attention.unwrap().contains("retarget it"));
+    // Retargeted by the person and resumed: it waits for its pull request again.
+    bench
+        .op(
+            "workflow_run_resume",
+            json!({"run": second, "confirmed": true}),
+        )
+        .await
+        .unwrap();
+    pull(&bench, "feature/child-2", 42, "completed", |_| {});
+    bench.state(&second, Phase::Done).await;
 }

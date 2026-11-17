@@ -255,6 +255,30 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.default_branches()),
         }
     }
+    /// The files a run's pull request conflicts on with its target branch, read now.
+    pub(in crate::app) async fn conflicts(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        repository: &str,
+        pull_request: u64,
+    ) -> Result<Vec<String>, String> {
+        match self {
+            Self::Live => {
+                tools::todo::conflicts(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    &run.item.project,
+                    repository,
+                    pull_request,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.conflicts(pull_request)),
+        }
+    }
     /// Whether a branch exists in a workflow repository now (the workflow supervisor).
     pub(in crate::app) async fn branch_exists(
         &self,
@@ -1083,6 +1107,16 @@ fn coding_context(
     context
 }
 
+/// What a child stacked on another's open pull request (`stack` policy) is told: where it
+/// starts from and where its pull request goes.
+pub(in crate::app) fn stacked(base: &super::dependencies::Base) -> String {
+    format!(
+        "\nStacked work: the code this work item needs is in branch {branch}, whose pull request {url} is not completed yet. Start your branch from {branch} instead of the default branch, and open your pull request into {branch}; once that pull request is completed, yours is retargeted to the branch it went into.\n",
+        branch = base.branch,
+        url = base.url
+    )
+}
+
 /// How a coding run that may create work items declares that one needs another's code first.
 pub(in crate::app) const DEPENDENCY_LINKS: &str = "\nWhen a work item you create needs the code of another one first (one you created, or this run's work item), add a Predecessor link from it to that one in Azure DevOps (for example az boards work-item relation add --relation-type Predecessor), and only between work items of this project: workflow runs wait for those links before coding a work item.\n";
 
@@ -1117,12 +1151,26 @@ pub(in crate::app) fn largest_context(
     let planning = instructions(workflow, blocks).chars().count();
     // The longest note with the longer of its two prefaces (the person's or the supervisor's).
     let note = "x".repeat(record::MAX_HANDOVER);
-    let rest = handover(&note)
+    let mut rest = handover(&note)
         .chars()
         .count()
         .max(drafted_handover(&note).chars().count())
         .max(preapproved_handover(&note).chars().count())
         + planning;
+    // The sentences a workflow's settings add to every coding context.
+    if workflow.allow.contains(&crate::workflows::Allow::WorkItems) {
+        rest += DEPENDENCY_LINKS.chars().count();
+    }
+    if workflow.delivery.dependency_policy == crate::workflows::DependencyPolicy::Stack {
+        rest += stacked(&super::dependencies::Base {
+            repository: String::new(),
+            branch: "x".repeat(250),
+            pull_request: u64::MAX,
+            url: "x".repeat(ITEM_LINK),
+        })
+        .chars()
+        .count();
+    }
     checkouts(workflow)
         .into_iter()
         .flat_map(|(repository, directory)| {
@@ -1309,12 +1357,21 @@ async fn judge_dependencies(
         .default_branches(&host.state, run)
         .await
         .unwrap_or_default();
+    let delivery = run
+        .definition
+        .as_ref()
+        .map(|d| d.delivery.clone())
+        .unwrap_or_default();
+    let target = delivery.target_branch.trim_start_matches("refs/heads/");
     Ok(super::dependencies::evaluate(
         &graph,
         &run.item.project,
         &known,
         &defaults,
-        None,
+        (
+            (!target.is_empty()).then_some(target),
+            delivery.dependency_policy == crate::workflows::DependencyPolicy::Stack,
+        ),
         &run.skipped_dependencies,
     ))
 }
@@ -1334,8 +1391,9 @@ fn record_dependencies(
 }
 
 /// Before a planning run or a child's coding run is recorded: go on (none) when the work item's
-/// dependencies are met, or wait for them in `waiting_dependency`, or stop in `needs_attention`
-/// on what waiting cannot fix; returns whether the run changed.
+/// dependencies are met and the workflow's limit of open pull requests leaves room, or wait in
+/// `waiting_dependency`, or stop in `needs_attention` on what waiting cannot fix; returns
+/// whether the run changed.
 async fn gate(
     host: &Arc<Host>,
     azure: &Azure,
@@ -1344,32 +1402,67 @@ async fn gate(
     stage: Phase,
     now: i64,
 ) -> std::result::Result<Option<bool>, String> {
-    use super::dependencies::Verdict;
     let subject = child.map_or(run.item.id, |i| run.children[i].id);
-    if run.dependencies_met == Some(subject) {
+    if run.dependencies_met != Some(subject) {
+        let judged = match judge_dependencies(host, azure, run, subject).await {
+            Ok(judged) => judged,
+            Err(error) => return wait(run, error).map(Some),
+        };
+        if let Some(changed) = settle(run, subject, stage, judged, now) {
+            return Ok(Some(changed));
+        }
+    }
+    // Planning opens no pull request: only a child's coding run counts against the limit.
+    if child.is_none() {
         return Ok(None);
     }
-    let (verdict, dependencies) = match judge_dependencies(host, azure, run, subject).await {
-        Ok(judged) => judged,
-        Err(error) => return wait(run, error).map(Some),
-    };
+    limit(host, azure, run, subject, stage, now).await
+}
+
+/// Apply a judgment of `subject`'s dependencies: none when they are met (the run goes on),
+/// otherwise the run waits or stops; the change is recorded either way.
+fn settle(
+    run: &mut Run,
+    subject: u64,
+    stage: Phase,
+    (verdict, dependencies): (
+        super::dependencies::Verdict,
+        Vec<super::dependencies::Dependency>,
+    ),
+    now: i64,
+) -> Option<bool> {
+    use super::dependencies::Verdict;
+    // The open pull request a child is stacked on, when the workflow stacks.
+    let base = dependencies.iter().find_map(|d| d.base.clone());
     record_dependencies(run, subject, dependencies);
     run.error = None;
     match verdict {
         Verdict::Met => {
             run.dependencies_met = Some(subject);
-            Ok(None)
+            if let Some(child) = run.children.iter_mut().find(|c| c.id == subject) {
+                child.base = base;
+            }
+            None
         }
         Verdict::Waiting(text) => {
+            let since = run
+                .wait
+                .as_ref()
+                .filter(|w| w.subject == subject)
+                .map_or(now, |w| w.since);
             run.wait = Some(super::dependencies::Wait {
                 continue_to: stage,
                 subject,
-                since: now,
+                since,
                 checked_at: now,
                 text,
+                reason: "dependency".into(),
+                repository: None,
             });
-            run.advance(Phase::WaitingDependency, now, "waiting for dependencies");
-            Ok(Some(true))
+            if run.state != Phase::WaitingDependency {
+                run.advance(Phase::WaitingDependency, now, "waiting for dependencies");
+            }
+            Some(true)
         }
         Verdict::Blocked(reason) => {
             run.stop(
@@ -1380,20 +1473,104 @@ async fn gate(
                 ),
             );
             run.cause = Some("dependency".into());
-            Ok(Some(true))
+            Some(true)
         }
     }
 }
 
-/// A run waiting for its dependencies: they are judged again every watch interval, and it goes
-/// on to its stage once they are met.
+/// The workflow's limit of open pull requests per repository (`delivery.max_open_pull_requests`)
+/// for the child `subject`: none when it leaves room (or there is no limit, or the person skipped
+/// it), otherwise the run waits in `waiting_dependency` behind the older runs waiting for the
+/// same repository.
+async fn limit(
+    host: &Arc<Host>,
+    azure: &Azure,
+    run: &mut Run,
+    subject: u64,
+    stage: Phase,
+    now: i64,
+) -> std::result::Result<Option<bool>, String> {
+    let workflow = run
+        .definition
+        .clone()
+        .ok_or("The run has no workflow definition.")?;
+    let max = workflow.delivery.max_open_pull_requests as usize;
+    if max == 0 || run.limit_skipped == Some(subject) {
+        return Ok(None);
+    }
+    // The repository the child will be coded in, as its coding run chooses it.
+    let detail = match azure
+        .item(
+            &host.state,
+            run.item.source.as_deref(),
+            Some(&run.item.project),
+            subject,
+        )
+        .await
+    {
+        Ok(detail) => detail,
+        Err(error) => return wait(run, error).map(Some),
+    };
+    let Some((repository, _)) =
+        named_repository(&workflow, &detail.item.title, &description(&detail))
+    else {
+        return Ok(None);
+    };
+    let id = repository.id.to_lowercase();
+    let mut runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
+    runs.retain(|r| r.id != run.id);
+    runs.push(run.clone());
+    let open = super::dependencies::open_pulls(&runs, &workflow.id, &id);
+    let ahead = super::dependencies::queued_before(&runs, run, &id).map(|r| r.id.clone());
+    if open.len() < max && ahead.is_none() {
+        return Ok(None);
+    }
+    let text = match ahead {
+        Some(ahead) if open.len() < max => format!(
+            "Waiting behind workflow run {ahead}, created before it, for room among the open pull requests of {} (at most {max}).",
+            repository.name
+        ),
+        _ => format!(
+            "Waiting: {} pull requests of workflow {} are open or being coded in {} (at most {max}): {}.",
+            open.len(),
+            workflow.id,
+            repository.name,
+            open.join(", ")
+        ),
+    };
+    let since = run
+        .wait
+        .as_ref()
+        .filter(|w| w.subject == subject)
+        .map_or(now, |w| w.since);
+    run.wait = Some(super::dependencies::Wait {
+        continue_to: stage,
+        subject,
+        since,
+        checked_at: now,
+        text,
+        reason: "open_pull_requests".into(),
+        repository: Some(id),
+    });
+    run.error = None;
+    if run.state != Phase::WaitingDependency {
+        run.advance(
+            Phase::WaitingDependency,
+            now,
+            "waiting for open pull requests",
+        );
+    }
+    Ok(Some(true))
+}
+
+/// A run waiting for its dependencies or for room among the open pull requests: judged again
+/// every watch interval, it goes on to its stage once both allow it.
 async fn waiting(
     host: &Arc<Host>,
     azure: &Azure,
     run: &mut Run,
     now: i64,
 ) -> std::result::Result<bool, String> {
-    use super::dependencies::Verdict;
     let wait = run.wait.clone().ok_or("The run has no dependency wait.")?;
     let settings = host.state.settings.map().map_err(fail)?.workflow_settings;
     let days = i64::from(settings.dependency_wait_days);
@@ -1402,7 +1579,7 @@ async fn waiting(
             Phase::NeedsAttention,
             now,
             format!(
-                "The dependencies of #{} were not met within {days} days ({}) Resume to wait again, or skip the dependency (workflow_run_skip_dependency).",
+                "#{} waited more than {days} days ({}) Resume to wait again, or skip the wait (workflow_run_skip_dependency).",
                 wait.subject, wait.text
             ),
         );
@@ -1419,43 +1596,156 @@ async fn waiting(
             let _ = detect(host, azure, run, index).await;
         }
     }
-    let (verdict, dependencies) = match judge_dependencies(host, azure, run, wait.subject).await {
-        Ok(judged) => judged,
-        Err(error) => {
-            // Read again at the next interval.
-            if let Some(w) = run.wait.as_mut() {
-                w.checked_at = now;
+    if let Some(changed) = conflicted(host, azure, run, now).await {
+        return Ok(changed);
+    }
+    if run.dependencies_met != Some(wait.subject) {
+        let judged = match judge_dependencies(host, azure, run, wait.subject).await {
+            Ok(judged) => judged,
+            Err(error) => {
+                // Read again at the next interval.
+                if let Some(w) = run.wait.as_mut() {
+                    w.checked_at = now;
+                }
+                run.error = Some(error);
+                return Ok(true);
             }
-            run.error = Some(error);
+        };
+        if settle(run, wait.subject, wait.continue_to, judged, now).is_some() {
             return Ok(true);
         }
-    };
-    record_dependencies(run, wait.subject, dependencies);
-    run.error = None;
-    match verdict {
-        Verdict::Met => {
-            run.dependencies_met = Some(wait.subject);
-            run.wait = None;
-            run.advance(wait.continue_to, now, "dependencies met");
-        }
-        Verdict::Waiting(text) => {
-            if let Some(w) = run.wait.as_mut() {
-                w.checked_at = now;
-                w.text = text;
-            }
-        }
-        Verdict::Blocked(reason) => {
-            run.stop(
-                Phase::NeedsAttention,
-                now,
-                format!(
-                    "{reason} Fix the links, then resume; or skip the dependency (workflow_run_skip_dependency)."
-                ),
-            );
-            run.cause = Some("dependency".into());
-        }
     }
+    let planning = wait.continue_to == Phase::Planning;
+    if !planning
+        && let Some(changed) = limit(host, azure, run, wait.subject, wait.continue_to, now).await?
+    {
+        return Ok(changed);
+    }
+    run.wait = None;
+    let outcome = if wait.reason == "open_pull_requests" {
+        "room among the open pull requests"
+    } else {
+        "dependencies met"
+    };
+    run.advance(wait.continue_to, now, outcome);
     Ok(true)
+}
+
+/// A coded child's open pull request that conflicts with its target branch (as Azure DevOps last
+/// computed its merge status) stops the run in `needs_attention`, naming the files and, as the
+/// likely cause, a pull request of another workflow run completed into the same branch.
+/// Nothing is resolved here: the person decides (resume to wait on, or have the agent update
+/// its branch). A conflict the person resumed past does not stop the run again until the
+/// target branch moves.
+async fn conflicted(host: &Arc<Host>, azure: &Azure, run: &mut Run, now: i64) -> Option<bool> {
+    let (pull, key) = run
+        .children
+        .iter()
+        .filter(|c| c.outcome.as_deref() == Some("done"))
+        .flat_map(|c| &c.pull_requests)
+        .filter(|p| p.status == "active" && p.merge_status.as_deref() == Some("conflicts"))
+        .map(|p| {
+            let key = format!("{}:{}", p.id, p.target_commit.as_deref().unwrap_or(""));
+            (p.clone(), key)
+        })
+        .find(|(_, key)| !run.conflicts_accepted.contains(key))?;
+    let files = azure
+        .conflicts(&host.state, run, &pull.repository, pull.id)
+        .await
+        .unwrap_or_default();
+    let target = pull.target.clone().unwrap_or_default();
+    // The most recent pull request of another run completed into the same branch.
+    let cause = host
+        .state
+        .workflows
+        .db
+        .list(&[], None, 500)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.id != run.id)
+        .flat_map(|r| {
+            r.children
+                .into_iter()
+                .flat_map(|c| c.pull_requests)
+                .map(move |p| (r.item.url.clone(), p))
+        })
+        .filter(|(_, p)| {
+            p.status == "completed"
+                && p.repository.eq_ignore_ascii_case(&pull.repository)
+                && p.target.as_deref().unwrap_or_default() == target
+        })
+        .max_by(|a, b| a.1.closed_at.cmp(&b.1.closed_at))
+        .map(|(item, p)| format!("{} of {item}", p.url));
+    let branch = target.trim_start_matches("refs/heads/");
+    let text = format!(
+        "Pull request {} conflicts with {}{}{}. Nothing was resolved: have its agent update its branch (or update it yourself), then resume to wait for it again.",
+        pull.url,
+        if branch.is_empty() {
+            "its target branch"
+        } else {
+            branch
+        },
+        if files.is_empty() {
+            String::new()
+        } else {
+            format!(" in {}", files.join(", "))
+        },
+        cause
+            .as_deref()
+            .map(|c| format!(", likely since pull request {c} was completed into it"))
+            .unwrap_or_default()
+    );
+    run.conflict = Some(super::record::Conflict {
+        pull_request: pull.id,
+        url: pull.url.clone(),
+        files,
+        target_commit: pull.target_commit.clone(),
+        cause,
+        at: now,
+    });
+    let _ = key;
+    run.stop(Phase::NeedsAttention, now, text);
+    run.cause = Some("conflict".into());
+    Some(true)
+}
+
+/// A child stacked on another's pull request (`stack` policy) whose own pull request still goes
+/// into that branch once the other's is completed stops the run in `needs_attention`: it must
+/// be retargeted to the branch the other went into.
+fn retarget(host: &Arc<Host>, run: &mut Run, now: i64) -> Option<bool> {
+    let runs = host
+        .state
+        .workflows
+        .db
+        .list(&[], None, 500)
+        .unwrap_or_default();
+    let completed = |url: &str| {
+        runs.iter()
+            .chain(std::iter::once(&*run))
+            .flat_map(|r| r.children.iter().flat_map(|c| &c.pull_requests))
+            .any(|p| p.url == url && p.status == "completed")
+    };
+    let (child, pull, base) = run.children.iter().find_map(|c| {
+        let base = c.base.as_ref().filter(|_| !c.retarget_accepted)?;
+        let pull = c.pull_requests.iter().find(|p| {
+            p.status == "active"
+                && p.target
+                    .as_deref()
+                    .map(|t| t.trim_start_matches("refs/heads/"))
+                    == Some(base.branch.as_str())
+        })?;
+        completed(&base.url).then(|| (c.url.clone(), pull.url.clone(), base.clone()))
+    })?;
+    run.stop(
+        Phase::NeedsAttention,
+        now,
+        format!(
+            "Pull request {pull} of {child} was stacked on branch {}, whose pull request {} is now completed: retarget it to the branch that one went into (its source branch may be deleted), then resume.",
+            base.branch, base.url
+        ),
+    );
+    run.cause = Some("retarget".into());
+    Some(true)
 }
 
 /// The children the ledger created, in order.
@@ -1784,13 +2074,11 @@ async fn coding(
                 Note::Person(text)
             }
         });
-        let context = fitted(coding_context(
-            &subject,
-            &given,
-            note,
-            workflow,
-            &run.blocks,
-        ))?;
+        let mut context = coding_context(&subject, &given, note, workflow, &run.blocks);
+        if let Some(base) = &child.base {
+            context.push_str(&stacked(base));
+        }
+        let context = fitted(context)?;
         let launched = implementation::launch_planned(
             host,
             implementation::Planned {
@@ -1954,6 +2242,12 @@ async fn pull_requests(
         run.checked_at = Some(now);
         run.error = None;
         changed = true;
+        if let Some(stopped) = conflicted(host, azure, run, now).await {
+            return Ok(stopped);
+        }
+        if let Some(stopped) = retarget(host, run, now) {
+            return Ok(stopped);
+        }
     }
     let coded: Vec<&Child> = run
         .children
@@ -2059,6 +2353,28 @@ pub(in crate::app) async fn resume(host: &Arc<Host>, run: &mut Run, now: i64) ->
             }
             run.ledger = None;
             stage = Phase::Planning;
+        }
+        // A conflict the person looked at: the run waits on, and that conflict against that
+        // target commit does not stop it again.
+        (_, Some("conflict")) => {
+            if let Some(conflict) = run.conflict.take() {
+                run.conflicts_accepted.push(format!(
+                    "{}:{}",
+                    conflict.pull_request,
+                    conflict.target_commit.as_deref().unwrap_or("")
+                ));
+                accepted.push(json!({"conflict": conflict.url}));
+            }
+            run.waiting_since = Some(now);
+            run.checked_at = None;
+        }
+        // A stacked pull request the person retargeted (or decided to keep).
+        (_, Some("retarget")) => {
+            for child in run.children.iter_mut().filter(|c| c.base.is_some()) {
+                child.retarget_accepted = true;
+                accepted.push(json!({"retargeted": child.url}));
+            }
+            run.checked_at = None;
         }
         // Nothing was delivered: the person accepts the run as done without pull requests.
         (_, Some("nothing_delivered")) => {

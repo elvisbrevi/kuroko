@@ -227,6 +227,30 @@ pub(in crate::app) struct Child {
     /// Its predecessors as the engine last judged them before coding it (a planned child's).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<super::dependencies::Dependency>,
+    /// The open pull request it was stacked on (`stack` policy): it starts from that branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<super::dependencies::Base>,
+    /// The person resumed past retargeting its stacked pull request.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retarget_accepted: bool,
+}
+
+/// A pull request of a run that conflicts with its target branch, as the engine found it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::app) struct Conflict {
+    pub pull_request: u64,
+    pub url: String,
+    /// The files it conflicts on (at most 100).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// The target commit the conflict was found against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_commit: Option<String>,
+    /// Another workflow run's pull request completed into the same branch, the likely cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    pub at: i64,
 }
 impl Child {
     pub(in crate::app) fn accepted(&self) -> bool {
@@ -428,6 +452,16 @@ pub(in crate::app) struct Run {
     /// The predecessors the person skipped: they no longer count for this run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped_dependencies: Vec<u64>,
+    /// The child whose wait for room among the open pull requests the person skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_skipped: Option<u64>,
+    /// The conflict that stopped it last, while it needs attention for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<Conflict>,
+    /// Conflicts the person resumed past, as `PULL_REQUEST:TARGET_COMMIT`: the same conflict
+    /// against the same target commit does not stop the run again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts_accepted: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -481,6 +515,9 @@ impl Run {
             dependencies_for: None,
             dependencies_met: None,
             skipped_dependencies: Vec::new(),
+            limit_skipped: None,
+            conflict: None,
+            conflicts_accepted: Vec::new(),
             created_at: now,
             updated_at: now,
             finished_at: None,

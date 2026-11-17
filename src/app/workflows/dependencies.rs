@@ -15,6 +15,12 @@
 //! project or organization, one whose state is `Removed`, and a cycle back to the item stop the
 //! run in `needs_attention` with the reason; a wait longer than `dependency_wait_days` does too.
 //! The person may skip the wait, for one predecessor or for all (`workflow_run_skip_dependency`).
+//!
+//! **Delivery settings** (`Workflow::delivery`). With `stack`, a predecessor whose one counted
+//! pull request is open and whose branch is known is met by stacking: the child starts from that
+//! branch and opens its pull request into it. With `max_open_pull_requests`, a run whose next
+//! child would open one more pull request in its repository than the workflow allows waits in
+//! `waiting_dependency` too, behind the runs created before it that wait for the same repository.
 use super::record::{Run, State as Phase};
 use super::*;
 use crate::ado::dependencies::{Graph, Node};
@@ -30,6 +36,25 @@ pub(in crate::app) struct DependencyPull {
     /// The branch it merges into, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// The branch it merges from, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Its repository's ID, in lowercase.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repository: String,
+}
+
+/// The open pull request a child is stacked on (`stack` policy): its branch is where the child
+/// starts from and what its own pull request goes into.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::app) struct Base {
+    /// The repository's ID, in lowercase.
+    pub repository: String,
+    /// The branch name (without `refs/heads/`).
+    pub branch: String,
+    pub pull_request: u64,
+    pub url: String,
 }
 
 /// One predecessor of a run's item or child, as the engine last judged it.
@@ -53,10 +78,14 @@ pub(in crate::app) struct Dependency {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pull_requests: Vec<DependencyPull>,
     pub satisfied: bool,
-    /// What decided: `pull_requests`, `state`, `skipped` (by the person) or `blocked`.
+    /// What decided: `pull_requests`, `state`, `stacked`, `skipped` (by the person) or
+    /// `blocked`.
     pub rule: String,
     /// Code's sentence of the fact (`Pull request !7 is active.`).
     pub reason: String,
+    /// Met by stacking on its open pull request (`stack` policy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Base>,
 }
 
 /// Why and since when a run waits in `waiting_dependency`, and where it goes on.
@@ -72,6 +101,22 @@ pub(in crate::app) struct Wait {
     pub checked_at: i64,
     /// What it waits for, as code says it.
     pub text: String,
+    /// `dependency` (its predecessors), or `open_pull_requests` (the workflow's limit of open
+    /// pull requests in `repository`).
+    #[serde(
+        default = "dependency_reason",
+        skip_serializing_if = "is_dependency_reason"
+    )]
+    pub reason: String,
+    /// The repository whose open pull requests it waits for (its lowercase ID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+}
+fn dependency_reason() -> String {
+    "dependency".into()
+}
+fn is_dependency_reason(reason: &String) -> bool {
+    reason == "dependency"
 }
 
 /// What the dependencies of one work item allow.
@@ -83,33 +128,102 @@ pub(in crate::app) enum Verdict {
     Blocked(String),
 }
 
+/// A pull request a workflow run recorded, with the branch it was read for.
+pub(in crate::app) type Known = (PullRequest, Option<String>);
+
 /// The pull requests known for a work item, by its verified link: those its workflow runs
-/// recorded (the run's own item, or a child of a run).
-pub(in crate::app) fn known_pulls(runs: &[Run]) -> HashMap<String, Vec<PullRequest>> {
-    let mut known: HashMap<String, Vec<PullRequest>> = HashMap::new();
+/// recorded (the run's own item, or a child of a run), each with the branch it was read for.
+pub(in crate::app) fn known_pulls(runs: &[Run]) -> HashMap<String, Vec<Known>> {
+    let mut known: HashMap<String, Vec<Known>> = HashMap::new();
     for run in runs {
         for child in &run.children {
+            let delivered = child.delivered();
+            let pulls: Vec<Known> = child
+                .pull_requests
+                .iter()
+                .map(|p| {
+                    let source = delivered
+                        .iter()
+                        .find(|(r, _)| r.id.eq_ignore_ascii_case(&p.repository))
+                        .map(|(_, b)| b.clone());
+                    (p.clone(), source)
+                })
+                .collect();
             known
                 .entry(child.url.clone())
                 .or_default()
-                .extend(child.pull_requests.iter().cloned());
+                .extend(pulls.iter().cloned());
             if child.url != run.item.url && !run.task() {
-                known
-                    .entry(run.item.url.clone())
-                    .or_default()
-                    .extend(child.pull_requests.iter().cloned());
+                known.entry(run.item.url.clone()).or_default().extend(pulls);
             }
         }
     }
     known
 }
 
+/// The pull requests the runs of `workflow` have open in `repository` (its lowercase ID), and
+/// one for each child coded there now or coded with a branch there whose pull request is not
+/// read yet (it opens one): their links.
+pub(in crate::app) fn open_pulls(runs: &[Run], workflow: &str, repository: &str) -> Vec<String> {
+    let mut open = Vec::new();
+    for run in runs
+        .iter()
+        .filter(|r| !r.state.finished() && r.workflow.as_deref() == Some(workflow))
+    {
+        for child in &run.children {
+            let pulls: Vec<&PullRequest> = child
+                .pull_requests
+                .iter()
+                .filter(|p| p.repository.eq_ignore_ascii_case(repository))
+                .collect();
+            open.extend(
+                pulls
+                    .iter()
+                    .filter(|p| p.status == "active" && !p.accepted)
+                    .map(|p| p.url.clone()),
+            );
+            // Being coded there now, or coded with a branch there whose pull request is not read
+            // yet: it opens one.
+            let coding = child.outcome.is_none()
+                && child.coding.as_ref().is_some_and(|c| c.started)
+                && child
+                    .repository
+                    .as_ref()
+                    .is_some_and(|r| r.id.eq_ignore_ascii_case(repository));
+            let delivering = child.outcome.as_deref() == Some("done")
+                && child
+                    .delivered()
+                    .iter()
+                    .any(|(r, _)| r.id.eq_ignore_ascii_case(repository));
+            if (coding || delivering) && pulls.is_empty() {
+                open.push(child.url.clone());
+            }
+        }
+    }
+    open
+}
+
+/// An older run of the same workflow that waits for the open pull requests of the same
+/// repository: it goes first.
+pub(in crate::app) fn queued_before<'a>(
+    runs: &'a [Run],
+    run: &Run,
+    repository: &str,
+) -> Option<&'a Run> {
+    runs.iter().find(|other| {
+        other.id != run.id
+            && other.workflow == run.workflow
+            && other.state == Phase::WaitingDependency
+            && (other.created_at, &other.id) < (run.created_at, &run.id)
+            && other.wait.as_ref().is_some_and(|w| {
+                w.reason == "open_pull_requests" && w.repository.as_deref() == Some(repository)
+            })
+    })
+}
+
 /// The pull requests that count for a predecessor: those linked to it, then those its runs
 /// recorded that are not linked, leaving out abandoned ones.
-fn counted(
-    node: &Node,
-    known: &HashMap<String, Vec<PullRequest>>,
-) -> Vec<(String, DependencyPull)> {
+fn counted(node: &Node, known: &HashMap<String, Vec<Known>>) -> Vec<(String, DependencyPull)> {
     let mut found: Vec<(String, DependencyPull)> = node
         .pull_requests
         .iter()
@@ -121,23 +235,27 @@ fn counted(
                     url: p.url.clone(),
                     status: p.status.clone(),
                     target: (!p.target.is_empty()).then(|| p.target.clone()),
+                    source: (!p.source.is_empty()).then(|| branch(&p.source).to_owned()),
+                    repository: p.repository.to_lowercase(),
                 },
             )
         })
         .collect();
-    for pull in known.get(&node.url).into_iter().flatten() {
+    for (pull, source) in known.get(&node.url).into_iter().flatten() {
         let repository = pull.repository.to_lowercase();
         if !found
             .iter()
             .any(|(r, p)| p.id == pull.id && *r == repository)
         {
             found.push((
-                repository,
+                repository.clone(),
                 DependencyPull {
                     id: pull.id,
                     url: pull.url.clone(),
                     status: pull.status.clone(),
                     target: pull.target.clone(),
+                    source: source.clone(),
+                    repository,
                 },
             ));
         }
@@ -196,15 +314,18 @@ fn cycle(graph: &Graph, skipped: &[u64]) -> Option<String> {
 
 /// Judge the dependencies of `graph.root`, of project `project`: each predecessor met or not
 /// with code's reason, and what that allows. `defaults` holds each repository's default branch
-/// by lowercase ID; `target` the workflow's own target branch, which replaces it.
+/// by lowercase ID; `target` the workflow's own target branch, which replaces it; with `stack`
+/// one predecessor whose one counted pull request is open, with its branch known, is met by
+/// stacking on it.
 pub(in crate::app) fn evaluate(
     graph: &Graph,
     project: &str,
-    known: &HashMap<String, Vec<PullRequest>>,
+    known: &HashMap<String, Vec<Known>>,
     defaults: &HashMap<String, String>,
-    target: Option<&str>,
+    (target, stack): (Option<&str>, bool),
     skipped: &[u64],
 ) -> (Verdict, Vec<Dependency>) {
+    let mut stacked = false;
     let mut blocked = Vec::new();
     for url in &graph.foreign {
         blocked.push(format!(
@@ -277,6 +398,30 @@ pub(in crate::app) fn evaluate(
                 })
                 .collect();
             dependency.satisfied = pending.is_empty();
+            // Stacked on its one open pull request, whose branch is known (once per child).
+            if !dependency.satisfied
+                && stack
+                && !stacked
+                && let [(repository, pull)] = pulls.as_slice()
+                && pull.status == "active"
+                && let Some(source) = pull.source.as_deref()
+            {
+                stacked = true;
+                dependency.satisfied = true;
+                dependency.rule = "stacked".into();
+                dependency.reason = format!(
+                    "Stacked on pull request !{} (branch {source}), which is not completed yet.",
+                    pull.id
+                );
+                dependency.base = Some(Base {
+                    repository: repository.clone(),
+                    branch: source.to_owned(),
+                    pull_request: pull.id,
+                    url: pull.url.clone(),
+                });
+                dependencies.push(dependency);
+                continue;
+            }
             dependency.reason = if pending.is_empty() {
                 format!(
                     "Every pull request of #{id} is completed ({}).",
@@ -390,6 +535,14 @@ pub(super) async fn skip(host: &Arc<Host>, args: &Value) -> Result<Value, String
         .map(|w| w.subject)
         .or(run.dependencies_for)
         .unwrap_or(run.item.id);
+    // A wait for room among the open pull requests is skipped for that child.
+    if run
+        .wait
+        .as_ref()
+        .is_some_and(|w| w.reason == "open_pull_requests")
+    {
+        run.limit_skipped = Some(subject);
+    }
     match args.dependency {
         Some(id) => {
             if !run.skipped_dependencies.contains(&id) {
@@ -462,6 +615,7 @@ mod tests {
             repository_name: "api".into(),
             status: status.into(),
             target: target.into(),
+            source: String::new(),
             url: format!("https://dev.azure.com/example/Payments/_git/api/pullrequest/{id}"),
         }
     }
@@ -478,7 +632,14 @@ mod tests {
         HashMap::from([(REPO.to_owned(), "refs/heads/develop".to_owned())])
     }
     fn judge(graph: &Graph) -> (Verdict, Vec<Dependency>) {
-        evaluate(graph, "Payments", &HashMap::new(), &defaults(), None, &[])
+        evaluate(
+            graph,
+            "Payments",
+            &HashMap::new(),
+            &defaults(),
+            (None, false),
+            &[],
+        )
     }
 
     #[test]
@@ -515,7 +676,7 @@ mod tests {
             "Payments",
             &HashMap::new(),
             &defaults(),
-            Some("feature/x"),
+            (Some("feature/x"), false),
             &[],
         );
         assert_eq!(verdict, Verdict::Met);
@@ -533,23 +694,166 @@ mod tests {
         let mut known = HashMap::new();
         known.insert(
             waiting.url.clone(),
-            vec![PullRequest {
-                id: 7,
-                repository: REPO.into(),
-                status: "active".into(),
-                url: "https://dev.azure.com/example/Payments/_git/api/pullrequest/7".into(),
-                ..Default::default()
-            }],
+            vec![(
+                PullRequest {
+                    id: 7,
+                    repository: REPO.into(),
+                    status: "active".into(),
+                    url: "https://dev.azure.com/example/Payments/_git/api/pullrequest/7".into(),
+                    ..Default::default()
+                },
+                Some("feature/7".to_owned()),
+            )],
         );
         let g = graph(50, vec![waiting]);
-        let (verdict, _) = evaluate(&g, "Payments", &known, &defaults(), None, &[]);
+        let (verdict, _) = evaluate(&g, "Payments", &known, &defaults(), (None, false), &[]);
         assert!(matches!(verdict, Verdict::Waiting(ref t) if t.contains("!7 is active")));
-        known.values_mut().flatten().for_each(|p| {
+        // With the stack policy the one open pull request, its branch known, is stacked on.
+        let (verdict, deps) = evaluate(&g, "Payments", &known, &defaults(), (None, true), &[]);
+        assert_eq!(verdict, Verdict::Met);
+        assert_eq!(deps[0].rule, "stacked");
+        let base = deps[0].base.clone().unwrap();
+        assert_eq!((base.branch.as_str(), base.pull_request), ("feature/7", 7));
+        known.values_mut().flatten().for_each(|(p, _)| {
             p.status = "completed".into();
             p.target = Some("refs/heads/develop".into());
         });
-        let (verdict, _) = evaluate(&g, "Payments", &known, &defaults(), None, &[]);
+        let (verdict, _) = evaluate(&g, "Payments", &known, &defaults(), (None, false), &[]);
         assert_eq!(verdict, Verdict::Met);
+    }
+
+    #[test]
+    fn stacking_takes_one_open_pull_request_with_a_known_branch() {
+        // Two open pull requests, or a branch nobody knows: it waits as without the policy.
+        let mut two = node(41, "Active", "InProgress", &[]);
+        two.pull_requests = vec![
+            pull(1, "active", "refs/heads/develop"),
+            pull(2, "active", "refs/heads/develop"),
+        ];
+        let (verdict, _) = evaluate(
+            &graph(50, vec![two]),
+            "Payments",
+            &HashMap::new(),
+            &defaults(),
+            (None, true),
+            &[],
+        );
+        assert!(matches!(verdict, Verdict::Waiting(_)));
+        let mut unknown = node(41, "Active", "InProgress", &[]);
+        unknown.pull_requests = vec![pull(1, "active", "refs/heads/develop")];
+        let (verdict, _) = evaluate(
+            &graph(50, vec![unknown.clone()]),
+            "Payments",
+            &HashMap::new(),
+            &defaults(),
+            (None, true),
+            &[],
+        );
+        assert!(matches!(verdict, Verdict::Waiting(_)));
+        // Its branch read from the linked pull request: stacked.
+        unknown.pull_requests[0].source = "refs/heads/feature/41".into();
+        let (verdict, deps) = evaluate(
+            &graph(50, vec![unknown]),
+            "Payments",
+            &HashMap::new(),
+            &defaults(),
+            (None, true),
+            &[],
+        );
+        assert_eq!(verdict, Verdict::Met);
+        assert_eq!(deps[0].base.as_ref().unwrap().branch, "feature/41");
+    }
+
+    #[test]
+    fn open_pull_requests_of_a_workflow_count_per_repository_and_the_older_waiting_run_goes_first()
+    {
+        use super::super::record::{Child, Implementation, Item};
+        let run = |id: u64, at: i64| {
+            let mut run = Run::new(
+                Item {
+                    id,
+                    url: format!("https://dev.azure.com/example/Payments/_workitems/edit/{id}"),
+                    ..Default::default()
+                },
+                at,
+            );
+            run.workflow = Some("pd".into());
+            run
+        };
+        let repository = crate::workflows::Repository {
+            id: REPO.into(),
+            name: "api".into(),
+        };
+        let mut open = run(1, 100);
+        open.state = Phase::PullRequests;
+        open.children = vec![Child {
+            id: 1,
+            outcome: Some("done".into()),
+            repository: Some(repository.clone()),
+            pull_requests: vec![
+                PullRequest {
+                    id: 6119,
+                    repository: REPO.into(),
+                    status: "active".into(),
+                    url: "pr/6119".into(),
+                    ..Default::default()
+                },
+                PullRequest {
+                    id: 6100,
+                    repository: REPO.into(),
+                    status: "completed".into(),
+                    url: "pr/6100".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut coding = run(2, 101);
+        coding.state = Phase::Coding;
+        coding.children = vec![Child {
+            id: 2,
+            url: "https://dev.azure.com/example/Payments/_workitems/edit/2".into(),
+            repository: Some(repository.clone()),
+            coding: Some(Implementation {
+                started: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }];
+        let mut other = run(3, 102);
+        other.workflow = Some("another".into());
+        other.state = Phase::PullRequests;
+        other.children = open.children.clone();
+        let runs = vec![open, coding, other];
+        assert_eq!(
+            open_pulls(&runs, "pd", REPO),
+            vec![
+                "pr/6119".to_owned(),
+                "https://dev.azure.com/example/Payments/_workitems/edit/2".to_owned()
+            ]
+        );
+        assert!(open_pulls(&runs, "pd", "another-repository").is_empty());
+        // Two runs wait for that repository: the older one goes first.
+        let waiting = |id: u64, at: i64| {
+            let mut r = run(id, at);
+            r.state = Phase::WaitingDependency;
+            r.wait = Some(Wait {
+                continue_to: Phase::Coding,
+                subject: id,
+                since: at,
+                checked_at: at,
+                text: String::new(),
+                reason: "open_pull_requests".into(),
+                repository: Some(REPO.into()),
+            });
+            r
+        };
+        let runs = vec![waiting(4, 200), waiting(5, 201)];
+        assert_eq!(
+            queued_before(&runs, &runs[1], REPO).map(|r| r.item.id),
+            Some(4)
+        );
+        assert!(queued_before(&runs, &runs[0], REPO).is_none());
     }
 
     #[test]
@@ -574,7 +878,7 @@ mod tests {
             "Payments",
             &HashMap::new(),
             &defaults(),
-            None,
+            (None, false),
             &[41],
         );
         assert_eq!(verdict, Verdict::Met);
