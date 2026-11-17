@@ -23,6 +23,8 @@ pub(in crate::app) struct Catalog {
     nodes: Mutex<BTreeMap<u64, crate::ado::dependencies::Node>>,
     /// The files each pull request conflicts on.
     conflict_files: Mutex<BTreeMap<u64, Vec<String>>>,
+    /// The comment threads of each pull request.
+    pull_threads: Mutex<BTreeMap<u64, Vec<crate::ado::workflow::Thread>>>,
     /// Every request, as `GET what`.
     pub requests: Mutex<Vec<String>>,
     /// The items whose reads fail, as during an outage.
@@ -100,6 +102,16 @@ impl Catalog {
             .lock()
             .unwrap()
             .insert((repository.to_lowercase(), branch.to_owned()), pulls);
+    }
+    /// The pull requests of a repository's branch as they are now.
+    #[cfg(unix)]
+    pub(in crate::app) fn clone_pulls(&self, repository: &str, branch: &str) -> Vec<PullRequest> {
+        self.pulls
+            .lock()
+            .unwrap()
+            .get(&(repository.to_lowercase(), branch.to_owned()))
+            .cloned()
+            .unwrap_or_default()
     }
     /// The summary of an implementation run's session, as the next read returns it.
     #[cfg(unix)]
@@ -180,6 +192,30 @@ impl Catalog {
             .unwrap()
             .push(format!("GET conflicts {pull_request}"));
         self.conflict_files
+            .lock()
+            .unwrap()
+            .get(&pull_request)
+            .cloned()
+            .unwrap_or_default()
+    }
+    /// The comment threads of a pull request, as the next read returns them.
+    #[cfg(unix)]
+    pub(in crate::app) fn set_threads(
+        &self,
+        pull_request: u64,
+        threads: Vec<crate::ado::workflow::Thread>,
+    ) {
+        self.pull_threads
+            .lock()
+            .unwrap()
+            .insert(pull_request, threads);
+    }
+    pub(in crate::app) fn threads(&self, pull_request: u64) -> Vec<crate::ado::workflow::Thread> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET threads {pull_request}"));
+        self.pull_threads
             .lock()
             .unwrap()
             .get(&pull_request)

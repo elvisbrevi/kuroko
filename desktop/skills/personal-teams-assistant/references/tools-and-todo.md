@@ -515,7 +515,17 @@ How a workflow takes an item from its ready state to its release, and where the 
    So does a pull request that conflicts with its target branch (Azure DevOps' merge status), naming
    the files and the other run's pull request completed into that branch (`conflict`): nothing is
    resolved by PTA; once its branch is updated, resume (the same conflict against the same target
-   commit does not stop it again).
+   commit does not stop it again), or let the agent that coded it update it with
+   `pta workflows update-branch RUN --confirmed` (a conflict round).
+   **Review rounds:** when a reviewer votes «Rejected» (-10) or «Waiting for author» (-5), the run
+   moves to `addressing_review` (it takes a slot): the session that coded the child continues
+   (or, when it is gone, a new one with a handover note), corrects the same branch and pull
+   request, replies in each thread, resets the reviewer's vote (or comments naming them) and adds a
+   `[PTA review round N]` summary; code checks all of it and the run returns to waiting. A
+   disagreement, a check that fails, more rounds than the workflow's `delivery.review_rounds`
+   (default 2) or a machine gone for 30 minutes stop the run in `needs_attention`. Each round is in
+   the run's `children[].rounds`, and the block stages `review_rejected` and `review_resubmitted`
+   (with `{reviewers}`, `{round}` and `mention_reviewers`) can tell Teams.
 8. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
    when the pull requests are completed, notifications with mentions when the run is done or fails.
 9. **Report on request**: `workflow_summary` asks the director for a summary of the record, and
@@ -654,7 +664,7 @@ run (any state but `done` and `cancelled`).
 - **States:** `classifying`, `unassigned`, `planning`, `plan_review`, `creating_children`,
   `coding`, `waiting_dependency` (no slot; `wait` says what it waits for, `dependencies` and each
   child's `dependencies` hold every predecessor with its link, state, pull requests, whether it is
-  met and code's reason), `pull_requests`, `blocks` (the `pull_requests_completed` and `done` blocks run here),
+  met and code's reason), `addressing_review` (a review round: `children[].rounds`), `pull_requests`, `blocks` (the `pull_requests_completed` and `done` blocks run here),
   `done`, `failed`, `cancelled`, `interrupted`, `needs_attention`. A coding run that ends
   `permission_prompt`, `failed`, `needs_attention` or `interrupted`, an abandoned pull request, a
   session that reported no branch, an uncertain creation, a run that delivered no child and a

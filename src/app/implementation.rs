@@ -95,6 +95,10 @@ struct Machine {
     /// with `task: "supervise"` and its own session bound).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     workflow_supervise: bool,
+    /// Whether its last poll said it continues an existing coding session in a launch
+    /// (`implementation_resume_support`: a review round's `resume`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    resume: bool,
 }
 impl Machine {
     /// Trusted and seen in its last polls (a worker polls every two seconds).
@@ -297,6 +301,16 @@ pub(crate) struct Launch {
     /// keeps every prohibition.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) allow: Vec<crate::workflows::Allow>,
+    /// A review round of a workflow run: its context is the round's own request. With
+    /// `resume` (the native ID of the session that coded the child) it is one more turn of that
+    /// session, which keeps its context, and the prompt is only the fixed rules and the round;
+    /// without it, a new session gets the whole coding prompt with the round and its handover
+    /// in the context. Only the engine sets them, and sends `resume` only to a worker that
+    /// advertises `implementation_resume_support`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) round: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) resume: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Run {
@@ -595,6 +609,8 @@ pub(super) struct MachineFacts {
     pub direct: bool,
     /// It runs the workflow supervisor's looks (`workflow_supervise_support`).
     pub supervise: bool,
+    /// It continues an existing coding session in a launch (`implementation_resume_support`).
+    pub resume: bool,
     /// When it was last seen (Unix seconds); now for this installation.
     pub seen: i64,
 }
@@ -612,6 +628,7 @@ pub(super) async fn machine_facts(host: &Arc<Host>, id: &str) -> Result<Option<M
             inspect: true,
             direct: true,
             supervise: true,
+            resume: true,
             seen: now(),
         }));
     }
@@ -627,6 +644,7 @@ pub(super) async fn machine_facts(host: &Arc<Host>, id: &str) -> Result<Option<M
             inspect: m.checkout_inspect,
             direct: m.workflow_direct,
             supervise: m.workflow_supervise,
+            resume: m.resume,
             seen: m.seen,
         }))
 }
@@ -917,6 +935,8 @@ fn build_launch(
         detail,
         language: host.state.settings.config()?.llm.language,
         allow: Vec::new(),
+        round: false,
+        resume: None,
     })
 }
 
@@ -939,6 +959,9 @@ pub(super) struct Planned {
     pub planning: bool,
     /// What the workflow lifts from the coding rules; ignored for a planning run.
     pub allow: Vec<crate::workflows::Allow>,
+    /// A review round (`Launch::round`), continuing `resume` (a native session ID) when set.
+    pub round: bool,
+    pub resume: Option<String>,
 }
 /// Launch a run the engine planned, through the same `implementation_launch` call as
 /// `implementation_start`. The call is idempotent by run ID: asking again for a run the machine
@@ -970,6 +993,8 @@ pub(super) async fn launch_planned(host: &Arc<Host>, planned: Planned) -> Result
     let mut launch = build_launch(host, planned.id, request, planned.detail, planned.planning)?;
     if !planned.planning {
         launch.allow = planned.allow;
+        launch.round = planned.round;
+        launch.resume = planned.resume;
     }
     fleet::call(
         host,
@@ -1479,6 +1504,31 @@ async fn run(host: &Arc<Host>, launch: Launch) {
             Ok((true, String::new(), Some(plan), Vec::new(), None))
         }
         .await
+    } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
+        // One more turn of the session that coded the child: it has the item, the
+        // instructions and its earlier work; this turn gets the fixed rules and the round.
+        let prompt = format!(
+            "{}\n{}",
+            crate::llm::implementation::code_rules(&launch.allow),
+            request.context
+        );
+        crate::llm::implementation::execute_resumed(
+            &request.provider,
+            &request.model,
+            &request.effort,
+            &request.directories,
+            &prompt,
+            &launch.allow,
+            session,
+            &name,
+            &observer,
+            remote,
+        )
+        .await
+        .map(|outcome| {
+            let failure = outcome.failure;
+            (outcome.ok, outcome.text, None, outcome.prompts, failure)
+        })
     } else {
         let prompt =
             crate::llm::implementation::coding_prompt(&instructions, &input, &launch.allow);

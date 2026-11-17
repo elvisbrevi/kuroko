@@ -11,6 +11,7 @@
 use super::*;
 use crate::ado::workflow::PullRequest;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -42,9 +43,12 @@ pub(in crate::app) enum State {
     /// Waiting, without a slot, for the dependencies of its item or of the next child to be
     /// met (`dependencies`); it goes on by itself.
     WaitingDependency,
+    /// A reviewer asked for changes on a pull request: the agent of the child corrects it in a
+    /// review round (`Child::rounds`), in the same branch and pull request, and sends it back.
+    AddressingReview,
 }
 impl State {
-    pub(in crate::app) const ALL: [State; 14] = [
+    pub(in crate::app) const ALL: [State; 15] = [
         State::Classifying,
         State::Unassigned,
         State::Planning,
@@ -59,6 +63,7 @@ impl State {
         State::Interrupted,
         State::NeedsAttention,
         State::WaitingDependency,
+        State::AddressingReview,
     ];
     pub(in crate::app) fn word(self) -> &'static str {
         match self {
@@ -76,6 +81,7 @@ impl State {
             State::Interrupted => "interrupted",
             State::NeedsAttention => "needs_attention",
             State::WaitingDependency => "waiting_dependency",
+            State::AddressingReview => "addressing_review",
         }
     }
     pub(in crate::app) fn parse(word: &str) -> Option<State> {
@@ -119,6 +125,7 @@ impl State {
                 | State::PullRequests
                 | State::Blocks
                 | State::WaitingDependency
+                | State::AddressingReview
         )
     }
     /// The stages that take one of the `concurrency` slots: those where a coding or planning
@@ -128,7 +135,11 @@ impl State {
     pub(in crate::app) fn takes_slot(self) -> bool {
         matches!(
             self,
-            State::Planning | State::CreatingChildren | State::Coding | State::Blocks
+            State::Planning
+                | State::CreatingChildren
+                | State::Coding
+                | State::Blocks
+                | State::AddressingReview
         )
     }
 }
@@ -233,6 +244,79 @@ pub(in crate::app) struct Child {
     /// The person resumed past retargeting its stacked pull request.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub retarget_accepted: bool,
+    /// The review rounds of its pull requests, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rounds: Vec<Round>,
+    /// Each reviewer's vote as last read, by `PULL_REQUEST:REVIEWER_ID`: a round starts when a
+    /// vote turns negative, not while it stays so.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub votes: BTreeMap<String, i32>,
+}
+impl Child {
+    /// The review round in progress, if any.
+    pub(in crate::app) fn open_round(&self) -> Option<&Round> {
+        self.rounds.last().filter(|r| r.outcome.is_none())
+    }
+}
+
+/// One review round of a child's pull request: who asked for changes, the threads open then,
+/// the implementation run that corrected it (one more turn of the session that coded the child,
+/// or a new session with a handover note), and how it ended.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::app) struct Round {
+    /// 1 for the pull request's first round.
+    pub n: u32,
+    /// `review` (a reviewer asked for changes) or `conflict` (the person asked the agent to
+    /// update its branch after a conflict, `workflow_run_update_branch`).
+    #[serde(default = "review_kind", skip_serializing_if = "is_review_kind")]
+    pub kind: String,
+    /// A conflict round's files, as the conflict listed them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    pub pull_request: u64,
+    pub url: String,
+    /// The repository's ID, in lowercase.
+    pub repository: String,
+    /// The branch it is corrected in.
+    pub branch: String,
+    /// The reviewers who voted against when it began (-10 rejected, -5 waiting for the author).
+    pub reviewers: Vec<crate::ado::workflow::Reviewer>,
+    /// The threads open then (active or pending, by someone other than its author), as data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<crate::ado::workflow::Thread>,
+    /// The source branch's last commit when it began: a correction pushes another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
+    pub started_at: i64,
+    /// The implementation run that corrects it, recorded before its machine is asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding: Option<Implementation>,
+    /// `resumed` (one more turn of the child's session) or `new_session` (that session was
+    /// gone or its machine cannot continue one: a new one with a handover note).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// The stage it returns to once resubmitted.
+    pub return_to: State,
+    /// `resubmitted`, `disagreed`, `unverified`, `failed` or `accepted` (the person resumed past
+    /// it); none while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    /// How each reviewer was asked again: `vote_reset` or `comment`, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested: Vec<String>,
+    /// What code did not find after the correction (a reply, the summary comment, a push).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+}
+
+fn review_kind() -> String {
+    "review".into()
+}
+fn is_review_kind(kind: &String) -> bool {
+    kind == "review"
 }
 
 /// A pull request of a run that conflicts with its target branch, as the engine found it.
@@ -455,6 +539,10 @@ pub(in crate::app) struct Run {
     /// The child whose wait for room among the open pull requests the person skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_skipped: Option<u64>,
+    /// The repository (lowercase ID) its next child passed the workflow's limit of open pull
+    /// requests for: it counts there until that child's coding run starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding_into: Option<String>,
     /// The conflict that stopped it last, while it needs attention for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conflict: Option<Conflict>,
@@ -516,6 +604,7 @@ impl Run {
             dependencies_met: None,
             skipped_dependencies: Vec::new(),
             limit_skipped: None,
+            coding_into: None,
             conflict: None,
             conflicts_accepted: Vec::new(),
             created_at: now,
@@ -612,6 +701,11 @@ impl Run {
     pub(in crate::app) fn active_implementation(&self) -> Option<&Implementation> {
         match self.stopped_in.unwrap_or(self.state) {
             State::Planning => self.planning.as_ref(),
+            State::AddressingReview => self
+                .children
+                .iter()
+                .find_map(|c| c.open_round())
+                .and_then(|r| r.coding.as_ref()),
             State::Coding => self
                 .children
                 .iter()
@@ -624,7 +718,11 @@ impl Run {
     pub(in crate::app) fn implementations(&self) -> impl Iterator<Item = &Implementation> {
         self.planning
             .iter()
-            .chain(self.children.iter().filter_map(|c| c.coding.as_ref()))
+            .chain(self.children.iter().flat_map(|c| {
+                c.coding
+                    .iter()
+                    .chain(c.rounds.iter().filter_map(|r| r.coding.as_ref()))
+            }))
     }
     /// It waits in the line for a slot: in a stage that takes one, without one.
     pub(in crate::app) fn waits_for_slot(&self) -> bool {
@@ -767,6 +865,11 @@ pub(in crate::app) fn needs(run: &Run) -> Option<(&str, Vec<PathBuf>)> {
             .iter()
             .find(|c| c.outcome.is_none())
             .is_some_and(|c| c.coding.as_ref().is_none_or(|i| !i.started)),
+        State::AddressingReview => run
+            .children
+            .iter()
+            .find_map(|c| c.open_round())
+            .is_some_and(|r| r.coding.as_ref().is_none_or(|i| !i.started)),
         _ => false,
     };
     pending.then(|| (definition.machine.as_str(), directories(run)))
@@ -775,10 +878,15 @@ pub(in crate::app) fn needs(run: &Run) -> Option<(&str, Vec<PathBuf>)> {
 /// The directories a run's agent works in: its child's checkout when the child being coded is a
 /// planned one already placed, otherwise every checkout of its workflow.
 fn directories(run: &Run) -> Vec<PathBuf> {
-    let child = (run.stopped_in.unwrap_or(run.state) == State::Coding && !run.task())
-        .then(|| run.children.iter().find(|c| c.outcome.is_none()))
-        .flatten()
-        .and_then(|c| c.directory.clone());
+    let stage = run.stopped_in.unwrap_or(run.state);
+    let child = match stage {
+        State::Coding if !run.task() => run.children.iter().find(|c| c.outcome.is_none()),
+        State::AddressingReview if !run.task() => {
+            run.children.iter().find(|c| c.open_round().is_some())
+        }
+        _ => None,
+    }
+    .and_then(|c| c.directory.clone());
     match child {
         Some(directory) => vec![directory],
         None => run

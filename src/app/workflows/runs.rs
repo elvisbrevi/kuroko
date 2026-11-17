@@ -10,7 +10,7 @@ use super::engine::{self, Azure};
 use super::record::{self, Item, Run, State as Phase};
 use super::*;
 
-pub(in crate::app) const METHODS: [&str; 10] = [
+pub(in crate::app) const METHODS: [&str; 11] = [
     "workflow_run_start",
     "workflow_runs",
     "workflow_run_status",
@@ -21,6 +21,7 @@ pub(in crate::app) const METHODS: [&str; 10] = [
     "workflow_runs_pause",
     "workflow_runs_unpause",
     "workflow_run_skip_dependency",
+    "workflow_run_update_branch",
 ];
 
 #[derive(Deserialize)]
@@ -274,6 +275,7 @@ pub(super) async fn operation(
         "workflow_runs_pause" => pause(host, parse(args)?).await,
         "workflow_runs_unpause" => unpause(&host.state, parse(args)?),
         "workflow_run_skip_dependency" => super::dependencies::skip(host, args).await,
+        "workflow_run_update_branch" => super::review::update_branch(host, args).await,
         _ => Err(invalid("Unknown workflow operation.")),
     }
 }

@@ -29,7 +29,9 @@ impl Shell for TestShell {
 /// repositories and one the workflow does not have (`multi`), waits for `release`
 /// first (`block`), raises a permission prompt nobody answers (`prompt`), fails (`fail`) or
 /// exits at once with code 1, writing on stderr that a system variable is missing (`exit`,
-/// also a `director_mode`).
+/// also a `director_mode`). A review round counts itself in `rounds`, keeps its prompt and
+/// arguments, and by `review_mode` exits at once (`exit`, once) or waits for `review_release`
+/// (`block`), then reports `Review: WORD` (`review_word`, `resubmitted` by default).
 const CLI: &str = r#"#!/bin/sh
 LOG='{log}'
 prompt="$LOG/prompt.$$"
@@ -70,6 +72,20 @@ if grep -q 'Return only JSON matching this schema' "$prompt"; then
     while [ ! -f "$LOG/release" ]; do sleep 0.05; done
   fi
   cat "$LOG/plan.jsonl"
+  exit 0
+fi
+if grep -q 'Review round' "$prompt"; then
+  r=$(( $(cat "$LOG/rounds" 2>/dev/null | wc -l) + 1 ))
+  cp "$prompt" "$LOG/round.$r"
+  printf '%s\n' "$@" > "$LOG/round_args.$r"
+  echo x >> "$LOG/rounds"
+  case "$(cat "$LOG/review_mode" 2>/dev/null)" in
+    exit) rm -f "$LOG/review_mode"; exit_at_start ;;
+    block) while [ ! -f "$LOG/review_release" ]; do sleep 0.05; done ;;
+  esac
+  printf '%s\n' '{"type":"step_start","sessionID":"ses_round"}'
+  word=$(cat "$LOG/review_word" 2>/dev/null || echo resubmitted)
+  printf '%s\n' "{\"type\":\"text\",\"part\":{\"text\":\"Corrected what the reviewer asked.\\nReview: $word\"}}"
   exit 0
 fi
 echo x >> "$LOG/starts"
@@ -2216,6 +2232,7 @@ mod acting;
 mod dependencies;
 mod limits;
 mod pause;
+mod review;
 
 /// Why the session of run `id` did not end with its answer, as Agent history shows it.
 async fn history_failure(bench: &Bench, id: &str) -> Value {

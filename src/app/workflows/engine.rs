@@ -255,6 +255,30 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.default_branches()),
         }
     }
+    /// The comment threads of a run's pull request, read now (review rounds).
+    pub(in crate::app) async fn threads(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        repository: &str,
+        pull_request: u64,
+    ) -> Result<Vec<crate::ado::workflow::Thread>, String> {
+        match self {
+            Self::Live => {
+                tools::todo::threads(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    &run.item.project,
+                    repository,
+                    pull_request,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.threads(pull_request)),
+        }
+    }
     /// The files a run's pull request conflicts on with its target branch, read now.
     pub(in crate::app) async fn conflicts(
         &self,
@@ -420,7 +444,11 @@ pub(in crate::app) async fn tick(
 async fn recover(host: &Arc<Host>) -> Result<std::collections::HashSet<String>> {
     let state = &host.state.workflows;
     let mut unrecovered = std::collections::HashSet::new();
-    for run in state.db.list(&[Phase::Planning, Phase::Coding], None, -1)? {
+    for run in state.db.list(
+        &[Phase::Planning, Phase::Coding, Phase::AddressingReview],
+        None,
+        -1,
+    )? {
         let lock = state.lock(&run.id);
         let _guard = lock.lock().await;
         let Some(mut run) = state.db.get(&run.id)? else {
@@ -554,11 +582,11 @@ pub(in crate::app) async fn end_sessions(host: &Arc<Host>, run: &Run) -> Ended {
 /// Record the observed state of the run's active implementation run.
 /// Why an implementation run another machine returned did not end with its answer, as it
 /// reported it (`Failure::of_record`).
-fn observed_failure(observed: &Value) -> Option<crate::llm::implementation::Failure> {
+pub(super) fn observed_failure(observed: &Value) -> Option<crate::llm::implementation::Failure> {
     crate::llm::implementation::Failure::of_record(observed)
 }
 /// `ended {state}`, with the cause's sentence when there is one.
-fn ended(state: &str, failure: Option<crate::llm::implementation::Failure>) -> String {
+pub(super) fn ended(state: &str, failure: Option<crate::llm::implementation::Failure>) -> String {
     match failure {
         Some(failure) => format!("ended {state}: {}", failure.sentence()),
         None => format!("ended {state}."),
@@ -574,6 +602,11 @@ fn set_observed(run: &mut Run, observed: &str) {
             .iter_mut()
             .find(|c| c.outcome.is_none())
             .and_then(|c| c.coding.as_mut()),
+        Phase::AddressingReview => run
+            .children
+            .iter_mut()
+            .find_map(|c| c.rounds.last_mut().filter(|r| r.outcome.is_none()))
+            .and_then(|r| r.coding.as_mut()),
         _ => None,
     };
     if let Some(target) = target {
@@ -591,6 +624,11 @@ fn set_failure(run: &mut Run, failure: crate::llm::implementation::Failure) {
             .iter_mut()
             .find(|c| c.outcome.is_none())
             .and_then(|c| c.coding.as_mut()),
+        Phase::AddressingReview => run
+            .children
+            .iter_mut()
+            .find_map(|c| c.rounds.last_mut().filter(|r| r.outcome.is_none()))
+            .and_then(|r| r.coding.as_mut()),
         _ => None,
     };
     if let Some(target) = target {
@@ -707,7 +745,7 @@ async fn advance(host: &Arc<Host>, azure: &Azure, id: &str, now: i64, poll: i64)
 }
 
 /// Note why a run waits (a machine offline, a read that failed); a change only when it is new.
-fn wait(run: &mut Run, why: String) -> Result<bool, String> {
+pub(super) fn wait(run: &mut Run, why: String) -> Result<bool, String> {
     if run.error.as_deref() == Some(why.as_str()) {
         return Ok(false);
     }
@@ -726,7 +764,7 @@ pub(in crate::app) fn held(holder: &Run) -> String {
 
 /// A launch refusal the run waits through (the machine is offline or busy with these
 /// directories) rather than one that fails it.
-fn transient(error: &str) -> bool {
+pub(super) fn transient(error: &str) -> bool {
     error.contains("offline")
         || error.contains(implementation::DIRECTORIES_BUSY)
         || error.contains("could not be reached")
@@ -908,6 +946,9 @@ async fn step(
         Phase::Coding => coding(host, azure, run, &workflow, now, paused).await,
         Phase::PullRequests => pull_requests(host, azure, run, now, poll).await,
         Phase::WaitingDependency => waiting(host, azure, run, now).await,
+        Phase::AddressingReview => {
+            super::review::step(host, azure, run, &workflow, now, paused).await
+        }
         // Paused, its blocks have not run: the stage waits for the pause to end.
         Phase::Blocks if paused => Ok(false),
         Phase::Blocks => {
@@ -1250,6 +1291,8 @@ async fn planning(
                 detail,
                 planning: true,
                 allow: Vec::new(),
+                round: false,
+                resume: None,
             },
         )
         .await;
@@ -1517,12 +1560,23 @@ async fn limit(
         return Ok(None);
     };
     let id = repository.id.to_lowercase();
+    // One run decides at a time, and a run that passes records it before the next decides.
+    let _deciding = host.state.workflows.admission.lock().await;
     let mut runs = host.state.workflows.db.list(&[], None, 500).map_err(fail)?;
-    runs.retain(|r| r.id != run.id);
-    runs.push(run.clone());
+    // This run as it is now, in its place by creation; its own reservation does not count
+    // against it.
+    let mut own = run.clone();
+    own.coding_into = None;
+    match runs.iter_mut().find(|r| r.id == run.id) {
+        Some(slot) => *slot = own,
+        None => runs.insert(0, own),
+    }
     let open = super::dependencies::open_pulls(&runs, &workflow.id, &id);
     let ahead = super::dependencies::queued_before(&runs, run, &id).map(|r| r.id.clone());
     if open.len() < max && ahead.is_none() {
+        run.coding_into = Some(id);
+        run.updated_at = now;
+        host.state.workflows.db.save(run).map_err(fail)?;
         return Ok(None);
     }
     let text = match ahead {
@@ -1598,6 +1652,9 @@ async fn waiting(
     }
     if let Some(changed) = conflicted(host, azure, run, now).await {
         return Ok(changed);
+    }
+    if let Some(started) = super::review::detect(host, azure, run, now).await {
+        return Ok(started);
     }
     if run.dependencies_met != Some(wait.subject) {
         let judged = match judge_dependencies(host, azure, run, wait.subject).await {
@@ -1819,7 +1876,7 @@ async fn creating(host: &Arc<Host>, run: &mut Run, now: i64) -> std::result::Res
 }
 
 /// The plain text of the item's description.
-fn description(detail: &Detail) -> String {
+pub(super) fn description(detail: &Detail) -> String {
     detail
         .fields
         .iter()
@@ -1924,7 +1981,7 @@ fn branch_line(line: &str) -> Option<(Option<String>, String)> {
 
 /// The checkouts a task's coding run is given: its own repository's first (its working
 /// directory), then the workflow's other checkouts in order, at most sixteen.
-fn task_checkouts(
+pub(super) fn task_checkouts(
     workflow: &crate::workflows::Workflow,
     primary: &crate::workflows::Repository,
     directory: &Path,
@@ -2094,11 +2151,15 @@ async fn coding(
                 planning: false,
                 // As the run's definition holds it: later edits do not change this run.
                 allow: workflow.allow.clone(),
+                round: false,
+                resume: None,
             },
         )
         .await;
         return match launched {
             Ok(_) => {
+                // Its coding run counts as open from now on: the reservation ends.
+                run.coding_into = None;
                 let child = &mut run.children[index];
                 if let Some(c) = child.coding.as_mut() {
                     c.started = true;
@@ -2172,7 +2233,7 @@ async fn coding(
 
 /// Read the pull requests of each branch a child reported and record them, keeping what the
 /// user accepted; returns whether they changed.
-async fn detect(
+pub(super) async fn detect(
     host: &Arc<Host>,
     azure: &Azure,
     run: &mut Run,
@@ -2247,6 +2308,10 @@ async fn pull_requests(
         }
         if let Some(stopped) = retarget(host, run, now) {
             return Ok(stopped);
+        }
+        // A reviewer asked for changes: the child's agent corrects it in a review round.
+        if let Some(started) = super::review::detect(host, azure, run, now).await {
+            return Ok(started);
         }
     }
     let coded: Vec<&Child> = run
@@ -2441,6 +2506,17 @@ pub(in crate::app) async fn resume(host: &Arc<Host>, run: &mut Run, now: i64) ->
                     }
                     accepted
                         .push(json!({"child": child.url, "coding_run": coding.id, "ended": ended}));
+                }
+            }
+        }
+        // A review round: one that ended is accepted as it ended and the run returns to the
+        // stage it came from; one whose session did not run to its end starts it again.
+        (Phase::AddressingReview, _) => {
+            if let Some((back, value)) = super::review::resume(run) {
+                stage = back;
+                accepted.push(value);
+                if back == Phase::PullRequests {
+                    run.checked_at = None;
                 }
             }
         }

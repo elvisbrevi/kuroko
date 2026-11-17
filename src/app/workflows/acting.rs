@@ -119,6 +119,19 @@ pub(in crate::app) fn occurrences(run: &Run) -> Vec<Occurrence> {
             }
         }
     }
+    // Each review round: when it starts, and when it sends the pull request back.
+    for child in &run.children {
+        for round in &child.rounds {
+            let key = format!("{}:{}:{}", child.id, round.pull_request, round.n);
+            found.push(at(Stage::ReviewRejected, format!("review_rejected:{key}")));
+            if round.outcome.as_deref() == Some("resubmitted") {
+                found.push(at(
+                    Stage::ReviewResubmitted,
+                    format!("review_resubmitted:{key}"),
+                ));
+            }
+        }
+    }
     if run.state == Phase::Blocks {
         if run.children.iter().any(|c| !c.pull_requests.is_empty()) {
             found.push(at(
@@ -397,6 +410,8 @@ fn stage_word(stage: Stage) -> &'static str {
         Stage::PullRequestsCompleted => "pull_requests_completed",
         Stage::Done => "done",
         Stage::Failed => "failed",
+        Stage::ReviewRejected => "review_rejected",
+        Stage::ReviewResubmitted => "review_resubmitted",
     }
 }
 
@@ -505,20 +520,41 @@ pub(in crate::app) fn render(run: &Run, block: &Block, occurrence: &Occurrence) 
         Stage::CodingStarted => Some("coding_started"),
         _ => None,
     };
-    let child = prefix.and_then(|prefix| {
-        run.children
-            .iter()
-            .find(|c| occurrence.key == format!("{prefix}:{}", c.id))
-    });
+    // A review stage is about one round of one child's pull request.
+    let reviewed = review_round(run, occurrence);
+    let child = prefix
+        .and_then(|prefix| {
+            run.children
+                .iter()
+                .find(|c| occurrence.key == format!("{prefix}:{}", c.id))
+        })
+        .or(reviewed.map(|(c, _)| c));
     let (title, id, link) = match child {
         Some(c) => (c.title.as_str(), c.id, c.url.as_str()),
         None => (run.item.title.as_str(), run.item.id, run.item.url.as_str()),
     };
-    let pulls = match child {
-        Some(c) => pull_request_links(c.pull_requests.iter()),
-        None => pull_request_links(run.children.iter().flat_map(|c| c.pull_requests.iter())),
+    let pulls = match (reviewed, child) {
+        (Some((c, round)), _) => pull_request_links(
+            c.pull_requests
+                .iter()
+                .filter(|p| p.id == round.pull_request),
+        ),
+        (None, Some(c)) => pull_request_links(c.pull_requests.iter()),
+        (None, None) => {
+            pull_request_links(run.children.iter().flat_map(|c| c.pull_requests.iter()))
+        }
     };
-    let values: [(&str, String); 7] = [
+    let reviewers = reviewed
+        .map(|(_, round)| {
+            round
+                .reviewers
+                .iter()
+                .map(|r| plain(&r.name, 100))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let values: [(&str, String); 9] = [
         ("item", format!("{} (#{})", plain(title, 300), id)),
         ("id", id.to_string()),
         // Without brackets, so `[{id} - {title}]({link})` stays one Markdown link.
@@ -527,6 +563,11 @@ pub(in crate::app) fn render(run: &Run, block: &Block, occurrence: &Occurrence) 
         ("pull_requests", pulls),
         ("summary", latest_summary(run)),
         ("state", state_word(run, occurrence.stage).to_owned()),
+        ("reviewers", reviewers),
+        (
+            "round",
+            reviewed.map_or(String::new(), |(_, r)| r.n.to_string()),
+        ),
     ];
     let template = &block.template;
     let mut text = String::new();
@@ -555,11 +596,62 @@ pub(in crate::app) fn render(run: &Run, block: &Block, occurrence: &Occurrence) 
     text.replace("@[", "@\u{200b}[")
 }
 
+/// The child and the round a review-stage occurrence is about.
+fn review_round<'a>(
+    run: &'a Run,
+    occurrence: &Occurrence,
+) -> Option<(&'a super::record::Child, &'a super::record::Round)> {
+    let key = occurrence
+        .key
+        .strip_prefix("review_rejected:")
+        .or_else(|| occurrence.key.strip_prefix("review_resubmitted:"))?;
+    run.children.iter().find_map(|c| {
+        c.rounds
+            .iter()
+            .find(|r| format!("{}:{}:{}", c.id, r.pull_request, r.n) == key)
+            .map(|r| (c, r))
+    })
+}
+
+/// The reviewers of a review-stage occurrence a block mentions: those who are members of the
+/// chat (`members`, as Graph lists them), by the name the chat knows them by.
+pub(in crate::app) fn reviewer_mentions(
+    run: &Run,
+    block: &Block,
+    occurrence: &Occurrence,
+    members: &[Value],
+) -> Vec<String> {
+    if !block.mention_reviewers {
+        return Vec::new();
+    }
+    let Some((_, round)) = review_round(run, occurrence) else {
+        return Vec::new();
+    };
+    round
+        .reviewers
+        .iter()
+        .filter_map(|r| crate::adapters::graph::mention_target(members, &r.name).ok())
+        .map(|(_, name)| name)
+        .filter(|name| !name.contains(']') && name.chars().count() <= crate::workflows::MAX_MENTION)
+        .collect()
+}
+
 /// The message a notification posts: the members the block mentions, then its rendered text.
+#[cfg(all(test, unix))]
 pub(in crate::app) fn compose(
     run: &Run,
     block: &Block,
     occurrence: &Occurrence,
+) -> std::result::Result<String, String> {
+    compose_with(run, block, occurrence, &[])
+}
+
+/// `compose`, also mentioning `reviewers` (members of the chat) after the block's own.
+pub(in crate::app) fn compose_with(
+    run: &Run,
+    block: &Block,
+    occurrence: &Occurrence,
+    reviewers: &[String],
 ) -> std::result::Result<String, String> {
     let mut text = String::new();
     for name in &block.mentions {
@@ -568,6 +660,9 @@ pub(in crate::app) fn compose(
                 "The mention {name} cannot be written as a Teams mention."
             ));
         }
+        text.push_str(&format!("@[{name}] "));
+    }
+    for name in reviewers.iter().filter(|n| !block.mentions.contains(n)) {
         text.push_str(&format!("@[{name}] "));
     }
     text.push_str(&render(run, block, occurrence));
@@ -587,7 +682,19 @@ async fn notify(host: &Arc<Host>, run: &Run, block: &Block, occurrence: &Occurre
     let Some(chat) = &block.chat else {
         return Attempt::of("refused", "The block names no chat.");
     };
-    let (attempt, store) = match compose(run, block, occurrence) {
+    // The reviewers a review-stage block mentions are those the chat has as members.
+    let reviewers = if block.mention_reviewers {
+        match teams_graph(&host.state).await {
+            Ok(graph) => {
+                let members = graph.chat_members(&chat.id).await.unwrap_or_default();
+                reviewer_mentions(run, block, occurrence, &members)
+            }
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let (attempt, store) = match compose_with(run, block, occurrence, &reviewers) {
         Ok(text) => post(host, &chat.id, &text).await,
         Err(reason) => (Attempt::of("refused", reason), None),
     };

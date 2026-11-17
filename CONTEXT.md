@@ -213,6 +213,10 @@ _Avoid_: trigger state, start state
 A Predecessor link in Azure DevOps from a work item to another one whose code it needs. A workflow run reads it before planning the item or coding a child, never infers it, and waits for it without a slot until the predecessor's pull requests are completed into the default branch (or, without pull requests, until its state is completed); a missing, removed or other-project predecessor or a cycle needs the user, who may also skip the wait.
 _Avoid_: blocker, prerequisite, related item (Related links are not dependencies)
 
+**Review round**:
+One correction of a workflow run's pull request after a reviewer rejected it or asked its author for changes: the agent session that coded the work item continues (or a new one takes over with a handover note), corrects the same branch and pull request, answers each thread and sends it back for review; code checks what it did. A workflow allows a few per pull request; past them, or when the agent disagrees, a person decides.
+_Avoid_: retry, rework run (it is the same run and the same pull request)
+
 **Workflow watcher**:
 The coordinator's task that, every few minutes, reads the items assigned to the user in the ready states and starts a run for each it has not seen in that state (a seen ledger), only through a workflow that starts by itself. It only starts runs: the plan-review gate stands, and it never runs on a worker or a shared account.
 _Avoid_: poller, trigger

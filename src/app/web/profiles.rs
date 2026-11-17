@@ -502,6 +502,7 @@ pub(super) const PORTAL_METHODS: &[&str] = &[
     "workflow_run_status",
     "workflow_run_resume",
     "workflow_run_skip_dependency",
+    "workflow_run_update_branch",
     "workflow_run_cancel",
     "workflow_run_assign",
     "workflow_run_restart",

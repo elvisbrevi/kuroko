@@ -26,6 +26,7 @@ const LABELS = {
   creating_children: () => t('Creating the children'),
   coding: () => t('Coding'),
   waiting_dependency: () => t('Waiting for dependencies'),
+  addressing_review: () => t('Addressing the review'),
   pull_requests: () => t('Waiting for pull requests'),
   blocks: () => t('Running the workflow\'s blocks'),
   done: () => t('Done'),

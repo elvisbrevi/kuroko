@@ -52,7 +52,7 @@ pub const MAX_MENTIONS: usize = 20;
 pub const MAX_MENTION: usize = 100;
 pub const MAX_TEMPLATE: usize = 4000;
 /// The placeholders a notification template may hold; code renders them.
-pub const PLACEHOLDERS: [&str; 7] = [
+pub const PLACEHOLDERS: [&str; 9] = [
     "item",
     "id",
     "title",
@@ -60,6 +60,8 @@ pub const PLACEHOLDERS: [&str; 7] = [
     "pull_requests",
     "summary",
     "state",
+    "reviewers",
+    "round",
 ];
 /// The coding agents a workflow can run (the installed CLIs of the implementation flow).
 pub const PROVIDERS: [&str; 3] = ["codex", "claude", "opencode"];
@@ -204,7 +206,7 @@ pub const MAX_OPEN_PULL_REQUESTS: u32 = 10;
 /// requests go into. The default is the behavior before these settings existed, and a default
 /// `delivery` is left out of the map, so a workflow without them is unchanged and an older host
 /// keeps loading it.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Delivery {
     #[serde(default, skip_serializing_if = "is_default_policy")]
@@ -218,11 +220,43 @@ pub struct Delivery {
     /// branch: a predecessor is met once its pull requests are completed into it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_branch: String,
+    /// Review rounds per pull request (0 to 5; 0 turns them off): when a reviewer rejects a
+    /// run's pull request or waits for its author, the child's agent corrects it and sends it
+    /// back for review, at most this many times; one more stops the run for a person.
+    #[serde(
+        default = "default_review_rounds",
+        skip_serializing_if = "is_default_review_rounds"
+    )]
+    pub review_rounds: u32,
+    /// Active comment threads without a negative vote also start a round (after 30 minutes
+    /// without a new comment, and while nobody approved).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review_on_threads: bool,
+}
+impl Default for Delivery {
+    fn default() -> Self {
+        Self {
+            dependency_policy: DependencyPolicy::default(),
+            max_open_pull_requests: 0,
+            target_branch: String::new(),
+            review_rounds: DEFAULT_REVIEW_ROUNDS,
+            review_on_threads: false,
+        }
+    }
 }
 impl Delivery {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+}
+/// Review rounds per pull request a workflow's runs take by default, and at most.
+pub const DEFAULT_REVIEW_ROUNDS: u32 = 2;
+pub const MAX_REVIEW_ROUNDS: u32 = 5;
+fn default_review_rounds() -> u32 {
+    DEFAULT_REVIEW_ROUNDS
+}
+fn is_default_review_rounds(rounds: &u32) -> bool {
+    *rounds == DEFAULT_REVIEW_ROUNDS
 }
 fn is_default_policy(policy: &DependencyPolicy) -> bool {
     *policy == DependencyPolicy::default()
@@ -319,6 +353,10 @@ pub enum Stage {
     PullRequestsCompleted,
     Done,
     Failed,
+    /// A reviewer asked for changes on a pull request: a review round starts.
+    ReviewRejected,
+    /// A review round sent the pull request back for review.
+    ReviewResubmitted,
 }
 
 /// A reusable part of a workflow. Only the fields of its kind are set.
@@ -347,6 +385,10 @@ pub struct Block {
     /// A launcher block's approved launcher of the coordinator.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launcher: Option<LauncherRef>,
+    /// A review-stage notification also mentions the reviewers of the round who are members
+    /// of the chat (the others are written as plain names).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mention_reviewers: bool,
     /// When it last changed (Unix seconds); set by the host when it is saved.
     #[serde(default)]
     pub updated_at: i64,
@@ -452,7 +494,8 @@ pub fn validate_block(block: &Block) -> Result<()> {
                 block.chat.is_none()
                     && block.mentions.is_empty()
                     && block.template.is_empty()
-                    && block.launcher.is_none(),
+                    && block.launcher.is_none()
+                    && !block.mention_reviewers,
                 "Instruction block {id} holds only its text."
             );
         }
@@ -486,12 +529,20 @@ pub fn validate_block(block: &Block) -> Result<()> {
             let unknown = unknown_placeholders(&block.template);
             ensure!(
                 unknown.is_empty(),
-                "Teams notification block {id} uses unknown placeholders ({}); the template may use {{item}}, {{id}}, {{title}}, {{link}}, {{pull_requests}}, {{summary}} and {{state}}.",
+                "Teams notification block {id} uses unknown placeholders ({}); the template may use {{item}}, {{id}}, {{title}}, {{link}}, {{pull_requests}}, {{summary}}, {{state}}, {{reviewers}} and {{round}}.",
                 unknown.join(", ")
             );
             ensure!(
                 block.text.is_empty() && block.launcher.is_none(),
                 "Teams notification block {id} holds only its stage, chat, mentions and template."
+            );
+            ensure!(
+                !block.mention_reviewers
+                    || matches!(
+                        block.stage,
+                        Some(Stage::ReviewRejected | Stage::ReviewResubmitted)
+                    ),
+                "Teams notification block {id} mentions the reviewers only at a review stage (review_rejected, review_resubmitted)."
             );
         }
         Kind::Launcher => {
@@ -515,7 +566,8 @@ pub fn validate_block(block: &Block) -> Result<()> {
                 block.text.is_empty()
                     && block.chat.is_none()
                     && block.mentions.is_empty()
-                    && block.template.is_empty(),
+                    && block.template.is_empty()
+                    && !block.mention_reviewers,
                 "Launcher block {id} holds only its stage and launcher."
             );
         }
@@ -658,6 +710,10 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
             }
         }
     }
+    ensure!(
+        workflow.delivery.review_rounds <= MAX_REVIEW_ROUNDS,
+        "Workflow {id} takes at most {MAX_REVIEW_ROUNDS} review rounds per pull request (0 turns them off)."
+    );
     ensure!(
         workflow.delivery.max_open_pull_requests <= MAX_OPEN_PULL_REQUESTS,
         "Workflow {id} limits its open pull requests per repository to at most {MAX_OPEN_PULL_REQUESTS} (0: no limit)."
@@ -1132,6 +1188,7 @@ pub(crate) mod tests {
             dependency_policy: DependencyPolicy::Stack,
             max_open_pull_requests: 1,
             target_branch: "develop".into(),
+            ..Default::default()
         };
         let text = toml::to_string(&workflow).unwrap();
         assert!(

@@ -407,6 +407,17 @@
     run.dependencies = waiting ? [{ id: 4998, url: `${org}/Payments/_workitems/edit/4998`, title: 'Expose receipt totals', kind: 'Task', project: 'Payments', state: 'In Progress', category: 'InProgress',
       pull_requests: [{ id: 36, url: `${org}/Payments/_git/payments-api/pullrequest/36`, status: 'active', target: 'refs/heads/main' }], satisfied: false, rule: 'pull_requests', reason: 'Pull request !36 is active.' }] : [];
   };
+  // A run whose pull request was rejected and sent back in a review round, or stopped on a conflict.
+  window.__ptaReviewRun = (id, how) => {
+    const run = findRun(id);
+    const child = run.children[0];
+    child.rounds = how ? [{ n: 1, pull_request: 36, url: `${org}/Payments/_git/payments-api/pullrequest/36`, repository: 'payments-api', branch: 'feature/receipts',
+      reviewers: [{ id: 'r1', name: 'Rita Revisora', vote: -10 }], threads: [{ id: 7, status: 'active', author_id: 'r1', author: 'Rita Revisora', text: 'Round half to even.', published_at: '2026-11-16T10:00:00Z' }],
+      started_at: secs(NOW - 7_200_000), mode: 'resumed', return_to: 'pull_requests', outcome: 'resubmitted', finished_at: secs(NOW - 3_600_000), requested: ['Rita Revisora: vote_reset'] }] : [];
+    run.cause = how === 'conflict' ? 'conflict' : null;
+    run.state = how === 'conflict' ? 'needs_attention' : 'coding';
+    run.attention = how === 'conflict' ? 'Pull request https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/36 conflicts with main in CHANGELOG.md.' : null;
+  };
   // A run waiting for the checkouts another run's agent holds (`waiting_for_checkouts`).
   window.__ptaHoldRun = (run, holder) => { const held = workflowRuns.find(r => r.id === run); held.queue_position = null; held.waiting_for_checkouts = holder ? { run: holder, item: findRun(holder).item.url } : null; };
   // A task's child that reported branches in two repositories and one the workflow does not have, as a resume past its
@@ -502,6 +513,14 @@
       if (run.state !== 'waiting_dependency') throw new Error(`[conflict] Workflow run ${run.id} does not wait for its dependencies (it is ${run.state}).`);
       run.state = run.wait.continue_to; run.wait = null; run.updated_at = secs(Date.now());
       return { run: runView(run), skipped: args.dependency ?? 'all' };
+    },
+    workflow_run_update_branch: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_run_update_branch', ...structuredClone(args) });
+      if (!args.confirmed) throw new Error('[invalid_input] Confirm with the user, then call again with confirmed: true.');
+      const run = findRun(args.run);
+      if (run.cause !== 'conflict') throw new Error(`[conflict] Workflow run ${run.id} did not stop on a conflict.`);
+      run.state = 'addressing_review'; run.cause = null; run.attention = null; run.updated_at = secs(Date.now());
+      return { run: runView(run), round: 1 };
     },
     workflow_run_cancel: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_run_cancel', ...structuredClone(args) });

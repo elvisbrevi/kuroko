@@ -79,4 +79,32 @@ function dependencies(run) {
     ...groups.map(([label, list]) => el('div', {}, el('h4', { textContent: label }), el('ul', { class: 'run-dependencies' }, ...list.map(predecessor)))));
 }
 
-export { blocks, children, dependencies, otherBranches, timeline, when };
+/** A review vote in words (Azure DevOps' -10, -5, 0, 5 and 10). */
+function voteText(vote) {
+  return ({ '-10': t('rejected'), '-5': t('waiting for the author'), 5: t('approved with suggestions'), 10: t('approved') })[vote] ?? t('no vote');
+}
+
+/** The review rounds of the run's pull requests: who asked, how the agent took it and how it ended. */
+function rounds(run) {
+  const all = (run.children ?? []).flatMap(child => (child.rounds ?? []).map(round => ({ child, round })));
+  if (!all.length) return el('div', {});
+  const rows = all.map(({ child, round }) => {
+    const outcome = round.outcome ?? 'in_progress';
+    const tone = outcome === 'resubmitted' ? 'ok' : ['in_progress', 'accepted'].includes(outcome) ? 'info' : 'warn';
+    const facts = [
+      round.kind === 'conflict' ? t('Update after a conflict') : (round.reviewers ?? []).map(r => `${r.name}: ${voteText(r.vote)}`).join(', '),
+      round.mode === 'resumed' ? t('Same agent session') : round.mode === 'new_session' ? t('New session with a handover note') : null,
+      (round.threads ?? []).length ? tn(round.threads.length, '1 open thread', '{n} open threads') : null,
+      ...(round.requested ?? []).map(r => tx(r)),
+      round.finished_at ? when(round.finished_at) : when(round.started_at),
+    ].filter(Boolean).join(' · ');
+    return el('li', { 'data-round': `${child.id}:${round.pull_request}:${round.n}` },
+      badge(outcome === 'in_progress' ? t('In progress') : tx(outcome), tone), ' ',
+      link(t('Round {n} of !{id}', { n: String(round.n), id: String(round.pull_request) }), round.url),
+      el('small', { class: 'hint', textContent: ` · ${facts}` }),
+      (round.missing ?? []).length ? el('p', { class: 'hint run-round-missing', textContent: t('Not found: {what}', { what: round.missing.map(m => tx(m)).join('; ') }) }) : null);
+  });
+  return el('details', { class: 'fold', open: true, id: 'run-rounds' }, el('summary', { textContent: tn(rows.length, 'Review rounds (1)', 'Review rounds ({n})') }), el('ul', { class: 'run-rounds' }, ...rows));
+}
+
+export { blocks, children, dependencies, otherBranches, rounds, timeline, when };
