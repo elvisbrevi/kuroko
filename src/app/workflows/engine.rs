@@ -563,6 +563,21 @@ async fn advance(host: &Arc<Host>, azure: &Azure, id: &str, now: i64, poll: i64)
         if paused && (run.waits_for_slot() || run.state == Phase::Classifying) {
             return Ok(());
         }
+        // Its next launch needs checkouts another run's agent holds on that machine: it waits
+        // for them without a slot (giving back one it took), instead of being refused.
+        if run.state.takes_slot() && record::needs(&run).is_some() {
+            let driven: Vec<Phase> = Phase::ALL.into_iter().filter(|s| s.driven()).collect();
+            let others = state.db.list(&driven, None, -1)?;
+            if let Some(holder) = record::held_by(&others, &run) {
+                let why = held(holder);
+                let released = std::mem::take(&mut run.admitted);
+                if wait(&mut run, why).unwrap_or(false) || released {
+                    run.updated_at = now;
+                    state.db.save(&run)?;
+                }
+                return Ok(());
+            }
+        }
         if run.waits_for_slot() && !admit(host, &mut run, now).await? {
             return Ok(());
         }
@@ -625,11 +640,20 @@ fn wait(run: &mut Run, why: String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Why a run waits for checkouts: the run whose agent holds them, and where.
+pub(in crate::app) fn held(holder: &Run) -> String {
+    let machine = record::holds(holder).map(|(m, _)| m).unwrap_or_default();
+    format!(
+        "Waiting for the checkouts that workflow run {} ({}) is using on machine {machine}; it continues when they are free.",
+        holder.id, holder.item.url
+    )
+}
+
 /// A launch refusal the run waits through (the machine is offline or busy with these
 /// directories) rather than one that fails it.
 fn transient(error: &str) -> bool {
     error.contains("offline")
-        || error.contains("Another run is using these directories")
+        || error.contains(implementation::DIRECTORIES_BUSY)
         || error.contains("could not be reached")
         || error.contains("did not answer")
 }

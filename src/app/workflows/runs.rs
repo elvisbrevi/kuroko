@@ -152,6 +152,8 @@ pub(in crate::app) fn allow_effect(workflow: &crate::workflows::Workflow) -> Str
 /// Where the runs stand in the line for a slot and which pauses are in force.
 struct Places {
     places: HashMap<String, usize>,
+    /// The runs that wait for checkouts another run's agent holds: that run's ID and item link.
+    held: HashMap<String, (String, String)>,
     pauses: Vec<record::Pause>,
 }
 /// The place in the line for a slot of every run waiting for one (1 is next), and the pauses.
@@ -160,8 +162,15 @@ fn places(state: &DesktopState) -> Result<Places, String> {
     let mut runs = state.workflows.db.list(&driven, None, -1).map_err(fail)?;
     runs.reverse();
     let pauses = state.workflows.db.pauses().map_err(fail)?;
+    let held = runs
+        .iter()
+        .filter_map(|r| {
+            record::held_by(&runs, r).map(|h| (r.id.clone(), (h.id.clone(), h.item.url.clone())))
+        })
+        .collect();
     Ok(Places {
         places: record::positions(&runs, now(), &pauses),
+        held,
         pauses,
     })
 }
@@ -171,6 +180,13 @@ fn placed(mut value: Value, run: &Run, places: &Places) -> Value {
     let place = places.places.get(&run.id);
     value["waiting_for_slot"] = json!(place.is_some());
     value["queue_position"] = json!(place);
+    // Out of the line until the checkouts its next launch needs are free.
+    value["waiting_for_checkouts"] = json!(
+        places
+            .held
+            .get(&run.id)
+            .map(|(id, url)| json!({"run": id, "item": url}))
+    );
     value["paused"] =
         json!(!run.state.finished() && record::paused(&places.pauses, &run.item.project));
     value

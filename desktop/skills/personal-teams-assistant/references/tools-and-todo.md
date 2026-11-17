@@ -613,7 +613,11 @@ run (any state but `done` and `cancelled`).
   too as `workflow_attention`). A run in a stage that takes one of the `concurrency` slots
   (`planning`, `creating_children`, `coding`, `blocks`) without one shows `waiting_for_slot:
   true` and its `queue_position` (1 is next): slots go in creation order, and a run whose
-  classification is retrying keeps its place once its retry is due. `pta workflows status RUN` (MCP `workflow_run_status`) is the
+  classification is retrying keeps its place once its retry is due. A run whose next planning
+  or coding launch needs checkouts that another run's agent is using on that machine (two runs of
+  one workflow share its checkouts; a task's run uses every one) waits out of the line without a
+  slot and shows `waiting_for_checkouts: {run, item}`, with the reason in `error`; it takes its
+  place by creation again once they are free, and is never failed for it. `pta workflows status RUN` (MCP `workflow_run_status`) is the
   whole record: the stage timeline with times and outcomes, the planning run and each child's
   coding run (`implementation_runs` with the machine and ID shows them), the creation ledger entry
   (`implementation_creation`), every child's verified link, branch (a task's branches in other

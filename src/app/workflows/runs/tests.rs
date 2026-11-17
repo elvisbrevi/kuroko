@@ -673,15 +673,28 @@ async fn a_planned_child_keeps_its_one_repository_and_two_task_runs_of_a_workflo
             r.children[0].coding.as_ref().is_some_and(|c| c.started)
         })
         .await;
+    // The engine sees that the first run's agent holds those checkouts: the second waits for
+    // them without asking the machine and without a slot, out of the line.
     let waiting = bench
         .until(&second, |r| {
             r.error
                 .as_deref()
-                .is_some_and(|e| e.contains("Another run is using these directories"))
+                .is_some_and(|e| e.contains("Waiting for the checkouts") && e.contains(&first))
         })
         .await;
-    assert!(waiting.admitted);
-    assert!(!waiting.children[0].coding.as_ref().unwrap().started);
+    assert!(!waiting.admitted);
+    // Nothing was asked of the machine: not even the coding run's ID is recorded yet.
+    assert!(waiting.children[0].coding.is_none());
+    let listed = bench.op("workflow_runs", json!({})).await.unwrap();
+    let (slot, _) = place(&listed, &second);
+    assert!(!slot);
+    let shown = listed["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == second.as_str())
+        .unwrap();
+    assert_eq!(shown["waiting_for_checkouts"]["run"], first.as_str());
     // The first run's CLI logs its start a moment after its launch is accepted.
     while bench.count("starts") == 0 {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -1222,18 +1235,20 @@ async fn a_coding_run_holds_its_slot_and_directories_until_the_session_ends_not_
     let waiting = bench.run(&second);
     assert!(!waiting.admitted);
 
-    // With a second slot the next run is admitted, but its launch on the same checkout is
-    // refused as busy and it waits.
+    // With a second slot the next run is still not admitted: the first run's session holds
+    // the checkouts it needs, so it waits for them without a slot and nothing is launched.
     map.workflow_settings.concurrency = 2;
     bench.host.state.settings.save_map(&map).unwrap();
     let waiting = bench
         .until(&second, |r| {
             r.error
                 .as_deref()
-                .is_some_and(|e| e.contains("Another run is using these directories"))
+                .is_some_and(|e| e.contains("Waiting for the checkouts"))
         })
         .await;
-    assert!(!waiting.children[0].coding.as_ref().unwrap().started);
+    assert!(!waiting.admitted);
+    // Nothing was asked of the machine: not even the coding run's ID is recorded yet.
+    assert!(waiting.children[0].coding.is_none());
     assert_eq!(bench.count("starts"), 1);
 
     // The later turn finishes the work: the run ends done with that turn's branch.
@@ -1622,6 +1637,17 @@ fn coded(bench: &Bench) -> Vec<u64> {
         .collect()
 }
 
+/// The run whose agent holds the checkouts a listed run waits for.
+fn checkouts<'a>(listed: &'a Value, id: &str) -> &'a str {
+    listed["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id)
+        .unwrap()["waiting_for_checkouts"]["run"]
+        .as_str()
+        .unwrap_or_default()
+}
 fn place(listed: &Value, id: &str) -> (bool, Value) {
     let run = listed["runs"]
         .as_array()
@@ -1693,28 +1719,35 @@ async fn a_run_whose_director_failed_twice_is_coded_before_the_runs_created_afte
     bench.offset.store(61, Ordering::SeqCst);
     let run = bench.until(&retried, |r| r.retries == 2).await;
     assert_eq!(run.state, Phase::Classifying);
-    // Waiting out its retry, it is not in the line.
+    // Waiting out its retry, it is not in the line; the two classified wait for the checkouts
+    // the first run's agent holds (a task's run uses every checkout of its workflow).
     let listed = bench.op("workflow_runs", json!({})).await.unwrap();
     assert_eq!(place(&listed, &retried), (false, Value::Null));
-    assert_eq!(place(&listed, &second), (true, json!(1)));
-    assert_eq!(place(&listed, &third), (true, json!(2)));
     assert_eq!(place(&listed, &first), (false, Value::Null));
-    // It answers on its next try and takes its place, before the two created after it.
+    for id in [&second, &third] {
+        assert_eq!(place(&listed, id), (false, Value::Null));
+        assert_eq!(checkouts(&listed, id), first.as_str());
+    }
+    // It answers on its next try and waits for the same checkouts.
     bench.catalog.failing_items.lock().unwrap().remove(&201);
     bench.offset.store(61 + 121, Ordering::SeqCst);
     bench.state(&retried, Phase::Coding).await;
     let listed = bench.op("workflow_runs", json!({})).await.unwrap();
-    assert_eq!(place(&listed, &retried), (true, json!(1)));
-    assert_eq!(place(&listed, &second), (true, json!(2)));
-    assert_eq!(place(&listed, &third), (true, json!(3)));
+    for id in [&retried, &second, &third] {
+        assert_eq!(checkouts(&listed, id), first.as_str());
+    }
     let status = bench
         .op("workflow_run_status", json!({"run": third}))
         .await
         .unwrap();
-    assert_eq!(status["run"]["waiting_for_slot"], true);
-    assert_eq!(status["run"]["queue_position"], 3);
+    assert_eq!(status["run"]["waiting_for_slot"], false);
+    assert_eq!(
+        status["run"]["waiting_for_checkouts"]["run"],
+        first.as_str()
+    );
     assert_eq!(bench.count("starts"), 1);
-    // The slot frees.
+    // The slot and the checkouts free: they are coded in their place by creation, the retried
+    // run before the two created after it.
     bench.mode("mode", "done");
     bench.release();
     for id in [&first, &retried, &second, &third] {
@@ -2484,4 +2517,121 @@ async fn a_worker_reports_why_its_sessions_did_not_end_with_their_answer() {
             }
         );
     }
+}
+
+#[tokio::test]
+async fn a_launch_a_worker_refuses_because_its_directories_are_busy_waits_instead_of_failing() {
+    let bench = Bench::new().await;
+    let (worker, token) = worker(&bench).await;
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflows[0].machine = worker.clone();
+    bench.host.state.settings.save_map(&map).unwrap();
+    let id = bench.start(TASK).await;
+    // The first tick records the coding run's ID, the second asks the worker to launch it,
+    // which holds the directories for a run started outside the workflow.
+    let ticking = {
+        let (host, azure, now) = (bench.host.clone(), bench.azure.clone(), bench.now());
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                engine::tick(&host, &azure, now, engine::PULL_REQUEST_POLL_SECONDS)
+                    .await
+                    .unwrap();
+            }
+        })
+    };
+    let (_, methods) = serve(&bench, (&worker, &token), ticking, async |command| {
+        if command["method"] == "implementation_launch" {
+            json!({"ok":false,"refusal":"directories_busy"})
+        } else {
+            json!({"ok":true,"data":{"runs":[]}})
+        }
+    })
+    .await;
+    assert!(
+        methods.iter().any(|m| m == "implementation_launch"),
+        "{methods:?}"
+    );
+    let run = bench.run(&id);
+    assert_eq!(run.state, Phase::Coding, "{:?}", run.attention);
+    assert_eq!(run.error.as_deref(), Some(implementation::DIRECTORIES_BUSY));
+    assert!(!run.children[0].coding.as_ref().unwrap().started);
+}
+
+#[test]
+fn a_run_needing_checkouts_another_runs_agent_holds_is_out_of_the_line() {
+    let workflow = |machine: &str, checkouts: &[(&str, &str)]| crate::workflows::Workflow {
+        machine: machine.into(),
+        checkouts: checkouts
+            .iter()
+            .map(|(r, d)| ((*r).to_owned(), PathBuf::from(d)))
+            .collect(),
+        ..crate::workflows::tests::workflow("payments")
+    };
+    let item = |id: u64, category: &str| Item {
+        id,
+        category: category.into(),
+        url: format!("https://dev.azure.com/example/Payments/_workitems/edit/{id}"),
+        ..Default::default()
+    };
+    let coding = |run: &mut Run, definition: &crate::workflows::Workflow, started: bool| {
+        run.definition = Some(definition.clone());
+        run.state = Phase::Coding;
+        run.children = vec![record::Child {
+            id: run.item.id,
+            coding: Some(record::Implementation {
+                id: uuid::Uuid::new_v4().to_string(),
+                machine: definition.machine.clone(),
+                started,
+                state: started.then(|| "running".into()),
+                failure: None,
+            }),
+            ..Default::default()
+        }];
+    };
+    // Windows checkouts, spelled by the machine and read on another system.
+    let windows = workflow(
+        "m1",
+        &[("a", "D:\\code\\sag\\api"), ("b", "D:\\code\\sag\\web")],
+    );
+    let mut runs: Vec<Run> = vec![
+        Run::new(item(1, "task"), 100),
+        Run::new(item(2, "task"), 101),
+        Run::new(item(3, "task"), 102),
+    ];
+    coding(&mut runs[0], &windows, true);
+    runs[0].admitted = true;
+    coding(&mut runs[1], &windows, false);
+    // Another workflow on another machine with the same directories is not held up.
+    coding(
+        &mut runs[2],
+        &workflow("m2", &[("a", "d:/CODE/sag/api")]),
+        false,
+    );
+    let ids: Vec<String> = runs.iter().map(|r| r.id.clone()).collect();
+    assert_eq!(
+        record::held_by(&runs, &runs[1]).map(|r| &r.id),
+        Some(&ids[0])
+    );
+    assert!(record::held_by(&runs, &runs[2]).is_none());
+    // The held run is out of the line: the next run takes the free slot.
+    assert!(!record::may_take_slot(&runs, &ids[1], 2, 200, &[]));
+    assert!(record::may_take_slot(&runs, &ids[2], 2, 200, &[]));
+    assert_eq!(record::positions(&runs, 200, &[]).get(&ids[1]), None);
+    // The same letter case on the same machine overlaps; a nested directory too.
+    runs[2].definition.as_mut().unwrap().machine = "m1".into();
+    assert_eq!(
+        record::held_by(&runs, &runs[2]).map(|r| &r.id),
+        Some(&ids[0])
+    );
+    // Once the holder's agent ended, the directories are free and the run is back in its place.
+    runs[0].children[0].coding.as_mut().unwrap().state = Some("done".into());
+    assert!(record::held_by(&runs, &runs[1]).is_none());
+    assert!(record::may_take_slot(&runs, &ids[1], 2, 200, &[]));
+    // A planned child already placed holds only its own checkout.
+    runs[0].item.category = "requirement".into();
+    runs[0].children[0].directory = Some(PathBuf::from("D:\\code\\sag\\web"));
+    runs[0].children[0].coding.as_mut().unwrap().state = Some("running".into());
+    runs[2].definition = Some(workflow("m1", &[("a", "D:\\code\\sag\\api")]));
+    assert!(record::held_by(&runs, &runs[2]).is_none());
+    assert!(record::held_by(&runs, &runs[1]).is_some());
 }

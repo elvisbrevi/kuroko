@@ -376,9 +376,9 @@
   ] : [];
   const runSummary = run => ({ id: run.id, workflow: run.workflow, item: { id: run.item.id, title: run.item.title, url: run.item.url, kind: run.item.kind, category: run.item.category, project: run.item.project }, state: run.state, stage: run.stopped_in ?? run.state, attention: run.attention,
     waits_on_user: ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'].includes(run.state), children: run.children.length, pull_requests: run.children.flatMap(c => c.pull_requests.map(p => ({ url: p.url, status: p.status }))), created_at: run.created_at, updated_at: run.updated_at, finished_at: run.finished_at,
-    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, paused: pausedRun(run), continues: run.continues ?? null, restarted_as: run.restarted_as ?? null });
+    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, waiting_for_checkouts: run.waiting_for_checkouts ?? null, paused: pausedRun(run), continues: run.continues ?? null, restarted_as: run.restarted_as ?? null });
   const runView = run => { const view = { ...structuredClone(run), stage: run.stopped_in ?? run.state, waits_on_user: runSummary(run).waits_on_user, paused: pausedRun(run),
-    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, supervision: structuredClone(run.supervision ?? []), supervising: structuredClone(run.supervising ?? []) }; delete view.fresh; return view; };
+    waiting_for_slot: Boolean(run.queue_position), queue_position: run.queue_position ?? null, waiting_for_checkouts: run.waiting_for_checkouts ?? null, supervision: structuredClone(run.supervision ?? []), supervising: structuredClone(run.supervising ?? []) }; delete view.fresh; return view; };
   // The pauses in force (`workflow_runs_pause`): every project's, or one project's by name.
   let workflowPauses = [];
   const pausedRun = run => !['done', 'cancelled'].includes(run.state) && workflowPauses.some(p => !p.project || p.project.toLowerCase() === run.item.project.toLowerCase());
@@ -399,6 +399,8 @@
     found.summary_sends.push({ id: crypto.randomUUID(), summary: latest.id, chat: { id: chat, topic: teamsChats.find(c => c.id === chat)?.topic, type: 'group' }, mentions: [], chars: latest.text.length, edited: false, outcome: 'uncertain', at: secs(Date.now()) }); };
   // A run in the line for one of the `concurrency` slots (its place, 1 next), or out of it with null.
   window.__ptaQueueRun = (run, position) => { workflowRuns.find(r => r.id === run).queue_position = position; };
+  // A run waiting for the checkouts another run's agent holds (`waiting_for_checkouts`).
+  window.__ptaHoldRun = (run, holder) => { const held = workflowRuns.find(r => r.id === run); held.queue_position = null; held.waiting_for_checkouts = holder ? { run: holder, item: findRun(holder).item.url } : null; };
   // A task's child that reported branches in two repositories and one the workflow does not have, as a resume past its
   // coding run records them.
   window.__ptaDeliverTask = run => { const child = workflowRuns.find(r => r.id === run).children[0];
