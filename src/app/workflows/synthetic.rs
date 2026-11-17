@@ -21,6 +21,8 @@ pub(in crate::app) struct Catalog {
     /// Predecessor links by successor, and the predecessors' facts (a test's dependencies).
     links: Mutex<BTreeMap<u64, Vec<u64>>>,
     nodes: Mutex<BTreeMap<u64, crate::ado::dependencies::Node>>,
+    /// The files each pull request conflicts on.
+    conflict_files: Mutex<BTreeMap<u64, Vec<String>>>,
     /// Every request, as `GET what`.
     pub requests: Mutex<Vec<String>>,
     /// The items whose reads fail, as during an outage.
@@ -163,6 +165,26 @@ impl Catalog {
             graph.nodes.insert(id, node);
         }
         Ok(graph)
+    }
+    /// The files a pull request conflicts on, as the next read returns them.
+    #[cfg(unix)]
+    pub(in crate::app) fn set_conflicts(&self, pull_request: u64, files: &[&str]) {
+        self.conflict_files
+            .lock()
+            .unwrap()
+            .insert(pull_request, files.iter().map(|f| f.to_string()).collect());
+    }
+    pub(in crate::app) fn conflicts(&self, pull_request: u64) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET conflicts {pull_request}"));
+        self.conflict_files
+            .lock()
+            .unwrap()
+            .get(&pull_request)
+            .cloned()
+            .unwrap_or_default()
     }
     /// Every repository's default branch: `main`.
     pub(in crate::app) fn default_branches(&self) -> std::collections::HashMap<String, String> {

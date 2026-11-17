@@ -42,6 +42,8 @@ pub const MAX_CONTEXT: usize = 100_000;
 /// The last release whose hosts accept only 10 blocks and 8000 characters of instructions per
 /// workflow: a map holding a larger workflow does not load there.
 pub const OLDER_LIMITS_UNTIL: &str = "0.12.22";
+/// The newest release whose hosts cannot read a workflow's `delivery`.
+pub const OLDER_DELIVERY_UNTIL: &str = "0.14.1";
 pub const OLDER_MAX_WORKFLOW_BLOCKS: usize = 10;
 pub const OLDER_MAX_INSTRUCTIONS: usize = 8000;
 pub const MAX_MENTIONS: usize = 20;
@@ -175,6 +177,60 @@ pub fn describe_preapprove(preapprove: &[Preapproval]) -> String {
     )
 }
 
+/// How a run of the workflow treats a child whose predecessor's pull request is not completed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyPolicy {
+    /// Wait until the predecessor's pull requests are completed (the default).
+    #[default]
+    WaitForPullRequest,
+    /// Start from the predecessor's branch and open a pull request stacked on it, while the
+    /// predecessor has exactly one open pull request whose branch is known.
+    Stack,
+}
+impl DependencyPolicy {
+    pub fn word(self) -> &'static str {
+        match self {
+            DependencyPolicy::WaitForPullRequest => "wait_for_pull_request",
+            DependencyPolicy::Stack => "stack",
+        }
+    }
+}
+
+/// The most open pull requests per repository a workflow may limit itself to.
+pub const MAX_OPEN_PULL_REQUESTS: u32 = 10;
+
+/// How a workflow delivers: what its runs wait for before coding and which branch their pull
+/// requests go into. The default is the behavior before these settings existed, and a default
+/// `delivery` is left out of the map, so a workflow without them is unchanged and an older host
+/// keeps loading it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Delivery {
+    #[serde(default, skip_serializing_if = "is_default_policy")]
+    pub dependency_policy: DependencyPolicy,
+    /// At most this many open pull requests of the workflow's runs per repository (0: no
+    /// limit): a run whose next child would open one more waits in `waiting_dependency`, in
+    /// its place by creation, though it has no declared dependency.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_open_pull_requests: u32,
+    /// The branch the runs' pull requests go into, when it is not each repository's default
+    /// branch: a predecessor is met once its pull requests are completed into it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_branch: String,
+}
+impl Delivery {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+fn is_default_policy(policy: &DependencyPolicy) -> bool {
+    *policy == DependencyPolicy::default()
+}
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A saved recipe for implementing items of one Azure DevOps project.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -213,6 +269,10 @@ pub struct Workflow {
     /// saving a workflow that pre-approves anything needs the user's confirmation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preapprove: Vec<Preapproval>,
+    /// How its runs deliver (dependency policy, open pull requests per repository, target
+    /// branch); left out while it is the default.
+    #[serde(default, skip_serializing_if = "Delivery::is_default")]
+    pub delivery: Delivery,
     /// When it last changed (Unix seconds); set by the host when it is saved.
     #[serde(default)]
     pub updated_at: i64,
@@ -598,6 +658,16 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
             }
         }
     }
+    ensure!(
+        workflow.delivery.max_open_pull_requests <= MAX_OPEN_PULL_REQUESTS,
+        "Workflow {id} limits its open pull requests per repository to at most {MAX_OPEN_PULL_REQUESTS} (0: no limit)."
+    );
+    let target = &workflow.delivery.target_branch;
+    ensure!(
+        target.is_empty()
+            || crate::ado::workflow::valid_branch(target.trim_start_matches("refs/heads/")),
+        "Workflow {id}'s target branch is a plain Git branch name, such as develop."
+    );
     ensure!(workflow.updated_at >= 0, "Invalid date in workflow {id}.");
     Ok(())
 }
@@ -1052,6 +1122,33 @@ pub(crate) mod tests {
     const REPO: &str = "0f3c6a2e-5b1d-4f7a-9c8e-1a2b3c4d5e6f";
     const OTHER: &str = "7d9e1f20-3a4b-4c5d-8e6f-0a1b2c3d4e5f";
     const MACHINE: &str = "5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d";
+
+    #[test]
+    fn delivery_is_left_out_while_default_and_its_values_are_bounded() {
+        let mut workflow = workflow("payments");
+        let text = toml::to_string(&workflow).unwrap();
+        assert!(!text.contains("delivery"));
+        workflow.delivery = Delivery {
+            dependency_policy: DependencyPolicy::Stack,
+            max_open_pull_requests: 1,
+            target_branch: "develop".into(),
+        };
+        let text = toml::to_string(&workflow).unwrap();
+        assert!(
+            text.contains("dependency_policy = \"stack\"")
+                && text.contains("max_open_pull_requests = 1")
+        );
+        let back: Workflow = toml::from_str(&text).unwrap();
+        assert_eq!(back.delivery, workflow.delivery);
+        assert!(validate_workflow(&workflow).is_ok());
+        workflow.delivery.max_open_pull_requests = MAX_OPEN_PULL_REQUESTS + 1;
+        assert!(validate_workflow(&workflow).is_err());
+        workflow.delivery.max_open_pull_requests = 1;
+        workflow.delivery.target_branch = "bad..branch".into();
+        assert!(validate_workflow(&workflow).is_err());
+        workflow.delivery.target_branch = "refs/heads/develop".into();
+        assert!(validate_workflow(&workflow).is_ok());
+    }
 
     pub(crate) fn workflow(id: &str) -> Workflow {
         Workflow {

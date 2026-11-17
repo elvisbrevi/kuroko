@@ -32,6 +32,9 @@ pub struct LinkedPull {
     pub status: String,
     /// The branch it merges into (`refs/heads/NAME`).
     pub target: String,
+    /// The branch it merges from (`refs/heads/NAME`).
+    #[serde(default)]
+    pub source: String,
     /// Its verified link.
     pub url: String,
 }
@@ -247,6 +250,12 @@ async fn read_pull(
         repository_name: name.chars().take(200).collect(),
         status: status.into(),
         target: pull["targetRefName"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(300)
+            .collect(),
+        source: pull["sourceRefName"]
             .as_str()
             .unwrap_or_default()
             .chars()

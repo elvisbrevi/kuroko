@@ -426,6 +426,38 @@ pub(in crate::app) async fn pull_requests(
     .await
 }
 
+/// The files a workflow run's pull request conflicts on with its target branch, read with the
+/// enabled Azure source's read credential (never cached, nothing written).
+pub(in crate::app) async fn conflicts(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    project: &str,
+    repository: &str,
+    pull_request: u64,
+) -> Result<Vec<String>, String> {
+    project_read(
+        state,
+        source,
+        "reading a pull request's conflicts",
+        "pull request conflicts",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::conflicts(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                organization,
+                project,
+                repository,
+                pull_request,
+            )
+            .await
+        },
+    )
+    .await
+}
+
 /// The predecessor graph of a work item (`ado::dependencies`), read with the enabled Azure
 /// source's read credential (the workflow engine; only the states' categories are cached,
 /// nothing written).

@@ -2262,6 +2262,20 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForTimeout(300);
   const reordered = (await calls()).filter(c => c.method === 'workflow_save' && c.workflow?.id === 'payments-features').pop();
   check(`workflows ${label}: blocks are reordered and saved in order`, reordered?.workflow.blocks.join() === 'notify-release,base-branch', JSON.stringify(reordered?.workflow?.blocks));
+  check(`workflows ${label}: a workflow without delivery settings is saved without them`, !('delivery' in (reordered?.workflow ?? {})), JSON.stringify(reordered?.workflow));
+  // Delivery settings: one open pull request per repository and a target branch, sent as set.
+  await payments.locator('input[data-delivery="max_open_pull_requests"]').fill('1');
+  await payments.locator('input[data-delivery="target_branch"]').fill('develop');
+  await payments.locator('select[data-delivery="dependency_policy"]').selectOption('stack');
+  const deliveryScan = await scan(page);
+  check(`workflows ${label}: the delivery settings pass WCAG 2.2 AA`, deliveryScan.length === 0, JSON.stringify(deliveryScan));
+  await payments.locator('button', { hasText: 'Guardar workflow' }).click();
+  await page.waitForTimeout(300);
+  const delivered = (await calls()).filter(c => c.method === 'workflow_save' && c.workflow?.id === 'payments-features').pop();
+  check(`workflows ${label}: delivery settings are saved as set`, JSON.stringify(delivered?.workflow?.delivery) === JSON.stringify({ dependency_policy: 'stack', max_open_pull_requests: 1, target_branch: 'develop' }), JSON.stringify(delivered?.workflow?.delivery));
+  await payments.locator('input[data-delivery="max_open_pull_requests"]').fill('0');
+  await payments.locator('input[data-delivery="target_branch"]').fill('');
+  await payments.locator('select[data-delivery="dependency_policy"]').selectOption('wait_for_pull_request');
   // A box that lifts a fixed rule of the coding agent is reviewed first, then saved confirmed.
   const savesBefore = (await calls()).filter(c => c.method === 'workflow_save' && c.workflow?.id === 'payments-features').length;
   await payments.locator('input[data-allow="merge"]').check();
