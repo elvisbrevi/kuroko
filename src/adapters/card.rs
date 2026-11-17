@@ -4,8 +4,10 @@
 //!
 //! The stripe is a tiny PNG painted down the card's left edge, so any color works; the band
 //! uses a Teams container style, which Teams shades for its light or dark theme. The card holds
-//! only text, links checked by the pipeline and the message's own images (its Graph hosted
-//! contents): no actions, inputs or remote images.
+//! text, links checked like every Markdown link (HTTPS only), the card blocks of [`blocks`]
+//! (facts, link buttons, badges, progress bars, charts, collapsible details and callouts, all
+//! drawn by Teams itself) and the message's own images (its Graph hosted contents): no inputs,
+//! submit actions or remote images, since the message is the user's and no bot receives them.
 //!
 //! A card that does not fit in one message is laid out compactly first (paragraph lines in one
 //! block, tables as lines, code without its fallback); a message still too large is rewritten
@@ -17,6 +19,9 @@ use crate::llm::LlmProvider;
 use base64::Engine;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+
+mod blocks;
+pub use blocks::GUIDE;
 
 /// Graph's attachment type for an Adaptive Card.
 pub const CONTENT_TYPE: &str = "application/vnd.microsoft.card.adaptive";
@@ -99,7 +104,7 @@ fn content(
         && let Ok(mentioned) = serde_json::from_str::<Value>(&content)
     {
         card = mentioned;
-        card["msteams"] = json!({"entities": entities});
+        card["msteams"]["entities"] = json!(entities);
         content = card.to_string();
     }
     content
@@ -121,7 +126,7 @@ fn laid_out(
         "fillMode": "RepeatVertically",
         "horizontalAlignment": "Left",
     });
-    let mut body = elements(markdown, true, layout);
+    let mut body = elements(markdown, true, layout, language);
     if style.text_size != TextSize::Default {
         body.iter_mut().for_each(|e| resize(e, style.text_size));
     }
@@ -141,13 +146,18 @@ fn laid_out(
             body.push(band);
         }
     }
-    json!({
+    let mut card = json!({
         "type": "AdaptiveCard",
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "version": "1.5",
         "backgroundImage": stripe,
         "body": body,
-    })
+    });
+    // A table or a chart gets the chat's whole width on a wide screen.
+    if blocks::wide(&card["body"]) {
+        card["msteams"] = json!({"width": "Full"});
+    }
+    card
 }
 
 /// The text of a Graph chat message: its body and the text of its Adaptive Cards, without the
@@ -302,6 +312,11 @@ fn texts(value: &Value, out: &mut Vec<String>) {
             {
                 return;
             }
+            // Facts, buttons, charts and rich text read as the words they show.
+            if let Some(read) = blocks::read(value) {
+                out.extend(read);
+                return;
+            }
             for key in ["text", "codeSnippet"] {
                 if let Some(text) = object.get(key).and_then(Value::as_str) {
                     out.push(text.to_owned());
@@ -364,7 +379,7 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
 /// The answer's Markdown as card elements, with the blocks `teams::html` knows: every line of a
 /// paragraph or list is its own text block, so line breaks never depend on the client (in the
 /// compact layout they share one block, a paragraph each).
-fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
+fn elements(markdown: &str, quotes: bool, layout: Layout, language: Language) -> Vec<Value> {
     let item = regex::Regex::new(r"^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$").unwrap();
     let lines: Vec<&str> = markdown.lines().collect();
     let mut out = Vec::new();
@@ -378,10 +393,19 @@ fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
         let trimmed = line.trim_start();
         if let Some(lang) = trimmed.strip_prefix("```") {
             let mut body = Vec::new();
+            // A `details` block may hold blocks that name their kind (```buttons…```).
+            let nests = lang.trim().to_lowercase().starts_with("details");
+            let mut depth = 0;
             while let Some(line) = lines.get(next) {
                 next += 1;
-                if line.trim_start().starts_with("```") {
-                    break;
+                if let Some(info) = line.trim_start().strip_prefix("```") {
+                    if nests && !info.trim().is_empty() {
+                        depth += 1;
+                    } else if depth > 0 {
+                        depth -= 1;
+                    } else {
+                        break;
+                    }
                 }
                 let strip = line
                     .chars()
@@ -390,11 +414,10 @@ fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
                     .count();
                 body.push(line.chars().skip(strip).collect::<String>());
             }
-            push(
-                &mut out,
-                &mut gap,
-                code(&lang.trim().to_lowercase(), &body, layout),
-            );
+            // A card block, or code.
+            let element = blocks::fenced(lang.trim(), &body, layout, language)
+                .unwrap_or_else(|| code(&lang.trim().to_lowercase(), &body, layout));
+            push(&mut out, &mut gap, element);
             gap = Gap::Block;
             lists.clear();
             continue;
@@ -434,16 +457,31 @@ fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
                 quoted.push(more);
                 next += 1;
             }
-            let body: Vec<&str> = quoted
+            let mut body: Vec<&str> = quoted
                 .iter()
                 .map(|l| l.strip_prefix(' ').unwrap_or(l))
                 .collect();
-            let items = elements(&body.join("\n"), false, layout);
+            // `> [!WARNING]` and the like: a callout in its color, led by its emoji.
+            let callout = body.first().and_then(|first| blocks::callout(first));
+            if callout.is_some() {
+                body.remove(0);
+            }
+            let (style, emoji) = callout.unwrap_or(("emphasis", ""));
+            let mut items = elements(&body.join("\n"), false, layout, language);
+            if !emoji.is_empty() {
+                match items.first_mut() {
+                    Some(first) if first["type"] == "TextBlock" => {
+                        let text = first["text"].as_str().unwrap_or("");
+                        first["text"] = json!(format!("{emoji} {text}"));
+                    }
+                    _ => items.insert(0, text_block(emoji.to_owned())),
+                }
+            }
             if !items.is_empty() {
                 push(
                     &mut out,
                     &mut gap,
-                    json!({"type": "Container", "style": "emphasis", "items": items}),
+                    json!({"type": "Container", "style": style, "items": items}),
                 );
             }
             gap = Gap::Block;
@@ -492,17 +530,17 @@ fn elements(markdown: &str, quotes: bool, layout: Layout) -> Vec<Value> {
                 Some(("[x] " | "[X] ", text)) => ("☑ ", text),
                 _ => ("", &c[3]),
             };
-            let text = format!("{}{mark} {check}{}", pad(depth), inline(text));
-            push_line(&mut out, &mut gap, text, layout);
+            let line = line_element(&format!("{}{mark} {check}", pad(depth)), text);
+            push_line(&mut out, &mut gap, line, layout);
             gap = Gap::Line;
             continue;
         }
         // A line right after a list item continues it; anything else is a paragraph line.
-        let text = match lists.len() {
-            0 => inline(trimmed),
-            depth => format!("{}  {}", pad(depth - 1), inline(trimmed)),
+        let prefix = match lists.len() {
+            0 => String::new(),
+            depth => format!("{}  ", pad(depth - 1)),
         };
-        push_line(&mut out, &mut gap, text, layout);
+        push_line(&mut out, &mut gap, line_element(&prefix, trimmed), layout);
         gap = Gap::Line;
     }
     out
@@ -532,8 +570,25 @@ fn push(out: &mut Vec<Value>, gap: &mut Gap, mut element: Value) {
     *gap = Gap::Block;
     out.push(element);
 }
-/// A line of a paragraph or list; in the compact layout it joins the block of the line before.
-fn push_line(out: &mut Vec<Value>, gap: &mut Gap, text: String, layout: Layout) {
+/// A line of a paragraph or list after `prefix` (its indentation and list mark): a text block,
+/// or rich text when it has `{color:…}` spans, which a text block cannot show.
+fn line_element(prefix: &str, text: &str) -> Value {
+    match blocks::rich(prefix, text) {
+        Some(rich) => rich,
+        None => text_block(format!("{prefix}{}", inline(text))),
+    }
+}
+/// A line of a paragraph or list; in the compact layout a text block joins the block of the
+/// line before.
+fn push_line(out: &mut Vec<Value>, gap: &mut Gap, line: Value, layout: Layout) {
+    let Some(text) = line["text"]
+        .as_str()
+        .filter(|_| line["type"] == "TextBlock")
+    else {
+        push(out, gap, line);
+        return;
+    };
+    let text = text.to_owned();
     if layout == Layout::Compact
         && *gap == Gap::Line
         && let Some(last) = out.last_mut().and_then(Value::as_object_mut)
@@ -548,7 +603,7 @@ fn push_line(out: &mut Vec<Value>, gap: &mut Gap, text: String, layout: Layout) 
         *gap = Gap::Block;
         return;
     }
-    push(out, gap, text_block(text));
+    push(out, gap, line);
 }
 fn text_block(text: String) -> Value {
     json!({"type": "TextBlock", "text": text, "wrap": true})
@@ -1203,5 +1258,208 @@ mod tests {
         )
         .unwrap();
         assert!(card.get("msteams").is_none());
+    }
+
+    /// Every element of `card` of type `kind`, depth first.
+    fn find<'a>(card: &'a Value, kind: &str, out: &mut Vec<&'a Value>) {
+        match card {
+            Value::Object(object) => {
+                if object.get("type").and_then(Value::as_str) == Some(kind) {
+                    out.push(card);
+                }
+                object.values().for_each(|child| find(child, kind, out));
+            }
+            Value::Array(items) => items.iter().for_each(|item| find(item, kind, out)),
+            _ => {}
+        }
+    }
+    fn all<'a>(card: &'a Value, kind: &str) -> Vec<&'a Value> {
+        let mut out = Vec::new();
+        find(card, kind, &mut out);
+        out
+    }
+
+    #[test]
+    fn card_blocks_draw_native_elements_and_read_back_as_their_words() {
+        let text = "**Estado del run**\n\n```facts\nEstado: {orange:en revisión}\n- Rama: `feat/x`\n```\n\n```badges\ngreen: Hecho\nred: Bloqueado\nsin color\nblue: En curso\n```\n\n```progress\nPruebas: 3/5\nSprint: 65%\n```\n\n```buttons\n[Ver PR !12](https://dev.azure.com/o/p/_git/r/pullrequest/12)\n- [Work item #41](https://dev.azure.com/o/p/_workitems/edit/41)\nno es enlace\n[malo](http://inseguro.example)\n```\n\n```chart hbar Horas por tarea\n#41 Login: 6\n#42 Pago: 2,5\nsin número: x\n```\n\n```details Ver evidencia\n- log 1\n- log 2\n```\n\n> [!WARNING]\n> Falta el DSN.\n\nLínea con {green:éxito} y **{red:fallo}** en [la guía](https://wiki.example/p).";
+        let card = card(text, &style(), Language::Es);
+        let facts = all(&card, "FactSet");
+        assert_eq!(
+            facts[0]["facts"],
+            json!([{"title": "Estado", "value": "en revisión"}, {"title": "Rama", "value": "feat/x"}])
+        );
+        let badges = all(&card, "Badge");
+        assert_eq!(badges.len(), 4);
+        assert_eq!(
+            (badges[0]["text"].as_str(), badges[0]["style"].as_str()),
+            (Some("Hecho"), Some("Good"))
+        );
+        assert_eq!(
+            (badges[2]["text"].as_str(), badges[2]["style"].as_str()),
+            (Some("sin color"), Some("Subtle"))
+        );
+        // Three to a row, so a phone does not scroll sideways.
+        assert!(
+            all(&card, "ColumnSet")
+                .iter()
+                .all(|row| row["columns"].as_array().unwrap().len() <= 3)
+        );
+        let bars = all(&card, "ProgressBar");
+        assert_eq!(
+            (bars[0]["value"].clone(), bars[0]["max"].clone()),
+            (json!(3), json!(5))
+        );
+        assert_eq!(bars[1]["value"], json!(65));
+        // Only HTTPS links become buttons; the other lines stay text.
+        let row = all(&card, "ActionSet")[0];
+        let opens: Vec<&Value> = row["actions"].as_array().unwrap().iter().collect();
+        assert_eq!(opens.len(), 2);
+        assert_eq!(
+            opens[1]["url"],
+            "https://dev.azure.com/o/p/_workitems/edit/41"
+        );
+        let chart = all(&card, "Chart.HorizontalBar")[0];
+        assert_eq!(chart["title"], "Horas por tarea");
+        assert_eq!(
+            chart["data"],
+            json!([{"x": "#41 Login", "y": 6}, {"x": "#42 Pago", "y": 2.5}])
+        );
+        assert_eq!(
+            card["msteams"]["width"], "Full",
+            "a chart takes the whole width"
+        );
+        // The details are hidden behind their toggle.
+        let toggle = all(&card, "Action.ToggleVisibility")[0];
+        let target = toggle["targetElements"][0].as_str().unwrap();
+        let hidden = all(&card, "Container")
+            .into_iter()
+            .find(|c| c["id"] == target)
+            .unwrap();
+        assert_eq!(hidden["isVisible"], false);
+        assert_eq!(toggle["title"], "Ver evidencia ▾");
+        let callout = all(&card, "Container")
+            .into_iter()
+            .find(|c| c["style"] == "warning")
+            .unwrap();
+        assert_eq!(callout["items"][0]["text"], "⚠️ Falta el DSN.");
+        // Colors are runs of rich text; bold and links keep their style.
+        let rich = all(&card, "RichTextBlock")
+            .into_iter()
+            .find(|r| r.get("fallback").is_none())
+            .unwrap();
+        let runs = rich["inlines"].as_array().unwrap();
+        let green = runs.iter().find(|r| r["text"] == "éxito").unwrap();
+        assert_eq!(green["color"], "Good");
+        let red = runs.iter().find(|r| r["text"] == "fallo").unwrap();
+        assert_eq!(
+            (red["color"].as_str(), red["weight"].as_str()),
+            (Some("Attention"), Some("Bolder"))
+        );
+        let link = runs.iter().find(|r| r["text"] == "la guía").unwrap();
+        assert_eq!(link["selectAction"]["url"], "https://wiki.example/p");
+        // Every element a client may not draw has a fallback.
+        for kind in ["Badge", "ProgressBar", "Chart.HorizontalBar"] {
+            assert!(
+                all(&card, kind).iter().all(|e| e.get("fallback").is_some()),
+                "{kind}"
+            );
+        }
+        // Read back, the blocks are their words.
+        let mut sent = json!({"body": {"contentType": "html", "content": ""},
+            "attachments": [{"contentType": CONTENT_TYPE, "content": card.to_string()}]});
+        let read = message_text(&sent);
+        for words in [
+            "Estado: en revisión",
+            "Hecho",
+            "Pruebas · 3/5",
+            "Ver PR !12",
+            "#42 Pago: 2.5",
+            "log 2",
+            "Falta el DSN.",
+            "Línea con éxito y fallo en la guía.",
+        ] {
+            assert!(read.contains(words), "{words} in {read}");
+        }
+        assert!(!read.contains("Ver evidencia ▾"));
+        sent["attachments"][0]["content"] = json!("");
+        assert!(message_text(&sent).is_empty());
+    }
+
+    #[test]
+    fn a_block_that_does_not_parse_stays_code_and_buttons_with_descriptions_are_large() {
+        let card = card(
+            "```chart radar Algo\na: 1\n```\n\n```facts\n```\n\n```buttons\n[PR !7](https://x.example/7) — arregla el login\n[PR !8](https://x.example/8)\n```\n\n```buttons\n[1](https://a.example/1)\n[2](https://a.example/2)\n[3](https://a.example/3)\n[4](https://a.example/4)\n[5](https://a.example/5)\n```",
+            &style(),
+            Language::En,
+        );
+        let code = all(&card, "CodeBlock");
+        assert_eq!(
+            code.len(),
+            2,
+            "an unknown chart and an empty block are code"
+        );
+        assert!(card.get("msteams").is_none());
+        let large = all(&card, "CompoundButton");
+        assert_eq!(large.len(), 2);
+        assert_eq!(large[0]["description"], "arregla el login");
+        assert_eq!(large[1]["selectAction"]["url"], "https://x.example/8");
+        let row = all(&card, "ActionSet").into_iter().last().unwrap();
+        let modes: Vec<&str> = row["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["mode"].as_str().unwrap_or("primary"))
+            .collect();
+        assert_eq!(
+            modes,
+            ["primary", "primary", "primary", "primary", "secondary"]
+        );
+        // A gauge, a donut and a line; an untitled details block says Details.
+        let card = card_of(
+            "```chart gauge Sprint\n65/100\n```\n\n```chart donut\nHecho: 12\nEn curso: 5\n```\n\n```chart line Semanas\nS1: 38\nS2: 41\n```\n\n```details\nOculto.\n```",
+        );
+        assert_eq!(all(&card, "Chart.Gauge")[0]["value"], 65);
+        assert_eq!(
+            all(&card, "Chart.Donut")[0]["data"][1],
+            json!({"legend": "En curso", "value": 5})
+        );
+        assert_eq!(
+            all(&card, "Chart.Line")[0]["data"][0]["values"][1],
+            json!({"x": "S2", "y": 41})
+        );
+        assert_eq!(
+            all(&card, "Action.ToggleVisibility")[0]["title"],
+            "Details ▾"
+        );
+        // A details block holds a block that names its kind, such as a summary's links.
+        let card = card_of(
+            "```details Summary\nAll good.\n**Links**\n```buttons\n[#41](https://x.example/41)\n```\n```\n\nAfter.",
+        );
+        let hidden = all(&card, "Container")
+            .into_iter()
+            .find(|c| c["isVisible"] == false)
+            .unwrap();
+        assert_eq!(
+            all(hidden, "Action.OpenUrl")[0]["url"],
+            "https://x.example/41"
+        );
+        assert_eq!(
+            card["body"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["text"] == "After.")
+                .count(),
+            1
+        );
+        // A mention keeps its line a text block, where Teams resolves it.
+        let line = line_element(
+            "",
+            &format!("{MENTION_START}0{MENTION_END} {{green:listo}}"),
+        );
+        assert_eq!(line["type"], "TextBlock");
+    }
+    fn card_of(text: &str) -> Value {
+        card(text, &style(), Language::En)
     }
 }

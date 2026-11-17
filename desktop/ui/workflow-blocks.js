@@ -20,6 +20,14 @@ const STAGE_NAMES = {
 const PLACEHOLDERS = {
   item: t('the work item\'s number and title'), id: t('the work item\'s number alone'), title: t('the work item\'s title alone'), link: t('its link'), pull_requests: t('the links of its pull requests'), summary: t('the director\'s progress summary'), state: t('the run\'s state'),
 };
+/** Card blocks a notification may hold (Teams draws them as parts of the card), each with what it inserts. */
+const CARD_BLOCKS = () => [
+  [t('Facts'), `\`\`\`facts\n${t('Item')}: {item}\n${t('State')}: {state}\n\`\`\``],
+  [t('Link buttons'), '```buttons\n[{id} - {title}]({link})\n{pull_requests}\n```'],
+  [t('Badges'), `\`\`\`badges\ngreen: ${t('Done')}\n\`\`\``],
+  [t('Collapsible summary'), `\`\`\`details ${t('Summary')}\n{summary}\n\`\`\``],
+  [t('Warning callout'), '> [!WARNING]\n> '],
+];
 const LIMITS = { name: 80, text: 8000, template: 4000, mentions: 20, mention: 100, chat: 200 };
 /** A name cut to the host's limit, with an ellipsis when it was longer. */
 const fit = (text, max) => [...text].length > max ? `${[...text].slice(0, max - 1).join('').trimEnd()}…` : text;
@@ -241,13 +249,27 @@ function blockEditor(draft, saved) {
       button.onclick = () => insert(name);
       return button;
     }));
+    const blocks = el('div', { class: 'placeholder-list' }, ...CARD_BLOCKS().map(([label, snippet]) => {
+      const button = el('button', { type: 'button', class: 'secondary small', textContent: label });
+      button.onclick = () => {
+        const at = template.selectionStart ?? template.value.length;
+        const before = template.value.slice(0, at);
+        const lead = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+        template.setRangeText(`${lead}${snippet}\n`, at, template.selectionEnd ?? at, 'end');
+        draft.template = template.value; checkPlaceholders(); touched();
+        template.focus();
+      };
+      return button;
+    }));
     checkPlaceholders();
     return [el('div', { class: 'field-block' }, el('label', { id: `block-chat-label-${key}`, textContent: t('Teams chat') }), chat, chatProblem,
       el('small', { class: 'hint', textContent: t('Only chats you belong to; channels are not offered. It posts once each time its stage occurs, as you.') })),
     mentions,
     el('label', {}, t('Message'), el('small', { textContent: t('The members you mention are matched to the chat\'s members again when it posts.') }), template, counted(template, LIMITS.template)),
     el('p', { class: 'hint', textContent: t('Placeholders: {item} the work item, {link} its link, {pull_requests} its pull requests, {summary} the director\'s summary, {state} the run\'s state. Select one to insert it.') }),
-    placeholders, placeholderProblem];
+    placeholders, placeholderProblem,
+    el('p', { class: 'hint', textContent: t('Card blocks: select one to insert it.') }),
+    blocks];
   };
 
   const launcherFields = () => {

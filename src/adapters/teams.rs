@@ -109,7 +109,7 @@ pub fn plain_text(html: &str) -> String {
 }
 /// Text colors the answer may use, by name: mid tones that stay readable on Teams' light and
 /// dark themes. Any other name is not a color and stays text.
-const COLORS: [(&str, &str); 5] = [
+pub(super) const COLORS: [(&str, &str); 5] = [
     ("red", "#E74856"),
     ("orange", "#CA5010"),
     ("green", "#13A10E"),

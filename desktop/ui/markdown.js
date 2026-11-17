@@ -150,7 +150,89 @@ function table(header, rows) {
   return el('div', { class: 'table' }, el('table', {}, el('thead', {}, row('th', header)), el('tbody', {}, ...rows.map(values => row('td', values)))));
 }
 
-/** Renders the Markdown the assistant writes (the same subset Teams receives as HTML), without innerHTML. Quotes are one level deep. */
+/* Card blocks: the fenced blocks Teams draws as native card elements (src/adapters/card/blocks.rs), drawn here the same way. */
+const TONES = { green: 'ok', orange: 'warn', red: 'error', blue: 'active', gray: 'muted' };
+const CALLOUTS = { note: 'ℹ️', tip: '💡', important: '❗', warning: '⚠️', caution: '⛔' };
+/** A block's line without its list mark. */
+const entry = line => line.trim().replace(/^[-*+]\s+/, '').trim();
+/** `Name: value`, split at the first `: `; a line without one is all value. */
+function pair(line) {
+  const at = line.indexOf(': ');
+  if (at >= 0) return [line.slice(0, at).trim(), line.slice(at + 2).trim()];
+  return line.endsWith(':') ? [line.slice(0, -1).trim(), ''] : ['', line];
+}
+/** A number as people write it: `7`, `7.5`, `7,5`, `65%`, `6h`. */
+function number(text) {
+  let value = text.trim().replace(/[%hH]+$/, '').trim().replace(/ /g, '');
+  value = value.includes('.') ? value.replace(/,/g, '') : value.replace(/,/g, '.');
+  const parsed = /^-?\d+(?:\.\d+)?$/.test(value) ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+/** `done/total` or `NN%`. */
+function ratio(text) {
+  const value = text.trim();
+  const [done, total] = value.includes('/') ? value.split('/', 2).map(number) : value.endsWith('%') ? [number(value), 100] : [null, null];
+  return done !== null && total !== null && total > 0 && done >= 0 ? [Math.min(done, total), total] : null;
+}
+const plainText = text => text.replace(/\[([^\]]+)\]\(https:\/\/[^\s)]+\)/g, '$1').replace(/\{(?:red|orange|green|blue|gray):([^{}]*)\}/g, '$1').replace(/[*`~]/g, '').trim();
+
+function cardBlock(kind, rest, lines) {
+  const entries = lines.map(entry).filter(Boolean);
+  if (kind === 'facts' && entries.length) {
+    return el('dl', { class: 'facts' }, ...entries.flatMap(line => {
+      const [name, value] = pair(line);
+      const term = el('dt'); inline(name, term);
+      const detail = el('dd'); inline(value, detail);
+      return [term, detail];
+    }));
+  }
+  if (kind === 'buttons') {
+    const items = entries.map(line => {
+      const match = line.match(/^\[([^\]]+)\]\((https:\/\/[^\s)]+)\)\s*[—–:-]?\s*(.*)$/);
+      if (!match || !todoSafeUrl(match[2])) { const text = el('p'); inline(line, text); return text; }
+      const button = link(plainText(match[1]), match[2]);
+      return match[3] ? el('div', { class: 'card-button' }, button, el('small', { class: 'hint', textContent: plainText(match[3]) })) : button;
+    });
+    return items.some(item => item.tagName !== 'P') ? el('div', { class: 'card-buttons' }, ...items) : null;
+  }
+  if (kind === 'badges' && entries.length) {
+    return el('div', { class: 'card-badges' }, ...entries.map(line => {
+      const [name, text] = pair(line);
+      const tone = text && TONES[name.toLowerCase()];
+      return el('span', { class: `badge ${tone || 'muted'}`, textContent: plainText(tone ? text : line) });
+    }));
+  }
+  if (kind === 'progress') {
+    const rows = entries.map(line => {
+      const [name, amount] = pair(line);
+      const parts = ratio(amount) ?? (amount ? null : ratio(name));
+      if (!parts) { const text = el('p'); inline(line, text); return text; }
+      const label = el('span'); inline(amount ? `${name} · ${amount}` : name, label);
+      return el('div', { class: 'card-progress' }, label, el('progress', { max: parts[1], value: parts[0], 'aria-label': plainText(name) }));
+    });
+    return rows.some(row => row.tagName !== 'P') ? el('div', { class: 'card-progress-list' }, ...rows) : null;
+  }
+  if (kind === 'chart') {
+    const [type = '', ...words] = rest.split(/\s+/);
+    const title = plainText(words.join(' '));
+    if (!['donut', 'pie', 'bar', 'hbar', 'line', 'gauge'].includes(type.toLowerCase())) return null;
+    const points = entries.map(pair);
+    const gauge = type.toLowerCase() === 'gauge';
+    const values = gauge ? points.map(([name, amount]) => ratio(amount) ?? ratio(name)).filter(Boolean).slice(0, 1)
+      : points.map(([name, amount]) => [plainText(name), number(amount)]).filter(([name, value]) => name && value !== null);
+    if (!values.length) return null;
+    const max = gauge ? values[0][1] : Math.max(...values.map(([, value]) => value), 0) || 1;
+    const rows = gauge ? [el('div', { class: 'card-progress' }, el('span', { textContent: `${values[0][0]}/${values[0][1]}` }), el('meter', { min: 0, max, value: values[0][0], 'aria-label': title || 'gauge' }))]
+      : values.map(([name, value]) => el('div', { class: 'card-chart-row' }, el('span', { textContent: name }), el('meter', { min: 0, max, value, 'aria-label': name }), el('span', { class: 'hint', textContent: String(value) })));
+    return el('figure', { class: 'card-chart' }, ...(title ? [el('figcaption', { textContent: title })] : []), ...rows);
+  }
+  if (kind === 'details' && entries.length) {
+    return el('details', { class: 'card-details' }, el('summary', { textContent: plainText(rest) || t('Details') }), markdown(lines.join('\n')));
+  }
+  return null;
+}
+
+/** Renders the Markdown the assistant writes (the same subset Teams receives as a card, card blocks included), without innerHTML. Quotes are one level deep. */
 function markdown(text, quotes = true) {
   const root = el('div', { class: 'md' });
   const source = text.replace(/\r/g, '').split('\n');
@@ -158,11 +240,19 @@ function markdown(text, quotes = true) {
   while (i < source.length) {
     const line = source[i];
     if (FENCE.test(line)) {
+      const [kind = '', ...rest] = line.trim().slice(3).trim().split(/\s+/);
       const code = [];
       i++;
-      while (i < source.length && !/^\s*```\s*$/.test(source[i])) code.push(source[i++]);
+      // A `details` block may hold blocks that name their kind (```buttons…```).
+      for (let depth = 0; i < source.length; i++) {
+        const nested = source[i].match(/^\s*```\s*(\S*)/);
+        if (nested && kind.toLowerCase() === 'details' && nested[1]) depth++;
+        else if (nested && depth) depth--;
+        else if (nested && !nested[1]) break;
+        code.push(source[i]);
+      }
       i++;
-      root.append(el('pre', {}, el('code', { textContent: code.join('\n') })));
+      root.append(cardBlock(kind.toLowerCase(), rest.join(' '), code) ?? el('pre', {}, el('code', { textContent: code.join('\n') })));
       continue;
     }
     if (!line.trim()) { i++; continue; }
@@ -178,7 +268,9 @@ function markdown(text, quotes = true) {
     if (quotes && QUOTE.test(line)) {
       const quoted = [];
       while (i < source.length && QUOTE.test(source[i])) quoted.push(source[i++].match(QUOTE)[1]);
-      root.append(el('blockquote', {}, markdown(quoted.join('\n'), false)));
+      const callout = quoted[0]?.trim().match(/^\[!(note|tip|important|warning|caution)\]$/i)?.[1].toLowerCase();
+      if (callout) quoted[0] = `${CALLOUTS[callout]} ${quoted.splice(1, 1)[0] ?? ''}`;
+      root.append(el('blockquote', callout ? { class: `callout-${callout}` } : {}, markdown(quoted.join('\n'), false)));
       continue;
     }
     if (isTable(source, i)) {

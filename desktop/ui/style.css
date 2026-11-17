@@ -557,6 +557,20 @@ fieldset.choices { border: 0; padding: 0; }
 .md table { border-collapse: collapse; font-size: var(--fs-md); }
 .md th, .md td { border: 1.5px solid var(--rule); padding: .3rem .55rem; text-align: left; vertical-align: top; }
 .md th { background: var(--sunken); font-weight: 650; }
+.md .card-buttons { display: flex; flex-wrap: wrap; gap: .4rem .6rem; margin: .6rem 0; align-items: baseline; }
+.md .card-button { display: grid; gap: .1rem; flex-basis: 100%; }
+.md .card-badges { display: flex; flex-wrap: wrap; gap: .35rem; margin: .55rem 0; }
+.md .card-progress-list, .md .card-chart { display: grid; grid-template-columns: auto 1fr; gap: .35rem .6rem; align-items: center; margin: .6rem 0; }
+.md .card-chart { grid-template-columns: auto 1fr auto; }
+.md .card-progress, .md .card-chart-row { display: contents; }
+.md .card-progress-list > p, .md .card-chart figcaption { grid-column: 1 / -1; margin: 0; }
+.md .card-progress progress, .md meter { inline-size: 100%; min-inline-size: 5rem; }
+.md .card-chart figcaption { font-weight: 650; }
+.md .card-details { margin: .55rem 0; } .md .card-details summary { cursor: pointer; color: var(--active); }
+.md blockquote[class^="callout-"] { color: var(--text); border-left-width: 4px; border-radius: 0 8px 8px 0; padding: .35rem .75rem; }
+.md .callout-note { border-color: var(--line); background: var(--muted-soft); } .md .callout-tip { border-color: var(--ok); background: var(--ok-soft); }
+.md .callout-important { border-color: var(--active); background: var(--active-soft); } .md .callout-warning { border-color: var(--warn); background: var(--warn-soft); }
+.md .callout-caution { border-color: var(--error); background: var(--error-soft); }
 .md .tone-red { color: var(--error); } .md .tone-orange { color: var(--warn); } .md .tone-green { color: var(--ok); } .md .tone-blue { color: var(--active); } .md .tone-gray { color: var(--muted); }
 button.ref, a.ref { display: inline; min-height: 0; text-align: left; padding: 0; border: 0; border-radius: 3px; background: none; color: var(--link); font: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
 button.ref small { font-weight: 400; color: var(--muted); text-decoration: none; }
