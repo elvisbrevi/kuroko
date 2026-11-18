@@ -332,7 +332,7 @@ async fn token(host: &Arc<Host>, record: &mut Record, connected: bool) {
         record.set(
             "token",
             "pending",
-            "Launchers run only from the coordinator's own local page or local CLI: run pta cloud lost again there (or pta variables launcher run cloud-token-rotate --confirmed).",
+            "Launchers run only from the coordinator's own local page or local CLI: run kuroko cloud lost again there (or kuroko variables launcher run cloud-token-rotate --confirmed).",
         );
         return;
     }
@@ -362,7 +362,7 @@ async fn token(host: &Arc<Host>, record: &mut Record, connected: bool) {
             "token",
             "failed",
             ran.message.unwrap_or_else(|| {
-                "The launcher did not finish; the token may or may not be replaced. Check `pta cloud token`, then run this again.".into()
+                "The launcher did not finish; the token may or may not be replaced. Check `kuroko cloud token`, then run this again.".into()
             }),
         );
     }
@@ -375,7 +375,7 @@ fn finish(host: &Host, mut record: Record) -> Reply {
     remember(host, &record);
     let complete = record.complete();
     let next = if complete {
-        "Back up the new content key now (pta variables key backup). The account's other computers receive the new service token and content key from this coordinator within a minute; pta cloud token lists them."
+        "Back up the new content key now (kuroko variables key backup). The account's other computers receive the new service token and content key from this coordinator within a minute; kuroko cloud token lists them."
     } else {
         "Do what the steps that are not done say, then run this again for the same computer: finished steps are not repeated."
     };

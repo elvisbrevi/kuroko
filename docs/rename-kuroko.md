@@ -150,7 +150,7 @@ old one), **stays** (invariant or protocol, with the reason).
 | `INSTRUCTIONS` "Kuroko (Personal Teams Assistant) …" | `src/app/mcp.rs:31` | rename | Phase 4 |
 | `mcp config` snippets (key `personal-teams-assistant`) | `src/app/mcp.rs:338-346`, `desktop/ui/settings-account.js:183`, `scripts/ui-preview/check.mjs:370` | rename | Phase 4, plus `kuroko mcp migrate` |
 | Codex `clientInfo.name` | `src/llm/implementation/codex.rs:56` | rename | Informational |
-| Skill directory and `name:` | `desktop/skills/personal-teams-assistant/`, `src/app/skill.rs` | rename | Phase 4: `desktop/skills/kuroko/`; the profile copy `skills/personal-teams-assistant-<version>` becomes `skills/kuroko-<version>`, and old copies are removed |
+| Skill directory and `name:` | `desktop/skills/kuroko/`, `src/app/skill.rs` | rename | Phase 4: `desktop/skills/kuroko/`; the profile copy `skills/personal-teams-assistant-<version>` becomes `skills/kuroko-<version>`, and old copies are removed |
 | `skill show` JSON `name` | `src/app/skill.rs:128` | rename | Phase 4 |
 | Host doc comments and messages naming `personal-teams-assistant --host/--web` | `src/app.rs:1878`, `src/app/cli.rs:50`, `src/app/web/store.rs:379`, `src/app/service.rs:696`, `catalog.js:1425` | rename | Phase 4: `kuroko-host` |
 | Work item link comments "Linked/Registered by Personal Teams Assistant" | `src/ado/link.rs:272`, `src/ado/registration.rs:623` | rename | Only new links; existing comments in Azure are not touched |
@@ -371,3 +371,16 @@ through its own updater. The Mac has it prepared and waits for a person to choos
   "Start at login").
 - **The CLI** names itself as invoked in `--version`. `pta` and `personal-teams-assistant` print a
   note on a terminal's stderr that they are former names, removed in 0.21.0.
+
+## 9. 0.18.2: phase 3, commands, MCP and skill
+
+- Every message, help line, hint, tool description, prompt, GUI string (with its Spanish entry)
+  and the skill name the commands `kuroko` and `kuroko-host`.
+- The MCP server is `kuroko`. `kuroko mcp config` prints the new fragments, and
+  `kuroko mcp migrate [--confirmed]` moves Claude Code and Codex registrations of
+  `personal-teams-assistant` and renames the permission entries
+  (`mcp__personal-teams-assistant__*` → `mcp__kuroko__*`).
+- The skill is `desktop/skills/kuroko/` (`name: kuroko`), and installing it removes the copy under
+  the former name.
+- Kept, as invariants: the card band id, cookies, headers, cryptographic labels, `PTA_*` credential
+  and handover names, the service `MARKER`, OpenCode agent names and stored review tags.

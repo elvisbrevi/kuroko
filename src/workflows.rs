@@ -397,7 +397,7 @@ pub struct Block {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Chat {
-    /// The Graph chat ID, as `pta teams chats` lists it.
+    /// The Graph chat ID, as `kuroko teams chats` lists it.
     pub id: String,
     /// Its display name, shown when the block is reviewed.
     pub name: String,
@@ -514,7 +514,7 @@ pub fn validate_block(block: &Block) -> Result<()> {
                 ))
                 .is_ok()
                     && line(&chat.name, 200),
-                "Teams notification block {id} needs a chat ID as pta teams chats lists it and the chat's name (at most 200 characters)."
+                "Teams notification block {id} needs a chat ID as kuroko teams chats lists it and the chat's name (at most 200 characters)."
             );
             ensure!(
                 block.mentions.len() <= MAX_MENTIONS
@@ -609,12 +609,12 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
             valid_uuid(&repository.id)
                 && line(&repository.name, 200)
                 && repositories.insert(repository.id.to_lowercase()),
-            "Workflow {id}: each repository is listed once, by its catalog ID and name (pta workflows repositories)."
+            "Workflow {id}: each repository is listed once, by its catalog ID and name (kuroko workflows repositories)."
         );
     }
     ensure!(
         valid_uuid(&workflow.machine),
-        "Workflow {id} needs the ID of its execution machine (pta tools call machine_list)."
+        "Workflow {id} needs the ID of its execution machine (kuroko tools call machine_list)."
     );
     let mut keys = BTreeSet::new();
     let mut directories: Vec<&str> = Vec::new();
@@ -688,7 +688,7 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
             Preapproved::PostSummary => {
                 let chat = entry.chat.as_ref().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Workflow {id}'s post_summary needs its chat (ID and name), as pta teams chats lists it."
+                        "Workflow {id}'s post_summary needs its chat (ID and name), as kuroko teams chats lists it."
                     )
                 })?;
                 ensure!(
@@ -698,7 +698,7 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
                     ))
                     .is_ok()
                         && line(&chat.name, 200),
-                    "Workflow {id}'s post_summary needs a chat ID as pta teams chats lists it and the chat's name (at most 200 characters)."
+                    "Workflow {id}'s post_summary needs a chat ID as kuroko teams chats lists it and the chat's name (at most 200 characters)."
                 );
                 ensure!(
                     entry.mentions.len() <= MAX_MENTIONS

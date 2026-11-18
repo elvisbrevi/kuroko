@@ -90,7 +90,7 @@ const rawInvoke = transport.invoke;
 const READS = ['snapshot', 'chat', 'github_repositories', 'self_chat_status', 'llm_providers', 'azure_cli_status', 'begin_azure_cli_login', 'open_azure_cli_login', 'finish_azure_cli_login', 'cancel_azure_cli_login', 'github_cli_status', 'audit', 'activity_status', 'activity_history', 'activity_pending', 'answer_refine', 'answer_send', 'list_azure_hus', 'list_github_epics', 'list_github_issues', 'get_azure_hu', 'get_azure_task', 'list_azure_tasks', 'get_github_epic', 'get_github_issue', 'open_work_item', 'teams_chats'];
 // Revision of the profile files the last reply saw. The form's own revision (`current.revision`)
 // changes only when it reloads or writes, so saving a stale form fails instead of overwriting
-// changes made elsewhere (e.g. with `pta`).
+// changes made elsewhere (e.g. with `kuroko`).
 /** @type {string | null} */
 let lastRevision = null;
 /**

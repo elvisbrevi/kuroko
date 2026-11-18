@@ -59,7 +59,7 @@ pub struct Note {
     /// Words or phrases that should find it.
     #[serde(default)]
     pub keywords: Vec<String>,
-    /// Who wrote it: `user` (the app or `pta`), `agent` (an agent through the MCP server),
+    /// Who wrote it: `user` (the app or `kuroko`), `agent` (an agent through the MCP server),
     /// `answer` (an answer the user approved) or `import`.
     #[serde(default = "user")]
     pub origin: String,

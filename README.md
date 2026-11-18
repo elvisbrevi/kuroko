@@ -7,7 +7,7 @@
 > **Formerly `personal-teams-assistant`.** From 0.18.0 the product is the crate `kuroko`, with the commands `kuroko` and `kuroko-host`; `pta` and `personal-teams-assistant` stay as aliases of them. Copies of 0.17.0 move to it with their own updater, keeping the profile, the credentials and the Microsoft session. To move an older copy by hand, run `cargo install kuroko --locked --force` (`--force` lets it take over the two old command names). See [the rename plan](docs/rename-kuroko.md).
 
 <p align="center"><strong>Answers in Teams as you, and only with what you authorize.</strong><br>
-<a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/kuroko">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a></p>
+<a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/kuroko">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/kuroko/SKILL.md">Agent skill</a></p>
 
 <p align="center">
   <picture>
@@ -24,7 +24,7 @@ A personal Microsoft Teams assistant written in Rust. It reads and answers **as 
 
 Ask it, for example, which work you did in the last two weeks that no task records: it compares your commits, pull requests, pipeline runs, releases, Wiki edits and (if you authorize them) your Teams messages with your Azure DevOps work items, and answers briefly with each unregistered piece of work, its verified link and the work items where it could go. Activities keeps daily lists of your existing Azure tasks, with verified links and hours, so questions about what you did can be answered concisely from the saved record. These activity operations do not create, link or change Azure tasks.
 
-To-Do cards and work item details also offer **Implement**. Choose an enrolled machine, working directories, context and an installed Codex, Claude Code or OpenCode V2 agent, model and effort. HUs, backlog bugs and GitHub epics propose children for you to review and create; tasks (any task-category type) and ordinary GitHub issues implement the selected item. Every execution retains its real agent session, state and start/end times in SQLite, with app links where supported. Machines connect to your account's portal; Settings selects the single machine allowed to read and reply through Teams. See the [implementation workflow](desktop/skills/personal-teams-assistant/references/tools-and-todo.md#implement-work-items-and-inspect-agent-sessions) for enrollment, permissions and supported session links.
+To-Do cards and work item details also offer **Implement**. Choose an enrolled machine, working directories, context and an installed Codex, Claude Code or OpenCode V2 agent, model and effort. HUs, backlog bugs and GitHub epics propose children for you to review and create; tasks (any task-category type) and ordinary GitHub issues implement the selected item. Every execution retains its real agent session, state and start/end times in SQLite, with app links where supported. Machines connect to your account's portal; Settings selects the single machine allowed to read and reply through Teams. See the [implementation workflow](desktop/skills/kuroko/references/tools-and-todo.md#implement-work-items-and-inspect-agent-sessions) for enrollment, permissions and supported session links.
 
 The app and its answers to Teams follow the configured language, Spanish or English (`llm.language`); the CLI and audit log are in English. The interface is a web page: on your computer it opens in the system browser, and your web portal serves it on any other device. On phones the portal has a floating tab bar, follows the system's light or dark mode (or the one you choose in Settings › General) and installs on the home screen with its own icon.
 
@@ -88,7 +88,7 @@ kuroko-host --start    # foreground; `--start` starts the assistant; fits a syst
 
 Its credentials are stored with `pta credentials set` in private profile files or come from `NAME`/`NAME_FILE` variables. The Microsoft login is completed from any device with `pta auth microsoft finish --redirect 'URL'`. Details in the [architecture](docs/architecture.md#headless-host). Never keep two instances of the same account active.
 
-Each assistant account can also keep **stored variables** (a name, a description and an encrypted value) for its own use: add, edit, reveal, copy and delete them in Settings > Credentials > Variables (reveal and copy are human-only) or with `pta variables create NAME --description TEXT` / `pta variables update ID --expected-version N` (value on a protected stdin pipe), and let an agent discover them by name and description without ever seeing a value (`pta variables list|search`, MCP `variable_*`). A computer signed in to the account keeps a metadata-only copy of the catalog in step with the coordinator (`pta variables sync|status`, Synchronize now in the GUI); values are never copied. Operators back up and rotate their keys with `pta variables key backup|restore|rotate`; see the [architecture](docs/architecture.md#account-variables) and the [skill reference](desktop/skills/personal-teams-assistant/references/variables.md).
+Each assistant account can also keep **stored variables** (a name, a description and an encrypted value) for its own use: add, edit, reveal, copy and delete them in Settings > Credentials > Variables (reveal and copy are human-only) or with `pta variables create NAME --description TEXT` / `pta variables update ID --expected-version N` (value on a protected stdin pipe), and let an agent discover them by name and description without ever seeing a value (`pta variables list|search`, MCP `variable_*`). A computer signed in to the account keeps a metadata-only copy of the catalog in step with the coordinator (`pta variables sync|status`, Synchronize now in the GUI); values are never copied. Operators back up and rotate their keys with `pta variables key backup|restore|rotate`; see the [architecture](docs/architecture.md#account-variables) and the [skill reference](desktop/skills/kuroko/references/variables.md).
 
 The account's **configuration** (preferences, model choices, sources with their audiences, contexts, questions and verified notes) also follows the account: a freshly installed computer that signs in restores it, and `pta account status|sync` shows which revision is loaded. Folders, credentials, sign-ins and tunnels stay on each computer, restoring starts nothing, and new sources still start disabled.
 
@@ -100,7 +100,7 @@ This is self-hosted software, not a shared hosted service. Installing the crate 
 
 Each portal accepts only its locally configured GitHub owner (`owner_github_id`), verified through that installation's Cloudflare Access provider. Associate the owner's verified identity locally with `pta web users bind USER`; `--current-profile` preserves the existing desktop profile and Microsoft session. Legacy additional profiles are retained, but other identities cannot use the portal or its execution machines.
 
-To connect another computer you own, enter your portal's HTTPS address on that computer (the sign-in screen the app shows at start, or Sign in in the sidebar; or `pta auth machine login URL`), sign in in the browser and choose Trust this machine once; the computer then finishes connecting with its own revocable credential. Alternatively, authorize its machine ID locally on your coordinator with `pta web machines authorize MACHINE_ID --output PRIVATE_FILE`, transfer that private file securely and feed it to `pta tools call machine_connect` on the intended machine's stdin within ten minutes. Both are single-use and tied to that machine and installation; a GitHub token cannot enroll a machine. See the [web setup guide](desktop/skills/personal-teams-assistant/references/web-access.md) and [security policy](SECURITY.md).
+To connect another computer you own, enter your portal's HTTPS address on that computer (the sign-in screen the app shows at start, or Sign in in the sidebar; or `pta auth machine login URL`), sign in in the browser and choose Trust this machine once; the computer then finishes connecting with its own revocable credential. Alternatively, authorize its machine ID locally on your coordinator with `pta web machines authorize MACHINE_ID --output PRIVATE_FILE`, transfer that private file securely and feed it to `pta tools call machine_connect` on the intended machine's stdin within ten minutes. Both are single-use and tied to that machine and installation; a GitHub token cannot enroll a machine. See the [web setup guide](desktop/skills/kuroko/references/web-access.md) and [security policy](SECURITY.md).
 
 ### Security and privacy
 
@@ -113,7 +113,7 @@ To connect another computer you own, enter your portal's HTTPS address on that c
 
 Operators configure their own Cloudflare Access/Tunnel, HTTPS and edge HSTS, SSH keys and host firewall. The app sends hostname-only HSTS on HTTPS origin responses. Installing the crate does not provision or harden a server.
 
-Profiles share the trusted operator's OS account. Selected coding directories and provider permissions are not OS isolation for untrusted code. The [security policy](SECURITY.md) documents these limits, upstream dependency notices and private vulnerability reporting; the [web setup guide](desktop/skills/personal-teams-assistant/references/web-access.md) covers deployment.
+Profiles share the trusted operator's OS account. Selected coding directories and provider permissions are not OS isolation for untrusted code. The [security policy](SECURITY.md) documents these limits, upstream dependency notices and private vulnerability reporting; the [web setup guide](desktop/skills/kuroko/references/web-access.md) covers deployment.
 
 ### Update
 
@@ -229,7 +229,7 @@ a server, select `America/Santiago` instead of the server's local time zone.
 
 Version 0.7.0 replaces the web portal's password login with Cloudflare Access
 and a dedicated GitHub OAuth App. Before updating a password-based portal,
-prepare Access using the [migration guide](desktop/skills/personal-teams-assistant/references/web-access.md),
+prepare Access using the [migration guide](desktop/skills/kuroko/references/web-access.md),
 update the host and CLI together, then associate existing users with their
 verified GitHub identities.
 The host, CLI, Microsoft session and existing profiles are preserved.
@@ -278,8 +278,8 @@ pta activity history 2026-10-01..2026-10-15   # the activities of every day in a
 - [Security policy](SECURITY.md): access boundaries, deployment responsibilities, upstream notices and private vulnerability reporting.
 - [Private portal](docs/private-deployment.md): running it on macOS and verifying a deployment.
 - [Architecture](docs/architecture.md): components, pipeline, data, security, CLI contract, change recipes, decisions and known limits.
-- [Operating skill](desktop/skills/personal-teams-assistant/SKILL.md) and [guide for agents](AGENTS.md).
-- [Activity registration](desktop/skills/personal-teams-assistant/references/activity-registration.md): scheduling, required task fields, calls, clarification and CLI commands.
+- [Operating skill](desktop/skills/kuroko/SKILL.md) and [guide for agents](AGENTS.md).
+- [Activity registration](desktop/skills/kuroko/references/activity-registration.md): scheduling, required task fields, calls, clarification and CLI commands.
 
 ## License
 

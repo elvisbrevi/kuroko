@@ -9,7 +9,7 @@ import { t, tx } from './i18n.js';
  */
 const ALLOWS = [
   { id: 'work_items', name: () => t('Change work items'), effect: () => t('Create and change Azure DevOps and GitHub work items and issues: their state, fields and comments.') },
-  { id: 'teams', name: () => t('Send Teams messages'), effect: () => t('Post to Teams chats as you, for example with pta teams send.') },
+  { id: 'teams', name: () => t('Send Teams messages'), effect: () => t('Post to Teams chats as you, for example with kuroko teams send.') },
   { id: 'merge', name: () => t('Merge pull requests'), effect: () => t('Complete and merge pull requests, its own included.') },
   { id: 'deploy', name: () => t('Publish and deploy'), effect: () => t('Create releases, run deployment pipelines and publish packages.') },
 ];

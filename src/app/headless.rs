@@ -1,6 +1,6 @@
 //! The host process on every operating system: no window. Its owner's GUI is the local page in
-//! the system browser (`page.rs`), and `pta`, `pta mcp` and the portal operate it through the
-//! same contract. Runs until `pta app quit`, SIGTERM or Ctrl-C, which stop the service and its
+//! the system browser (`page.rs`), and `kuroko`, `kuroko mcp` and the portal operate it through the
+//! same contract. Runs until `kuroko app quit`, SIGTERM or Ctrl-C, which stop the service and its
 //! tunnel first.
 use super::*;
 
@@ -70,7 +70,7 @@ pub(crate) fn run(
             tokio::task::spawn_blocking(move || service::upgrade(&profile));
         }
         if start_service {
-            // Keep the host alive on failure so `pta status/doctor/audit` can diagnose it.
+            // Keep the host alive on failure so `kuroko status/doctor/audit` can diagnose it.
             let reply = control::dispatch(&host, control::Request::new("start_assistant")).await;
             if !reply.ok {
                 tracing::warn!(event = "headless_autostart_failed", code = %reply.code);
@@ -121,7 +121,7 @@ mod tests {
         });
         let reply = control::dispatch(&host, control::Request::new("app_open")).await;
         assert_eq!((reply.ok, reply.exit_code), (false, 3));
-        assert!(reply.message.unwrap().contains("pta"));
+        assert!(reply.message.unwrap().contains("kuroko"));
         let logs = control::dispatch(&host, control::Request::new("logs")).await;
         assert!(logs.ok);
         assert_eq!(logs.data[0]["kind"], "app_operation_failed");

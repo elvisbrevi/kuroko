@@ -42,7 +42,7 @@ pub(in crate::app) fn commands(origin: &str) -> Result<Value> {
             "linux": format!("curl --proto '=https' --tlsv1.2 -fsSL {base}/install.sh | sh -s -- --uninstall"),
             "windows": format!("Invoke-RestMethod -UseBasicParsing {base}/install.ps1 -OutFile \"{script}\"; powershell -NoProfile -ExecutionPolicy Bypass -File \"{script}\" -Uninstall"),
         },
-        "integrations": "Add --integrations (-Integrations on Windows) to also install the skill and register pta mcp with the coding CLIs found; without it the script prints those commands.",
+        "integrations": "Add --integrations (-Integrations on Windows) to also install the skill and register kuroko mcp with the coding CLIs found; without it the script prints those commands.",
         "trust": "The command holds no secret. The computer appears for approval only after the sign-in page opens on it; Trust this machine there is the only approval, and it grants no directories, Teams ownership, assistant start or provider login.",
     }))
 }

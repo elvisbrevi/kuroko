@@ -100,7 +100,7 @@ function renderResources() {
   if ([...wikiChoice.options].some(o => o.value === wikiValue)) wikiChoice.value = wikiValue;
   $('#sources-summary').textContent = resources.length ? t('{ready} of {total} ready for Teams', { ready: readySources(current.map).length, total: resources.length }) : '';
   if (!resources.length) {
-    container.append(el('div', { class: 'empty' }, el('p', { textContent: t('No sources yet. Add a repository or a file from one, or register the Wiki with pta sources add.') })));
+    container.append(el('div', { class: 'empty' }, el('p', { textContent: t('No sources yet. Add a repository or a file from one, or register the Wiki with kuroko sources add.') })));
   }
   $('#record-offer').hidden = resources.some(r => r.tool?.type === 'activity_record');
   $('#sessions-offer').hidden = resources.some(r => r.tool?.type === 'agent_sessions');
@@ -312,7 +312,7 @@ function renderNotes() {
   $('#notes-offer').hidden = current.map.resources.some(r => r.kind === 'notes');
   if (!notesList.length) {
     container.append(el('div', { class: 'empty' }, el('p', { textContent: $('#notes-query').value.trim()
-      ? t('No note matches the search.') : t('No notes yet. Add what you verified, or ask an agent to add it with pta notes add.') })));
+      ? t('No note matches the search.') : t('No notes yet. Add what you verified, or ask an agent to add it with kuroko notes add.') })));
   }
   for (const note of notesList) {
     const draft = structuredClone(note);

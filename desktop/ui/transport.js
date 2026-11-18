@@ -52,7 +52,7 @@ async function response(path, options = {}) {
   const headers = { ...(options.headers || {}), ...(key ? { 'X-PTA-Key': key } : {}) };
   const reply = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...options, headers });
   if (reply.status === 401 && local) {
-    // Only the host opens a new sign-in (pta app open); this page explains it.
+    // Only the host opens a new sign-in (kuroko app open); this page explains it.
     window.location.replace('/signed-out');
     throw new Error('Your session has expired. Sign in again.');
   }

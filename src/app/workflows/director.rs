@@ -926,7 +926,7 @@ pub(super) fn director_for(
 /// What a project without a director is told.
 pub(super) fn no_director(project: &str) -> String {
     format!(
-        "[not_ready] Project {project} has no workflow director: its workflows differ in machine or agent and neither the project nor the account has one. Choose it in Settings › Workflows, or pta workflows settings --set project_director.{project}.machine ID … (or director.machine ID …)."
+        "[not_ready] Project {project} has no workflow director: its workflows differ in machine or agent and neither the project nor the account has one. Choose it in Settings › Workflows, or kuroko workflows settings --set project_director.{project}.machine ID … (or director.machine ID …)."
     )
 }
 

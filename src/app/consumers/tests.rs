@@ -715,7 +715,7 @@ mod launchers {
             let listed = call(&m.host, Local, "variable_consumer_list", json!({})).await;
             listed.data["launchers"][0]["approved"] == true
         };
-        // The CLI's own words, as `pta variables launcher approve` passes them on.
+        // The CLI's own words, as `kuroko variables launcher approve` passes them on.
         let cli = |digest: Option<&str>, confirmed: bool| {
             let mut args: Vec<String> = ["--json", "variables", "launcher", "approve", "deploy"]
                 .map(str::to_owned)

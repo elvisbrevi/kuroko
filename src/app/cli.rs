@@ -8,11 +8,11 @@ use std::{
     time::Duration,
 };
 
-const HELP: &str = "pta — Kuroko (Personal Teams Assistant) administration
+const HELP: &str = "kuroko — Kuroko administration (formerly Personal Teams Assistant; `pta` is an alias until 0.21.0)
 
-Usage: pta [--json] [--non-interactive] COMMAND [ARGUMENTS]
-       pta help | pta --help | pta -h     shows this help
-       pta --version                       CLI and contract version
+Usage: kuroko [--json] [--non-interactive] COMMAND [ARGUMENTS]
+       kuroko help | kuroko --help | kuroko -h     shows this help
+       kuroko --version                            CLI and contract version
 
 Assistant (Teams service)
   start                    Starts the assistant; opens the hidden host if it is not running.
@@ -27,14 +27,14 @@ Application (host)
                            closes the host (stopping the assistant and tunnel first).
 
 Web portal
-  Requires Cloudflare Access and a dedicated GitHub OAuth App; see pta skill show.
+  Requires Cloudflare Access and a dedicated GitHub OAuth App; see kuroko skill show.
   web status              Web URL, settings and account profiles (never passwords).
   web configure           JSON on stdin: bind, public_url, session_hours, owner_github_id and access.
                            access: issuer, audience, account_id, github_idp_id from Cloudflare.
   web callbacks           Exact Graph callback paths for Cloudflare Access bypass applications.
   web machines authorize MACHINE_ID [USER] --output PRIVATE_FILE
                            Locally approve your machine for 10 minutes; writes a private single-use
-                           pairing JSON file for `pta tools call machine_connect` on that machine's stdin.
+                           pairing JSON file for `kuroko tools call machine_connect` on that machine's stdin.
   web users list          Lists web accounts and their isolated profile directories.
   web users add USER      Creates an isolated profile, blocked until an Access identity is associated locally.
                            --current-profile attaches it to the existing desktop profile; identity binding is still required.
@@ -47,7 +47,7 @@ Web portal
                            JSON on stdin, {client_id, client_secret}, and is kept only in that account's own
                            credential store. The account then connects and migrates its own data.
   web users cloud disable USER  Removes that permission and the token; the account's data and copy stay.
-                           Run the portal with personal-teams-assistant --web; no public registration.
+                           Run the portal with kuroko-host --web; no public registration.
 
 Configuration
   config show              Saved configuration.
@@ -71,7 +71,7 @@ Configuration
 
 Language models
   llm providers            Detected CLIs (Codex, Claude, OpenCode 2), their models and efforts, and DeepSeek through its API.
-                           Order and fallback: pta config set llm.chain '[{\"provider\":\"codex\",\"model\":\"gpt-6.1-sol\",\"effort\":\"medium\"},...]'
+                           Order and fallback: kuroko config set llm.chain '[{\"provider\":\"codex\",\"model\":\"gpt-6.1-sol\",\"effort\":\"medium\"},...]'
   test providers           Tests each active model with synthetic data (uses quota or API credit).
 
 Messages and diagnostics
@@ -168,7 +168,7 @@ Account store (Cloudflare)
                            computer and why, and the size of the backup; writes and sends nothing.
   cloud migrate --confirmed   Owner or enabled portal account. Backs up this profile first (every database and the settings files, in a private
                            backups/cloud-<time>/; the newest three are kept), creates the account content key on first
-                           use (back it up with pta variables key backup), uploads every collection sealed with it
+                           use (back it up with kuroko variables key backup), uploads every collection sealed with it
                            (AES-256-GCM-SIV in this installation; the Worker sees only blinded IDs, revisions and
                            digests), verifies the copy by reading it back and only then switches the mode to mirror.
                            Local stays the source of truth; afterwards an outbox sends each change. Run again to resume.
@@ -311,7 +311,7 @@ Account variables
                            Proposes a program to receive the named variables as environment variables of that one
                            process (never arguments). Protected settings such as PATH or LD_* are refused. It runs
                            nothing until the owner approves it (launcher approve, or Settings › Credentials in the
-                           application pta app open shows, or the owner's portal).
+                           application kuroko app open shows, or the owner's portal).
   variables launcher approve NAME [--digest SHA256] --confirmed
                            The owner approves a proposed launcher on this machine. Without --confirmed it shows the
                            program, its SHA-256, arguments, folder, variables and time limit to review; --digest
@@ -360,13 +360,13 @@ Updates (the shared server's operator updates it separately)
   update check             Looks up the newest stable, not yanked release of this package on crates.io (read-only).
   update stage VERSION --confirmed
                            Builds that exact release with Cargo (locked dependencies, same features and target as this
-                           installation) in this profile's maintenance directory and verifies the application and pta
+                           installation) in this profile's maintenance directory and verifies the application and kuroko
                            pair; an installation made by the install command downloads that release's archive for its
                            target from this package's repository instead and checks its published SHA-256. It installs
                            nothing and needs the owner of this computer. Progress: update status.
   update apply VERSION --confirmed
                            Installs the prepared version: waits for work in progress (it never interrupts an answer, a send,
-                           an implementation or a migration), then replaces the application and pta together, restarts the
+                           an implementation or a migration), then replaces the application and kuroko together, restarts the
                            application the way it was running and restores the assistant. If the new version does not start
                            and report healthy, the previous pair is put back. Success is reported only after the health
                            check; poll update status (it reads the update journal while the application restarts).
@@ -593,7 +593,7 @@ Options
   --json                   JSON reply {contract, version, ok, code, exit_code, message, data, revision}.
   --non-interactive        Never prompts or opens the browser.
 
-Update: cargo install personal-teams-assistant --locked. The first pta command (or opening the app) stops
+Update: cargo install kuroko --locked --force. The first kuroko command (or opening the app) stops
 the previous host (assistant and tunnel) and asks whether to keep the assistant running with the new version.
 New sources start disabled and without audiences. Credentials only on stdin.
 Exit: 0 ok, 1 failed, 2 invalid input, 3 not ready, 4 authorization pending, 5 dependency or network, 6 conflict or version.
@@ -865,7 +865,7 @@ async fn update_command(args: &[String]) -> Result<Reply> {
             if let Some(reply) = unconfirmed(
                 args,
                 format!(
-                    "Install the prepared version {version} now? The application and pta are replaced and restarted; the previous version is restored if the new one does not start."
+                    "Install the prepared version {version} now? The application and kuroko are replaced and restarted; the previous version is restored if the new one does not start."
                 ),
             ) {
                 return Ok(reply);
@@ -876,12 +876,12 @@ async fn update_command(args: &[String]) -> Result<Reply> {
     }
 }
 
-/// `pta update [--machine NAME]`: the newest release on this computer or on another of the account.
+/// `kuroko update [--machine NAME]`: the newest release on this computer or on another of the account.
 async fn update_latest(args: &[String]) -> Result<Reply> {
     let Some(wanted) = option(args, "--machine") else {
         if let Some(reply) = asked(
             args,
-            "Update this computer to the newest release? The application and pta are replaced and the application restarts once nothing would be interrupted; the previous version is restored if the new one is not healthy.".into(),
+            "Update this computer to the newest release? The application and kuroko are replaced and the application restarts once nothing would be interrupted; the previous version is restored if the new one is not healthy.".into(),
         ) {
             return Ok(reply);
         }
@@ -911,14 +911,14 @@ async fn update_latest(args: &[String]) -> Result<Reply> {
             return Ok(Reply::error(
                 "invalid_input",
                 2,
-                "No machine of this account has that name or ID. List them with pta tools call machine_list.",
+                "No machine of this account has that name or ID. List them with kuroko tools call machine_list.",
             ));
         }
         _ => {
             return Ok(Reply::error(
                 "invalid_input",
                 2,
-                "Several machines have that name: use the machine's ID (pta tools call machine_list).",
+                "Several machines have that name: use the machine's ID (kuroko tools call machine_list).",
             ));
         }
     };
@@ -927,7 +927,7 @@ async fn update_latest(args: &[String]) -> Result<Reply> {
     if let Some(reply) = asked(
         args,
         format!(
-            "Update machine {name} to the newest release? It prepares it there, then replaces the application and pta and restarts it once nothing would be interrupted; the previous version is restored if the new one is not healthy."
+            "Update machine {name} to the newest release? It prepares it there, then replaces the application and kuroko and restarts it once nothing would be interrupted; the previous version is restored if the new one is not healthy."
         ),
     ) {
         return Ok(reply);
@@ -961,16 +961,16 @@ fn asked(args: &[String], question: String) -> Option<Reply> {
     (!yes).then(|| Reply::error("invalid_input", 2, "Cancelled; nothing was changed."))
 }
 
-/// What `pta update` started, in words.
+/// What `kuroko update` started, in words.
 fn update_text(data: &Value) -> Option<String> {
     let target = data["target"].as_str().unwrap_or_default();
     let place = data["machine"]
         .as_str()
         .map_or_else(|| "this computer".to_owned(), |m| format!("machine {m}"));
     let follow = if data["machine"].is_string() {
-        "Follow it in the machine list (pta tools call machine_list)."
+        "Follow it in the machine list (kuroko tools call machine_list)."
     } else {
-        "Follow it with pta update status."
+        "Follow it with kuroko update status."
     };
     Some(match data["outcome"].as_str()? {
         "current" => format!(
@@ -989,7 +989,7 @@ fn update_text(data: &Value) -> Option<String> {
             "Preparing version {target} on {place}; it is installed by itself once ready and nothing would be interrupted. {follow}"
         ),
         "deferred" => format!(
-            "Version {target} is ready on {place} and waits for work in progress to finish. {follow} pta update cancel withdraws it there."
+            "Version {target} is ready on {place} and waits for work in progress to finish. {follow} kuroko update cancel withdraws it there."
         ),
         _ => format!("Installing version {target} on {place}: the application restarts. {follow}"),
     })
@@ -1216,7 +1216,7 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
     Ok(body)
 }
 
-/// The `workflow_summary_send` arguments for `pta workflows summary RUN --send CHAT_ID`, from the
+/// The `workflow_summary_send` arguments for `kuroko workflows summary RUN --send CHAT_ID`, from the
 /// run's record (`workflow_run_status`'s data), or the reply to print instead. The summary sent
 /// is the one named with `--summary ID`; without it the run's latest is only shown for the
 /// confirmation, and a confirmed send must name it, so a summary written meanwhile is never
@@ -1244,7 +1244,7 @@ pub(super) fn summary_send(
         Some(wanted) => stored.iter().find(|s| s["id"] == wanted),
         None => stored.last(),
     }
-    .context("the run has no such stored summary: pta workflows summary RUN writes one")?;
+    .context("the run has no such stored summary: kuroko workflows summary RUN writes one")?;
     let edited = option(args, "--text-file")
         .map(|path| std::fs::read_to_string(path).with_context(|| format!("cannot read {path}")))
         .transpose()?;
@@ -1740,7 +1740,7 @@ async fn cloud_command(args: &[String]) -> Result<Reply> {
             let (collection, record) = match (words(args).get(2), words(args).get(3)) {
                 (Some(collection), Some(record)) => (*collection, *record),
                 _ => anyhow::bail!(
-                    "missing argument: give the collection and the record, as pta cloud conflicts lists them"
+                    "missing argument: give the collection and the record, as kuroko cloud conflicts lists them"
                 ),
             };
             let keep = option(args, "--keep").context("missing argument: --keep here|store")?;
@@ -1769,7 +1769,7 @@ async fn cloud_command(args: &[String]) -> Result<Reply> {
             let backup = words(args)
                 .get(2)
                 .copied()
-                .context("give the backup's name, as pta cloud backups lists it")?;
+                .context("give the backup's name, as kuroko cloud backups lists it")?;
             if let Some(reply) = unconfirmed(
                 args,
                 format!(
@@ -1813,7 +1813,7 @@ async fn cloud_command(args: &[String]) -> Result<Reply> {
                 (Some(machine), None) => json!({"machine": machine}),
                 (None, Some(installation)) => json!({"installation": installation}),
                 _ => anyhow::bail!(
-                    "give the lost computer's installation (pta cloud installations) or --machine ID"
+                    "give the lost computer's installation (kuroko cloud installations) or --machine ID"
                 ),
             };
             if let Some(reply) = unconfirmed(
@@ -1932,7 +1932,7 @@ async fn variables_command(args: &[String]) -> Result<Reply> {
             let body = json!({"id":id,"name":word(2)?,"description":description()?,"value":value});
             call("variable_create", body, None, true).await.map_err(|error| {
                 // The host may have stored it before the timeout: inspect, then repeat only with this ID.
-                error.context(format!("The result is unknown. Inspect with `pta variables list`; if it is absent, repeat with --id {id}."))
+                error.context(format!("The result is unknown. Inspect with `kuroko variables list`; if it is absent, repeat with --id {id}."))
             })
         }
         ("update", _) => {
@@ -1954,7 +1954,7 @@ async fn variables_command(args: &[String]) -> Result<Reply> {
                 body["value"] = json!(protected_value()?);
             }
             call("variable_update", body, None, true).await.map_err(|error| {
-                error.context("The result is unknown. Inspect with `pta variables list` before repeating.")
+                error.context("The result is unknown. Inspect with `kuroko variables list` before repeating.")
             })
         }
         ("rename", _) => {
@@ -1971,7 +1971,7 @@ async fn variables_command(args: &[String]) -> Result<Reply> {
             .await
             .map_err(|error| {
                 error.context(
-                    "The result is unknown. Inspect with `pta variables list` before repeating.",
+                    "The result is unknown. Inspect with `kuroko variables list` before repeating.",
                 )
             })
         }
@@ -2074,7 +2074,7 @@ async fn variables_command(args: &[String]) -> Result<Reply> {
                 body["settings"] = json!("adopt_account");
             }
             call("variable_migration_run", body, None, true).await.map_err(|error| {
-                error.context("The result is unknown. Inspect with `pta variables migrate status`; repeating the same command resumes safely.")
+                error.context("The result is unknown. Inspect with `kuroko variables migrate status`; repeating the same command resumes safely.")
             })
         }
         ("bind", _) | ("check", _) => {
@@ -3135,7 +3135,7 @@ async fn retire_outdated_host(command: &str, action: &str, interactive: bool) ->
         return Ok(());
     }
     if !was_running {
-        eprintln!("The assistant was stopped; start it with `pta start` whenever you want.");
+        eprintln!("The assistant was stopped; start it with `kuroko start` whenever you want.");
         return Ok(());
     }
     if !crate::app::keep_running_after_update(interactive) {
@@ -3143,7 +3143,7 @@ async fn retire_outdated_host(command: &str, action: &str, interactive: bool) ->
         if let Ok(profile) = control::profile_dir() {
             crate::app::service::remember(&profile, false);
         }
-        eprintln!("The assistant stays stopped; start it with `pta start` whenever you want.");
+        eprintln!("The assistant stays stopped; start it with `kuroko start` whenever you want.");
         return Ok(());
     }
     let reply = call("start_assistant", json!({}), None, true).await?;
@@ -3209,7 +3209,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 return Ok(Reply::error(
                     "invalid_input",
                     2,
-                    "Invalid tool arguments. Consult pta tools list for the input schema.",
+                    "Invalid tool arguments. Consult kuroko tools list for the input schema.",
                 ));
             }
             let asked = if value["confirmed"] == true {
@@ -3277,7 +3277,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
     }
     if command == "cases" {
         anyhow::bail!(
-            "Cases were replaced by Questions. Use pta questions list, add, edit, remove or associate."
+            "Cases were replaced by Questions. Use kuroko questions list, add, edit, remove or associate."
         );
     }
     if command == "questions" && action == "associate" {
@@ -3583,7 +3583,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 reply.ok = false;
                 reply.code = "authorization_pending".into();
                 reply.exit_code = 4;
-                reply.message = Some("Sign in at the approval URL, choose Trust this machine, then run pta auth machine finish --wait.".into());
+                reply.message = Some("Sign in at the approval URL, choose Trust this machine, then run kuroko auth machine finish --wait.".into());
             }
             if action == "finish" && args.iter().any(|a| a == "--wait") {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(600);
@@ -3603,7 +3603,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                     synced.data
                 } else {
                     json!({"ok":false,"code":synced.code,"message":synced.message,
-                        "next":"pta account sync (or --reset to replace this computer's settings with the account's)"})
+                        "next":"kuroko account sync (or --reset to replace this computer's settings with the account's)"})
                 };
             }
             return Ok(reply);
@@ -4205,7 +4205,7 @@ fn status_text(data: &Value) -> String {
     } else if let Some(model) = llm["model"].as_str() {
         lines.push(format!("Models: deepseek:{model}:max"));
     }
-    lines.push("Full detail: pta --json status".into());
+    lines.push("Full detail: kuroko --json status".into());
     lines.join("\n")
 }
 /// The CLI's name, and the one it was published as before 0.18.0, which stays an alias until
@@ -4300,8 +4300,28 @@ async fn run_as(invoked: &str) -> i32 {
                 );
                 return 0;
             }
+            Some(&"migrate") => {
+                let reply = super::mcp_migrate::migrate(args.iter().any(|a| a == "--confirmed"));
+                let failed = !reply["error"].is_null();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&if failed {
+                        Reply::error(
+                            "operation_failed",
+                            1,
+                            reply["error"].as_str().unwrap_or_default(),
+                        )
+                    } else {
+                        Reply::success(reply)
+                    })
+                    .unwrap()
+                );
+                return i32::from(failed);
+            }
             _ => {
-                eprintln!("Usage: pta mcp | pta mcp config");
+                eprintln!(
+                    "Usage: kuroko mcp | kuroko mcp config | kuroko mcp migrate [--confirmed]"
+                );
                 return 2;
             }
         }
@@ -4341,7 +4361,7 @@ async fn run_as(invoked: &str) -> i32 {
                 Reply::error(
                     "invalid_input",
                     2,
-                    "Invalid input. Consult pta --help and validate before applying.",
+                    "Invalid input. Consult kuroko --help and validate before applying.",
                 )
             } else {
                 Reply::error(

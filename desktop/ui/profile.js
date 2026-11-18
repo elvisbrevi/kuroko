@@ -20,7 +20,7 @@ function profileKey(snapshot) { return JSON.stringify([snapshot.config, snapshot
 
 /**
  * Whether the saved configuration changed underneath a form without unsaved edits (an account
- * synchronization, restored setup, `pta config set`): then the whole form reloads, so it shows what
+ * synchronization, restored setup, `kuroko config set`): then the whole form reloads, so it shows what
  * is saved and a later save cannot write an older copy over it.
  */
 async function reloadIfChanged() {

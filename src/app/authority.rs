@@ -74,7 +74,7 @@ pub(super) fn workflow(state: &DesktopState) -> Result<Invocation> {
 }
 
 /// The acting paths of a workflow run accept this authority and no other: never the control
-/// token, a browser session, a machine credential, MCP or `pta tools call`.
+/// token, a browser session, a machine credential, MCP or `kuroko tools call`.
 pub(super) fn require_workflow(state: &DesktopState) -> Result<()> {
     let invocation = invocation(state)?;
     ensure!(

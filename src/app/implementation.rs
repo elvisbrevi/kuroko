@@ -2274,7 +2274,7 @@ mod tests {
         let refused = operation(&host, "machine_upgrade", &json!({"machine":worker}))
             .await
             .unwrap_err();
-        assert!(refused.to_string().contains("pta update"), "{refused}");
+        assert!(refused.to_string().contains("kuroko update"), "{refused}");
         // The version is never an argument.
         assert!(
             operation(

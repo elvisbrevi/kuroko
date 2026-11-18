@@ -1275,7 +1275,7 @@ fn a_cut_falls_between_words_and_the_links_follow_the_text_that_is_kept() {
     assert!(composed.contains(ITEM_URL));
 }
 
-/// The words after `pta workflows`, as the shell passes them.
+/// The words after `kuroko workflows`, as the shell passes them.
 fn words(args: &[&str]) -> Vec<String> {
     ["workflows", "summary"]
         .iter()

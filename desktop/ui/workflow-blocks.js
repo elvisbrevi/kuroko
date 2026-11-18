@@ -287,7 +287,7 @@ function blockEditor(draft, saved) {
     if (!launcherState.launchers.length) {
       const open = el('button', { type: 'button', class: 'link-button', textContent: t('Open local programs in Settings') });
       open.onclick = () => showTab('settings', 'panel-consumers');
-      return [el('p', { class: 'hint', textContent: launcherState.error || t('There is no approved launcher on this computer yet. Define one with pta, review it and approve it in Settings › Variables, then choose it here.') }), el('div', { class: 'actions' }, open)];
+      return [el('p', { class: 'hint', textContent: launcherState.error || t('There is no approved launcher on this computer yet. Define one with kuroko, review it and approve it in Settings › Variables, then choose it here.') }), el('div', { class: 'actions' }, open)];
     }
     const choice = el('select', {}, el('option', { value: '', textContent: t('Choose a launcher') }),
       ...launcherState.launchers.map(l => el('option', { value: l.id, textContent: l.id })));

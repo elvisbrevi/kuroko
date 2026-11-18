@@ -1,4 +1,4 @@
-//! The portal's remote MCP endpoint (`POST /mcp`): the tool catalog of `pta mcp` over Streamable
+//! The portal's remote MCP endpoint (`POST /mcp`): the tool catalog of `kuroko mcp` over Streamable
 //! HTTP, for an agent with nothing installed (a cloud session, a phone, a computer without the
 //! host).
 //!
@@ -14,7 +14,7 @@
 //! confirmation in flight is held in memory, until the user answers or it expires, and so is a
 //! session whose question expired, which is not asked through the client again.
 //!
-//! Each tool runs through `tools::run`, the same code as `pta mcp`, with its host operations
+//! Each tool runs through `tools::run`, the same code as `kuroko mcp`, with its host operations
 //! forwarded to the signed-in account's host with `Transport::Agent`: the portal's per-account
 //! allowlist, `agent::METHODS` and every check of that host apply. Requests are bounded in body
 //! size, time and rate per account, and logged by operation, code and duration only.

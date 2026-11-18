@@ -283,7 +283,7 @@ pub(super) async fn operate_restore(host: &Arc<Host>, args: RestoreArgs) -> Repl
         "restarting": true,
         "backup": args.backup,
         "assistant": pending.assistant,
-        "next": "The application restarts now: it keeps a copy of the current data in backups/before-restore-<time>/, puts the backup back and starts again. Check the outcome with pta cloud backups.",
+        "next": "The application restarts now: it keeps a copy of the current data in backups/before-restore-<time>/, puts the backup back and starts again. Check the outcome with kuroko cloud backups.",
     }))
 }
 

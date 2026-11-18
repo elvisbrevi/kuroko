@@ -41,8 +41,8 @@ const MAX_SESSIONS: usize = 16;
 const PORTS: std::ops::Range<u16> = 21_000..30_000;
 const CANDIDATES: usize = 16;
 
-pub(super) const NO_BROWSER: &str = "This host has no browser session to open its page in (no display, or a service session). Run pta app open in a desktop session on this computer, or start the application there.";
-const UNAVAILABLE: &str = "This profile's local page is not available: it serves only the installation owner's own profile, and its port could not be opened. Restart the host with pta app quit and pta start.";
+pub(super) const NO_BROWSER: &str = "This host has no browser session to open its page in (no display, or a service session). Run kuroko app open in a desktop session on this computer, or start the application there.";
+const UNAVAILABLE: &str = "This profile's local page is not available: it serves only the installation owner's own profile, and its port could not be opened. Restart the host with kuroko app quit and kuroko start.";
 const TOO_SOON: &str =
     "The page was opened a moment ago. Wait a few seconds before opening it again.";
 
@@ -452,7 +452,7 @@ fn document() -> Response {
 
 /// Shown without a session: a used, expired or missing sign-in. It names the next step and
 /// never offers a link that signs in.
-const SIGNED_OUT: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Kuroko</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Open the assistant again</h1><p role=\"alert\">This page's sign-in ended or was already used. Open it again from this computer with the command below, or by starting the application.</p><p><code>pta app open</code></p></main></body></html>";
+const SIGNED_OUT: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Kuroko</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Open the assistant again</h1><p role=\"alert\">This page's sign-in ended or was already used. Open it again from this computer with the command below, or by starting the application.</p><p><code>kuroko app open</code></p></main></body></html>";
 
 fn signed_out() -> Response {
     (

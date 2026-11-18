@@ -97,7 +97,7 @@ async fn a_fresh_installation_explains_what_exists_without_requiring_an_account(
     let coordinator = step(&reply, "coordinator");
     assert_eq!(coordinator["state"], "optional");
     assert_eq!(coordinator["scope"], "coordinator");
-    assert!(actions(coordinator).contains(&"pta auth machine login URL".to_owned()));
+    assert!(actions(coordinator).contains(&"kuroko auth machine login URL".to_owned()));
     for id in ["connection", "machine"] {
         assert_eq!(step(&reply, id)["state"], "not_applicable");
     }
@@ -370,7 +370,10 @@ async fn a_pending_sign_in_is_waiting_and_names_how_to_resume_or_cancel() {
         .collect();
     assert_eq!(
         commands,
-        ["pta auth machine finish --wait", "pta auth machine cancel"]
+        [
+            "kuroko auth machine finish --wait",
+            "kuroko auth machine cancel"
+        ]
     );
     let ended = Machines {
         list: None,
@@ -456,7 +459,7 @@ async fn a_second_client_sees_the_account_and_each_failure_is_understood() {
     assert_eq!(variables["state"], "todo");
     // Not yet restored on this computer: an explicit, named step.
     assert_eq!(step(&live, "configuration")["state"], "todo");
-    assert!(actions(step(&live, "configuration")).contains(&"pta account sync".to_owned()));
+    assert!(actions(step(&live, "configuration")).contains(&"kuroko account sync".to_owned()));
     assert_eq!(live.data["ready"], false);
 
     // A second client of the same account lists the same variable; another account sees none.
@@ -482,7 +485,7 @@ async fn a_second_client_sees_the_account_and_each_failure_is_understood() {
     let connection = step(&revoked, "connection");
     assert_eq!(connection["state"], "todo");
     assert_eq!(connection["detail"], standing::REVOKED);
-    assert!(actions(connection).contains(&"pta auth machine login".to_owned()));
+    assert!(actions(connection).contains(&"kuroko auth machine login".to_owned()));
     assert_eq!(revoked.data["next"]["step"], "connection");
 
     // And back online it recovers without any local reset.
@@ -615,7 +618,7 @@ async fn a_computer_configured_before_signing_in_is_told_how_to_load_the_account
     let configuration = step(&before, "configuration");
     assert_eq!(configuration["state"], "attention");
     assert_eq!(configuration["facts"]["local_changes"], true);
-    assert!(actions(configuration).contains(&"pta account sync --reset".to_owned()));
+    assert!(actions(configuration).contains(&"kuroko account sync --reset".to_owned()));
     // The reset it names loads the account (keeping a private backup) and settles the step.
     let reset = call(&pair.native, Local, "portable_sync", json!({"reset":true})).await;
     assert!(reset.ok, "{:?}", reset.message);

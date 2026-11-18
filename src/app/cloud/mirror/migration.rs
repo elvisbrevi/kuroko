@@ -185,8 +185,8 @@ impl MigrateArgs {
     }
 }
 
-const ADOPT: &str = "The account store already holds this account's configuration from another computer. Adopt it here (pta cloud migrate --adopt --confirmed): this computer's configuration is backed up privately, then replaced by the account's, and its own history is uploaded. Nothing was uploaded.";
-const NEED_KEY: &str = "The account store already holds this account's copy, sealed with a content key this computer does not have. Give it the key first (Trust this machine with the account store from the coordinator, or pta variables key restore). Nothing was uploaded.";
+const ADOPT: &str = "The account store already holds this account's configuration from another computer. Adopt it here (kuroko cloud migrate --adopt --confirmed): this computer's configuration is backed up privately, then replaced by the account's, and its own history is uploaded. Nothing was uploaded.";
+const NEED_KEY: &str = "The account store already holds this account's copy, sealed with a content key this computer does not have. Give it the key first (Trust this machine with the account store from the coordinator, or kuroko variables key restore). Nothing was uploaded.";
 
 /// Whether the store already holds configuration this installation never acknowledged: another
 /// computer of the account migrated first. A computer signed in to a coordinator keeps only its
@@ -250,7 +250,7 @@ fn dry_run(host: &Host) -> Reply {
         "plan": plan,
         "stays_local": STAYS_LOCAL.iter().map(|(what, why)| json!({"what": what, "why": why})).collect::<Vec<_>>(),
         "backup": {"files": files.len(), "bytes": backup_bytes, "path": backups_root(host).join("cloud-<time>")},
-        "next": "pta cloud migrate --confirmed backs up this profile first, then uploads, verifies by reading back and switches to mirror.",
+        "next": "kuroko cloud migrate --confirmed backs up this profile first, then uploads, verifies by reading back and switches to mirror.",
     }))
 }
 
@@ -265,7 +265,7 @@ async fn migrate(host: &Arc<Host>, adopt: bool) -> std::result::Result<Reply, Bo
     if config.cloud.mode == CloudMode::Primary {
         return Ok(Reply::success(json!({
             "action": "start", "mode": "primary", "changed": false,
-            "next": "This account is already migrated and the account store is its source; pta cloud verify compares the copy.",
+            "next": "This account is already migrated and the account store is its source; kuroko cloud verify compares the copy.",
         })));
     }
     let worker = remote(host, &config.cloud).map_err(|m| Box::new(missing_reply(&m)))?;
@@ -369,7 +369,7 @@ async fn rollback(host: &Arc<Host>, args: RollbackArgs) -> std::result::Result<R
             Reply::error(
                 "state_conflict",
                 6,
-                "Some configuration changed both here and in the account store; nothing was changed. Adopt the store's version with pta cloud pull --replace --confirmed, or keep this computer's with pta cloud rollback --keep-local --confirmed.",
+                "Some configuration changed both here and in the account store; nothing was changed. Adopt the store's version with kuroko cloud pull --replace --confirmed, or keep this computer's with kuroko cloud rollback --keep-local --confirmed.",
             ),
             json!({"conflicts": conflicts, "pulled": pulled}),
         ));
@@ -427,7 +427,7 @@ async fn rollback(host: &Arc<Host>, args: RollbackArgs) -> std::result::Result<R
             Reply::error(
                 "state_conflict",
                 6,
-                "The account store holds records this computer does not have; nothing was changed. Check pta cloud verify, or roll back with --keep-local to leave them only in the store.",
+                "The account store holds records this computer does not have; nothing was changed. Check kuroko cloud verify, or roll back with --keep-local to leave them only in the store.",
             ),
             json!({"verify": verify, "pulled": pulled}),
         ));
@@ -446,7 +446,7 @@ async fn rollback(host: &Arc<Host>, args: RollbackArgs) -> std::result::Result<R
         "only_in_store": only_remote,
         "restart_required": applied > 0
             && host.state.running.try_lock().map_or(true, |r| r.is_some()),
-        "next": "This computer is the only source again and nothing is uploaded. The account store keeps its copy until pta cloud erase --confirmed; pta cloud migrate --confirmed continues from it.",
+        "next": "This computer is the only source again and nothing is uploaded. The account store keeps its copy until kuroko cloud erase --confirmed; kuroko cloud migrate --confirmed continues from it.",
     })))
 }
 
@@ -488,7 +488,7 @@ async fn rotate(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
         "rotated": true,
         "version": content.active,
         "resealing": resealing,
-        "next": "Back up the new key now (pta variables key backup). The account's other computers trusted with the account store receive it from this coordinator within minutes (pta cloud token lists them); one trusted before 0.10.38 is trusted again with the account store.",
+        "next": "Back up the new key now (kuroko variables key backup). The account's other computers trusted with the account store receive it from this coordinator within minutes (kuroko cloud token lists them); one trusted before 0.10.38 is trusted again with the account store.",
     })))
 }
 
@@ -509,7 +509,7 @@ async fn erase(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
     })?;
     if config.cloud.mode != CloudMode::Off {
         return Err(refuse(
-            "Roll back first (pta cloud rollback --confirmed): only a copy that is no longer in use can be erased. Nothing was erased.",
+            "Roll back first (kuroko cloud rollback --confirmed): only a copy that is no longer in use can be erased. Nothing was erased.",
         ));
     }
     let worker = remote(host, &config.cloud).map_err(|m| Box::new(missing_reply(&m)))?;
@@ -549,7 +549,7 @@ async fn erase(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
                 };
                 let message = if records + backups > 0 {
                     format!(
-                        "{} Part of the copy was erased; run pta cloud erase --confirmed again to finish.",
+                        "{} Part of the copy was erased; run kuroko cloud erase --confirmed again to finish.",
                         refusal.message.as_deref().unwrap_or_default()
                     )
                 } else {
@@ -572,7 +572,7 @@ async fn erase(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
             ..Reply::error(
                 "operation_failed",
                 1,
-                "The account store is still erasing the copy; run pta cloud erase --confirmed again to finish.",
+                "The account store is still erasing the copy; run kuroko cloud erase --confirmed again to finish.",
             )
         }));
     }
@@ -595,7 +595,7 @@ async fn erase(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
         "backups": backups,
         "key_retired": retired,
         "recovery": "Cloudflare keeps a 30-day point-in-time recovery of the account store: only the operator can restore it, and only the retired content key (this computer's keys directory or a key backup) can read it. Erased R2 backups cannot be recovered.",
-        "next": "This computer keeps all of its data. pta cloud migrate --confirmed starts a new copy with a new content key; back that key up afterwards.",
+        "next": "This computer keeps all of its data. kuroko cloud migrate --confirmed starts a new copy with a new content key; back that key up afterwards.",
     })))
 }
 

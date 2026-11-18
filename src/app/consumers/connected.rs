@@ -290,7 +290,7 @@ pub(super) async fn run(
             let consumer = consumer_of(&a.consumer)?;
             let Some(binding) = state.bindings.entry(link, consumer.id, consumer.slot) else {
                 return Err(input(
-                    "No variable is bound to this consumer. Choose one with `pta consumers bind`.",
+                    "No variable is bound to this consumer. Choose one with `kuroko consumers bind`.",
                 ));
             };
             let (metadata, value) = resolve(&host.state, &binding.entry, a.version).await?;

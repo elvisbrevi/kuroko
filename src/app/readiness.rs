@@ -62,8 +62,8 @@ const CONFIG_STORE: &str =
 const VARIABLES_OK: &str = "The account's variables are available by name.";
 const VARIABLES_NONE: &str = "No variable has been stored yet. Add one when something needs it; the value is typed by you, never by the agent.";
 const VARIABLES_ERROR: &str = "The variable catalog could not be read or synchronized. Synchronize again; no value was needed for this check.";
-const VARIABLES_MISSING: &str = "Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `pta variables entry complete`); it never goes through chat.";
-const VARIABLES_WAITING: &str = "A protected entry is waiting for you to type the value. Finish it in Settings > Variables or with `pta variables entry complete`.";
+const VARIABLES_MISSING: &str = "Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `kuroko variables entry complete`); it never goes through chat.";
+const VARIABLES_WAITING: &str = "A protected entry is waiting for you to type the value. Finish it in Settings > Variables or with `kuroko variables entry complete`.";
 const VARIABLES_BROKEN: &str =
     "A consumer uses a variable that no longer exists. Choose another variable for it.";
 const MIGRATION_DONE: &str = "The credentials you chose were moved to your account and verified.";
@@ -85,7 +85,7 @@ const TEAMS_RUNNING: &str = "The assistant is running here. Running is not the s
 const VERSIONS_OK: &str = "This installation runs the newest known release.";
 const VERSIONS_NEWER: &str =
     "A newer release is available. Updating is a separate, confirmed action.";
-const VERSIONS_RESTART: &str = "A newer version is installed than the one running. Restart the application to use it, then reconnect agents that use `pta mcp`.";
+const VERSIONS_RESTART: &str = "A newer version is installed than the one running. Restart the application to use it, then reconnect agents that use `kuroko mcp`.";
 const VERSIONS_MANAGED: &str =
     "The server's updates are applied by its operator; there is nothing to install from here.";
 const VERSIONS_BUSY: &str =
@@ -103,7 +103,7 @@ const STORE_CONFLICT: &str = "This computer and the account store changed the sa
 const STORE_PENDING: &str =
     "Changes are waiting to be copied to the account store; they are sent in the background.";
 const STORE_BLOCKED: &str = "Some records are too large for the account store and are not copied.";
-const STORE_DIFFERS: &str = "The last verification found differences in the encrypted copy. Repair it (pta cloud repair, or «Repair the copy» in Cloud storage).";
+const STORE_DIFFERS: &str = "The last verification found differences in the encrypted copy. Repair it (kuroko cloud repair, or «Repair the copy» in Cloud storage).";
 const STORE_RETRUST: &str = "This computer was trusted before it could receive the account store's new credentials: trust it again with the account store.";
 const STORE_TOKEN: &str = "The account store's service token expires within 30 days. Ask whoever runs the account store to renew it, then connect again with the new expiry.";
 const STORE_SHARED: &str =
@@ -359,28 +359,28 @@ async fn coordinator(
         .and_then(|s| s["coordinator_origin"].as_str().map(str::to_owned));
     let login = machines.login["state"].as_str().unwrap_or("none");
     let facts = json!({"coordinator":remembered,"sign_in":login});
-    let finish = cli("pta auth machine finish --wait");
+    let finish = cli("kuroko auth machine finish --wait");
     match login {
         "pending" | "approved" => step
             .is("waiting", PENDING)
             .facts(machines.login.clone())
             .act(finish)
-            .act(cli("pta auth machine cancel")),
+            .act(cli("kuroko auth machine cancel")),
         "denied" | "expired" => step
             .is("todo", ENDED)
             .facts(facts)
             .act(gui("Sidebar > Sign in"))
-            .act(cli("pta auth machine login URL")),
+            .act(cli("kuroko auth machine login URL")),
         _ if remembered.is_some() => step
             .is("todo", SIGNED_OUT)
             .facts(facts)
             .act(gui("Sidebar > Sign in"))
-            .act(cli("pta auth machine login")),
+            .act(cli("kuroko auth machine login")),
         _ => step
             .is("optional", STANDALONE)
             .facts(facts)
             .act(gui("Sidebar > Sign in"))
-            .act(cli("pta auth machine login URL")),
+            .act(cli("kuroko auth machine login URL")),
     }
 }
 
@@ -394,20 +394,20 @@ fn connection(host: &Arc<Host>, link: Option<&implementation::Link>) -> Step {
         "standing": view["state"], "checked_at": view["checked_at"], "last_live_at": view["last_live_at"],
         "variables_usable": view["variables_usable"],
     });
-    let sign_in = cli("pta auth machine login");
+    let sign_in = cli("kuroko auth machine login");
     let step = step.facts(facts);
     match view["state"].as_str().unwrap_or("unknown") {
         "live" => step.is("done", STANDING_LIVE),
         "offline" => step
             .is("attention", standing::OFFLINE)
-            .act(cli("pta account sync")),
+            .act(cli("kuroko account sync")),
         "revoked" => step
             .is("todo", standing::REVOKED)
             .act(gui("Sidebar > Sign in"))
             .act(sign_in),
         _ => step
             .is("unknown", STANDING_UNKNOWN)
-            .act(cli("pta account sync")),
+            .act(cli("kuroko account sync")),
     }
 }
 
@@ -422,7 +422,7 @@ fn listed(machines: &Machines, connected: bool, browser: bool) -> Step {
     let Some(list) = &machines.list else {
         return step
             .is("unknown", LIST_UNKNOWN)
-            .act(cli("pta account sync"));
+            .act(cli("kuroko account sync"));
     };
     let own = list["this_machine"].as_str().unwrap_or_default();
     let entry = list["machines"]
@@ -437,12 +437,12 @@ fn listed(machines: &Machines, connected: bool, browser: bool) -> Step {
         Some(m) if m["trust"] == "revoked" => step
             .is("todo", REVOKED_HERE)
             .act(gui("Sidebar > Sign in"))
-            .act(cli("pta auth machine login")),
+            .act(cli("kuroko auth machine login")),
         Some(_) => step.is("done", LISTED),
         None => step
             .is("todo", NOT_LISTED)
             .act(gui("Sidebar > Sign in"))
-            .act(cli("pta auth machine login")),
+            .act(cli("kuroko auth machine login")),
     }
 }
 
@@ -454,7 +454,7 @@ async fn configuration(host: &Arc<Host>, connected: bool) -> Step {
     let step = Step::new("configuration", "coordinator", connected);
     let reply = portable::operate(host, &ask_args("portable_status", json!({}))).await;
     if !reply.ok {
-        return step.act(cli("pta account sync"));
+        return step.act(cli("kuroko account sync"));
     }
     let sync = &reply.data["sync"];
     let facts = json!({
@@ -465,24 +465,26 @@ async fn configuration(host: &Arc<Host>, connected: bool) -> Step {
             "questions": sync["unavailable"]["questions"].as_array().map_or(0, Vec::len),
         },
     });
-    let sync_now = cli("pta account sync");
+    let sync_now = cli("kuroko account sync");
     let step = step.facts(facts);
     match sync["state"].as_str().unwrap_or_default() {
         "authoritative" => step.is("done", CONFIG_OWN),
-        "account_store" => step.is("done", CONFIG_STORE).act(cli("pta cloud status")),
+        "account_store" => step
+            .is("done", CONFIG_STORE)
+            .act(cli("kuroko cloud status")),
         "synced" => step.is("done", CONFIG_SYNCED),
         "syncing" => step.is("waiting", CONFIG_BUSY),
         "never" if sync["error"].is_null() && sync["local_changes"] == true => step
             .is("attention", CONFIG_LOCAL)
-            .act(cli("pta account sync --reset")),
+            .act(cli("kuroko account sync --reset")),
         "never" if sync["error"].is_null() => step.is("todo", CONFIG_NEVER).act(sync_now),
         "stale" => step.is("attention", CONFIG_STALE).act(sync_now),
         "diverged" => step
             .is("attention", CONFIG_DIVERGED)
-            .act(cli("pta account status")),
+            .act(cli("kuroko account status")),
         "conflict" => step
             .is("attention", CONFIG_CONFLICT)
-            .act(cli("pta account status")),
+            .act(cli("kuroko account status")),
         _ => step.is("attention", CONFIG_ERROR).act(sync_now),
     }
 }
@@ -493,7 +495,7 @@ async fn variables(host: &Arc<Host>, expect: &[String]) -> Step {
     if !listing.ok {
         return step
             .is("attention", VARIABLES_ERROR)
-            .act(cli("pta variables sync"));
+            .act(cli("kuroko variables sync"));
     }
     let stored = listing.data["variables"]
         .as_array()
@@ -568,7 +570,7 @@ async fn variables(host: &Arc<Host>, expect: &[String]) -> Step {
     if matches!(sync_state, "error" | "conflict") {
         return step
             .is("attention", VARIABLES_ERROR)
-            .act(cli("pta variables sync"));
+            .act(cli("kuroko variables sync"));
     }
     if missing {
         return step.is("todo", VARIABLES_MISSING);
@@ -579,7 +581,7 @@ async fn variables(host: &Arc<Host>, expect: &[String]) -> Step {
     if broken {
         return step
             .is("attention", VARIABLES_BROKEN)
-            .act(cli("pta variables consumers"));
+            .act(cli("kuroko variables consumers"));
     }
     if expect.is_empty() && stored.is_empty() {
         return step.is("optional", VARIABLES_NONE);
@@ -607,7 +609,7 @@ async fn migration_step(host: &Arc<Host>, connected: bool) -> Step {
         return step.is("not_applicable", STANDALONE);
     }
     step.is("optional", MIGRATION_OPEN)
-        .act(cli("pta variables migrate inspect"))
+        .act(cli("kuroko variables migrate inspect"))
         .act(gui("Settings > Credentials > Move existing credentials"))
 }
 
@@ -715,10 +717,10 @@ async fn teams(host: &Arc<Host>, machines: &Machines, connected: bool) -> Step {
         return step
             .is("todo", TEAMS_SIGN_IN)
             .act(gui("Settings > Microsoft Teams"))
-            .act(cli("pta auth microsoft login"));
+            .act(cli("kuroko auth microsoft login"));
     }
     if !running {
-        return step.is("todo", TEAMS_IDLE).act(cli("pta start"));
+        return step.is("todo", TEAMS_IDLE).act(cli("kuroko start"));
     }
     step.is("done", TEAMS_RUNNING)
 }
@@ -749,24 +751,24 @@ async fn account_store(host: &Arc<Host>, shared: bool) -> Step {
             return step
                 .is("not_applicable", STORE_NONE)
                 .act(place)
-                .act(cli("pta cloud connect"));
+                .act(cli("kuroko cloud connect"));
         }
         "not_enrolled" => {
             return step
                 .is("todo", STORE_NOT_ENROLLED)
                 .act(place)
-                .act(cli("pta cloud connect"));
+                .act(cli("kuroko cloud connect"));
         }
         "offline" => {
             return step
                 .is("attention", standing::STORE_OFFLINE)
-                .act(cli("pta cloud status"));
+                .act(cli("kuroko cloud status"));
         }
         "revoked" => {
             return step
                 .is("attention", standing::STORE_REVOKED)
                 .act(place)
-                .act(cli("pta cloud connect"));
+                .act(cli("kuroko cloud connect"));
         }
         "unconfigured" => return step.is("attention", STORE_UNCONFIGURED),
         _ => {}
@@ -780,52 +782,55 @@ async fn account_store(host: &Arc<Host>, shared: bool) -> Step {
         return step
             .is("attention", STORE_RETRUST)
             .act(place)
-            .act(cli("pta auth machine login"));
+            .act(cli("kuroko auth machine login"));
     }
     if view["delivery"]["key"]["behind"] == true {
         return step
             .is("waiting", super::cloud::KEY_BEHIND)
-            .act(cli("pta cloud status"));
+            .act(cli("kuroko cloud status"));
     }
     let primary = view["mode"] == "primary";
     if primary && mirror["primary"]["conflicts"].as_u64().unwrap_or(0) > 0 {
         return step
             .is("attention", STORE_CONFLICT)
             .act(place)
-            .act(cli("pta cloud conflicts"));
+            .act(cli("kuroko cloud conflicts"));
     }
     if view["mode"] != "mirror" && !primary {
         if mirror["rolled_back_at"].is_number() {
             return step
                 .is("optional", STORE_ROLLED_BACK)
                 .act(place)
-                .act(cli("pta cloud migrate --dry-run"));
+                .act(cli("kuroko cloud migrate --dry-run"));
         }
         return step
             .is("optional", STORE_OFF)
             .act(place)
-            .act(cli("pta cloud migrate --dry-run"));
+            .act(cli("kuroko cloud migrate --dry-run"));
     }
     if mirror["last_verify"]["ok"] == false {
         return step
             .is("attention", STORE_DIFFERS)
             .act(place)
-            .act(cli("pta cloud migrate --confirmed"));
+            .act(cli("kuroko cloud migrate --confirmed"));
     }
     if outbox["blocked"].as_u64().unwrap_or(0) > 0 {
         return step
             .is("attention", STORE_BLOCKED)
-            .act(cli("pta cloud status"));
+            .act(cli("kuroko cloud status"));
     }
     if outbox["pending"].as_u64().unwrap_or(0) > 0 {
         return step
             .is("waiting", STORE_PENDING)
-            .act(cli("pta cloud status"));
+            .act(cli("kuroko cloud status"));
     }
     if primary {
-        return step.is("done", STORE_PRIMARY).act(cli("pta cloud verify"));
+        return step
+            .is("done", STORE_PRIMARY)
+            .act(cli("kuroko cloud verify"));
     }
-    step.is("done", STORE_MIRROR).act(cli("pta cloud verify"))
+    step.is("done", STORE_MIRROR)
+        .act(cli("kuroko cloud verify"))
 }
 
 async fn versions(host: &Arc<Host>) -> Step {
@@ -849,17 +854,17 @@ async fn versions(host: &Arc<Host>) -> Step {
     ) {
         return step
             .is("waiting", VERSIONS_BUSY)
-            .act(cli("pta update status"));
+            .act(cli("kuroko update status"));
     }
     if data["restart_required"] == true {
         return step
             .is("attention", VERSIONS_RESTART)
-            .act(cli("pta app quit"));
+            .act(cli("kuroko app quit"));
     }
     if data["available"].is_string() {
         return step
             .is("optional", VERSIONS_NEWER)
-            .act(cli("pta update status"))
+            .act(cli("kuroko update status"))
             .act(gui("Settings > Updates"));
     }
     step.is("done", VERSIONS_OK)
