@@ -1,6 +1,6 @@
 # Private portal: macOS deployment and verification
 
-The canonical [web operating guide](../desktop/skills/personal-teams-assistant/references/web-access.md) describes a self-hosted, single-owner installation; the [security policy](../SECURITY.md) describes its trust boundaries. The maintainer's portal is private and is not a service for people installing the crate.
+The canonical [web operating guide](../desktop/skills/kuroko/references/web-access.md) describes a self-hosted, single-owner installation; the [security policy](../SECURITY.md) describes its trust boundaries. The maintainer's portal is private and is not a service for people installing the crate.
 
 Keep actual account IDs, owner identity responses, tunnel/DNS identifiers, server addresses, settings, tokens, service definitions, logs, backups and deployment evidence in private storage outside this repository. Public documentation uses example domains and synthetic identities. Supply credentials through the system store, protected environment bindings or private files, never in command arguments, public notes or chat.
 

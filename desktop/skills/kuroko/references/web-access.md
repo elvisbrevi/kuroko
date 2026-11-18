@@ -2,7 +2,7 @@
 
 The same host binary serves the existing GUI in a browser: Home, Messages,
 Activities, Knowledge, Test chat and Settings. This computer's local page and the CLI
-keep their own loopback channels. The portal is `personal-teams-assistant --web`, behind the
+keep their own loopback channels. The portal is `kuroko-host --web`, behind the
 existing dedicated Tunnel. Its HTTPS hostname and complete API must be protected
 by Cloudflare Access. GitHub owns the interactive sign-in; there is no second
 password form, public registration or password authentication endpoint.
@@ -14,19 +14,19 @@ Configure `owner_github_id` to your verified positive integer GitHub user ID. Ex
 ## Operator-local accounts and recovery
 
 ```sh
-pta web status
-pta web users list
-pta web users add owner --current-profile
-pta web users bind owner < /private/path/verified-owner-identity.json
-pta web users add colleague
-pta web users authorize colleague
-pta web users bind colleague < /private/path/verified-colleague-identity.json
-pta web users enable colleague
-pta web users unbind owner
-pta web users revoke owner
-pta web users disable owner
-pta web users enable owner
-pta --json web callbacks > /private/path/production-callbacks.json
+kuroko web status
+kuroko web users list
+kuroko web users add owner --current-profile
+kuroko web users bind owner < /private/path/verified-owner-identity.json
+kuroko web users add colleague
+kuroko web users authorize colleague
+kuroko web users bind colleague < /private/path/verified-colleague-identity.json
+kuroko web users enable colleague
+kuroko web users unbind owner
+kuroko web users revoke owner
+kuroko web users disable owner
+kuroko web users enable owner
+kuroko --json web callbacks > /private/path/production-callbacks.json
 ```
 
 Create `owner --current-profile` only if it is absent. An existing `owner` account
@@ -123,7 +123,7 @@ python3 scripts/configure-web-access.py \
   --allow-email YOUR_VERIFIED_GITHUB_EMAIL \
   --callbacks-file /private/path/production-callbacks.json \
   --settings-file /private/path/access-settings.json
-pta web configure < /private/path/access-settings.json
+kuroko web configure < /private/path/access-settings.json
 ```
 
 Run this helper from a checkout of the project's `main` branch; Cargo installs
@@ -185,10 +185,10 @@ The real helper-generated settings contain `bind`, `public_url`, `session_hours`
 IDs come from actual Cloudflare resources; never invent them. Configuration takes
 effect when the portal restarts. Plain HTTP previews cannot authenticate Access.
 
-`pta web callbacks` exports only exact `/webhooks/<profile-id>/graph/notifications`
+`kuroko web callbacks` exports only exact `/webhooks/<profile-id>/graph/notifications`
 and `/webhooks/<profile-id>/graph/lifecycle` paths for enabled, bound, admitted accounts only. For a fresh isolated owner, the first
 export is empty while Access/binding are being configured. After binding the owner,
-export `pta --json web callbacks` again to the callbacks file and rerun the Access
+export `kuroko --json web callbacks` again to the callbacks file and rerun the Access
 helper with that refreshed file before starting Teams. Repeat after any owner-profile
 change; an old callback export never updates itself. Only these callback POST handlers are exempt in the backend;
 the exact matching paths have separate Access Bypass apps at the edge. No broad
@@ -232,8 +232,8 @@ repositories/imports remain confined to each profile.
 For isolated operator-local CLI access use the path in `web users list`:
 
 ```sh
-PTA_PROFILE_DIR=/absolute/profile/path pta status
-PTA_PROFILE_DIR=/absolute/profile/path pta credentials set DEEPSEEK_API_KEY < /private/path/key
+PTA_PROFILE_DIR=/absolute/profile/path kuroko status
+PTA_PROFILE_DIR=/absolute/profile/path kuroko credentials set DEEPSEEK_API_KEY < /private/path/key
 ```
 
 Without `PTA_PROFILE_DIR`, the existing `dev.personalteams.assistant` profile,
@@ -257,18 +257,18 @@ administrator rights.
    `machine_join_command`, read-only, from the portal's MCP endpoint or a computer already
    connected to the coordinator). It returns the command for macOS, Linux and Windows, built from
    the portal's own HTTPS origin and the package's repository; it holds no secret:
-   - macOS and Linux: `curl --proto '=https' --tlsv1.2 -fsSL https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.sh | sh -s -- --origin https://your-portal.example`
+   - macOS and Linux: `curl --proto '=https' --tlsv1.2 -fsSL https://github.com/elvisbrevi/kuroko/releases/latest/download/install.sh | sh -s -- --origin https://your-portal.example`
    - Windows (PowerShell): `Invoke-RestMethod -UseBasicParsing …/install.ps1 -OutFile "$env:TEMP\pta-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\pta-install.ps1" -Origin https://your-portal.example`
 2. The person runs it on the computer to add. The script checks the archive's SHA-256 (and
    provenance with `gh` when it is signed in) before running anything, installs both binaries for
-   the user, puts `pta` on the path of new terminals, starts the host at login and runs
-   `pta auth machine login ORIGIN`, opening the approval page and printing its code. It then waits
-   for `pta auth machine finish --wait`.
+   the user, puts `kuroko` on the path of new terminals, starts the host at login and runs
+   `kuroko auth machine login ORIGIN`, opening the approval page and printing its code. It then waits
+   for `kuroko auth machine finish --wait`.
 3. The person checks the code on that page and chooses Trust this machine, as below. Then choose
    the computer's allowed directories (and separately Teams), as below.
 
 Options: `--version X.Y.Z`, `--root DIR`, `--no-service`, `--no-browser`, `--integrations`
-(also `pta skill install` and the `pta mcp` registration for Claude Code and Codex; without it
+(also `kuroko skill install` and the `kuroko mcp` registration for Claude Code and Codex; without it
 the script prints those commands) and `--uninstall` (service, binaries and path entry removed,
 profile kept); on Windows `-Version`, `-Root`, `-NoService`, `-NoBrowser`, `-Integrations`,
 `-Uninstall`. Running it again repairs or upgrades the same installation and keeps the machine
@@ -283,7 +283,7 @@ installation's CLI/host and the coordinator must advertise `machine_login_suppor
 
 1. On the computer to add, stop its Teams assistant. The app shows its sign-in screen at
    start (or choose Sign in in the sidebar): enter your coordinator's HTTPS origin and select
-   Sign in, or run `pta auth machine login https://your-portal.example` (add `--no-browser` on a
+   Sign in, or run `kuroko auth machine login https://your-portal.example` (add `--no-browser` on a
    host without a browser session). Through MCP/CLI tools call `machine_login` with `url` (and `open: true`
    on a host with a desktop session). The origin is validated (HTTPS, no credentials, path or query) and
    remembered for the next sign-in; there is no default coordinator.
@@ -299,10 +299,10 @@ installation's CLI/host and the coordinator must advertise `machine_login_suppor
    (`machine_login_finish` › `store`: `installed`, `connected`, `problem`). Tick it only for a
    computer the user owns; revoking the computer later also revokes it in the store.
 4. On the computer, select nothing more in the GUI (it finishes by itself and brings the
-   account's configuration and variables), or run `pta auth machine finish --wait`
-   (which then runs `pta account sync`) / call `machine_login_finish` until it returns
-   `connected`, then `account_sync`. `pta auth machine status` (`machine_login_status`) reports `pending`,
-   `approved`, `denied`, `expired` or `none` without finishing. `pta auth machine cancel`
+   account's configuration and variables), or run `kuroko auth machine finish --wait`
+   (which then runs `kuroko account sync`) / call `machine_login_finish` until it returns
+   `connected`, then `account_sync`. `kuroko auth machine status` (`machine_login_status`) reports `pending`,
+   `approved`, `denied`, `expired` or `none` without finishing. `kuroko auth machine cancel`
    (`machine_login_cancel`) withdraws a pending request.
 5. Confirm `machine_list` shows the computer. Then choose its allowed roots, and separately
    the Teams machine and Start, if wanted: trust grants no directories, Teams ownership,
@@ -331,8 +331,8 @@ The operator-local pairing file remains available, for example for coordinators 
 offer browser sign-in.
 
 1. On the computer to connect, call `machine_settings` through CLI/MCP and read its `id`. Stop its Teams assistant before pairing.
-2. On your own coordinator, run `pta web machines authorize MACHINE_ID [USER] --output /private/unused/pairing.json`. This operator-local command requires an enabled admitted account. Omit USER for the owner, or supply the explicitly authorized account's local username. It writes a 0600 JSON credential file; command output contains only its path and expiration. The server stores only a hash. Never paste the file or token in chat or command arguments.
-3. Transfer that file securely to the intended computer. Run `pta tools call machine_connect < /private/path/pairing.json` there within ten minutes. Delete the file after use. It carries your coordinator URL; there is no default shared server.
+2. On your own coordinator, run `kuroko web machines authorize MACHINE_ID [USER] --output /private/unused/pairing.json`. This operator-local command requires an enabled admitted account. Omit USER for the owner, or supply the explicitly authorized account's local username. It writes a 0600 JSON credential file; command output contains only its path and expiration. The server stores only a hash. Never paste the file or token in chat or command arguments.
+3. Transfer that file securely to the intended computer. Run `kuroko tools call machine_connect < /private/path/pairing.json` there within ten minutes. Delete the file after use. It carries your coordinator URL; there is no default shared server.
 4. Confirm `machine_list` shows your computer. A pairing cannot be reused, used for a different machine or installation, or used after account revocation/reassociation. A failed registration needs a new local authorization; never retry an uncertain enrollment with the old file.
 
 Machine registration never sends a GitHub access token to a coordinator. Existing machine credentials remain account-version-bound and revocable. Initial pairing requires CLI 0.9.4 or later. The GUI's Connect action uses browser sign-in, not pairing files. Normal management remains available in the GUI after pairing.

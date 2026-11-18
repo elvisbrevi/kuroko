@@ -19,10 +19,9 @@ use crate::{
 };
 
 const CONFLICT: &str = "[conflict] The account configuration changed in the account store since this computer last synchronized. Nothing was saved; it is being synchronized now: review it and repeat the change.";
-const UNRESOLVED: &str = "[conflict] This computer and the account store changed the same configuration. Nothing was saved. Replace this computer's configuration with the account store's (pta cloud pull --replace, or Settings › Advanced › Cloud storage) and repeat the change.";
+const UNRESOLVED: &str = "[conflict] This computer and the account store changed the same configuration. Nothing was saved. Replace this computer's configuration with the account store's (kuroko cloud pull --replace, or Settings › Advanced › Cloud storage) and repeat the change.";
 const OFFLINE: &str = "[network] The account store did not answer, so nothing was saved here and the configuration is read-only until it does. If the store received the change before the connection failed, it appears here after the next synchronization.";
-const REFUSED: &str =
-    "[not_ready] The account store refused the change; check pta cloud status. Nothing was saved.";
+const REFUSED: &str = "[not_ready] The account store refused the change; check kuroko cloud status. Nothing was saved.";
 const TOO_LARGE: &str = "[invalid_input] The configuration is too large for the account store (1 MiB sealed per record). Nothing was saved.";
 const BROKEN: &str = "The account store's key or ledger could not be read; nothing was saved.";
 const BACKUPS: usize = 3;
@@ -360,7 +359,7 @@ pub(super) fn pull_reply(error: &PullError) -> Reply {
         PullError::Apply => Reply::error(
             "operation_failed",
             1,
-            "The account store's configuration could not be installed on this computer; nothing more was changed. Check pta cloud status.",
+            "The account store's configuration could not be installed on this computer; nothing more was changed. Check kuroko cloud status.",
         ),
     }
 }
@@ -462,7 +461,7 @@ async fn promote(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
         }
         CloudMode::Off => {
             return Err(refuse(
-                "Migrate this installation first (pta cloud migrate --confirmed); only a verified copy can become the source of truth.",
+                "Migrate this installation first (kuroko cloud migrate --confirmed); only a verified copy can become the source of truth.",
             ));
         }
         CloudMode::Mirror => {}
@@ -479,7 +478,7 @@ async fn promote(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
             Ok(mode) if mode == "primary" => {}
             Ok(_) => {
                 return Err(refuse(
-                    "The account's coordinator keeps the configuration itself: make the account store its source there first (pta cloud promote on the coordinator), then here.",
+                    "The account's coordinator keeps the configuration itself: make the account store its source there first (kuroko cloud promote on the coordinator), then here.",
                 ));
             }
             Err(_) => {
@@ -559,7 +558,7 @@ async fn promote(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
             ..Reply::error(
                 "state_conflict",
                 6,
-                "The account store's copy is not identical to this installation yet; nothing was changed. Run pta cloud verify, then promote again.",
+                "The account store's copy is not identical to this installation yet; nothing was changed. Run kuroko cloud verify, then promote again.",
             )
         }));
     }
@@ -586,7 +585,7 @@ async fn promote(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
         "changed": true,
         "verify": report,
         "backup": backup,
-        "next": "The account store is now the source of truth of this account's configuration: changes are saved there first, and without an answer from it the configuration is read-only. pta cloud demote --confirmed returns to mirror.",
+        "next": "The account store is now the source of truth of this account's configuration: changes are saved there first, and without an answer from it the configuration is read-only. kuroko cloud demote --confirmed returns to mirror.",
     })))
 }
 
@@ -604,7 +603,7 @@ pub(in crate::app::cloud) async fn operate_pull(host: &Arc<Host>, args: PullArgs
         return Reply::error(
             "not_ready",
             3,
-            "The account store is not the source of truth on this installation (pta cloud promote first).",
+            "The account store is not the source of truth on this installation (kuroko cloud promote first).",
         );
     }
     let backup = if args.replace {
@@ -850,7 +849,7 @@ pub(in crate::app::cloud) async fn operate_resolve(host: &Arc<Host>, args: Resol
         Ok(Err(Refusal::Unresolved)) | Err(_) => Reply::error(
             "operation_failed",
             1,
-            "The chosen version could not be installed; nothing more was changed. Check pta cloud status.",
+            "The chosen version could not be installed; nothing more was changed. Check kuroko cloud status.",
         ),
     }
 }

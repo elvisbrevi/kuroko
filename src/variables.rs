@@ -82,7 +82,7 @@ fn input(message: &str) -> Error {
     Error::Input(message.into())
 }
 fn key_missing() -> Error {
-    Error::Key("The variable encryption key is missing or unreadable. Restore it from the operator's key backup (pta variables key restore); no key was generated and nothing was changed.".into())
+    Error::Key("The variable encryption key is missing or unreadable. Restore it from the operator's key backup (kuroko variables key restore); no key was generated and nothing was changed.".into())
 }
 fn integrity(name: &str) -> Error {
     Error::Integrity(format!(

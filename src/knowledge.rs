@@ -128,7 +128,7 @@ pub enum Access {
     Repository {
         repository: String,
     },
-    /// The verified notes (written in the app, with `pta notes` or by agents); `contexts`
+    /// The verified notes (written in the app, with `kuroko notes` or by agents); `contexts`
     /// keeps only the notes of those contexts and the general ones.
     Notes {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -20,7 +20,7 @@ const sentences = text => text.split(/(?<=\.) /).map(tx).join(' ');
 
 const UPDATE_STATES = { idle: 'Up to date', staging: 'Preparing', staged: 'Prepared', failed: 'Failed', deferred: 'Waiting for work to finish', waiting: 'Waiting for the release archive', applying: 'Installing' };
 const APPLY_PROGRESS = {
-  applying: 'Installing version {version}: replacing the application and pta…',
+  applying: 'Installing version {version}: replacing the application and kuroko…',
   restarting: 'Restarting the application…',
   verifying: 'Checking that version {version} is healthy…',
   rolling_back: 'Restoring the previous version…',
@@ -64,7 +64,7 @@ function renderUpdates() {
     const mb = bytes => (bytes / 1048576).toFixed(1);
     const received = stage?.progress?.received ?? 0, total = stage?.progress?.total;
     $('#update-progress').textContent = stage?.phase === 'verifying'
-      ? t('Verifying the new application and pta pair…')
+      ? t('Verifying the new application and kuroko pair…')
       : stage?.phase === 'downloading'
         ? total
           ? t('Downloading version {version} ({received} of {total} MB)…', { version: stage?.version ?? '', received: mb(received), total: mb(total) })
@@ -119,7 +119,7 @@ function renderUpdates() {
     const prepared = canApply || u.state === 'staged';
     $('#update-offer-title').textContent = prepared ? t('A new version is prepared') : t('A new version is available');
     $('#update-offer-text').textContent = prepared
-      ? t('Version {available} is prepared and verified. Installing it replaces the application and pta and restarts the application; if the new version is not healthy, the previous one is restored.', { available: u.available })
+      ? t('Version {available} is prepared and verified. Installing it replaces the application and kuroko and restarts the application; if the new version is not healthy, the previous one is restored.', { available: u.available })
       : u.install?.kind === 'archive'
         ? t('Version {available} is available; this computer runs {running}. Preparing it downloads its release archive, checks it and puts it next to the installed one without changing anything.', { available: u.available, running: u.running })
         : t('Version {available} is available; this computer runs {running}. Preparing it builds it next to the installed one without changing anything.', { available: u.available, running: u.running });

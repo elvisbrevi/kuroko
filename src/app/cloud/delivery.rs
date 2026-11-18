@@ -477,7 +477,7 @@ pub(super) async fn operate_token(host: &Arc<Host>) -> Reply {
         "where": if shared { "operator" } else { "here" },
         "launcher": {"id": ROTATE_LAUNCHER, "defined": launcher.0, "approved": launcher.1},
         "runs_here": runs_here,
-        "command": format!("pta variables launcher run {ROTATE_LAUNCHER} --confirmed"),
+        "command": format!("kuroko variables launcher run {ROTATE_LAUNCHER} --confirmed"),
         "detail": if shared {
             "The portal operator replaces this account's service token (configure-cloud-access.py production --rotate --portal-user USER); the account's computers then receive it automatically."
         } else {

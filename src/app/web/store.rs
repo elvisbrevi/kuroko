@@ -229,11 +229,11 @@ pub(super) struct ServiceToken {
     pub client_secret: String,
 }
 
-/// Enable or disable the account store for a portal account (`pta web users cloud enable|disable
+/// Enable or disable the account store for a portal account (`kuroko web users cloud enable|disable
 /// USER`). Enabling stores the account's Access service token (JSON on stdin) in that account's
 /// own credential store and writes the grant the account's host reads; the account then connects,
 /// migrates, rolls back or erases its own copy. Disabling removes both, so its host stops using
-/// the store; its local data and the copy stay. The owner's own profile uses `pta cloud connect`.
+/// the store; its local data and the copy stay. The owner's own profile uses `kuroko cloud connect`.
 fn cloud_grant(root: &Path, args: &[String]) -> Result<Value> {
     let enable = args.iter().any(|a| a == "enable");
     apply_cloud_grant(
@@ -269,7 +269,7 @@ pub(super) fn apply_cloud_grant(
         .context("unknown username")?;
     ensure!(
         !entry.current_profile && !settings.owns(&entry),
-        "The owner's own profile connects with pta cloud connect."
+        "The owner's own profile connects with kuroko cloud connect."
     );
     let profile = profile_dir(root, &entry);
     let credentials = profile.join("credentials");
@@ -317,7 +317,7 @@ pub(super) fn apply_cloud_grant(
             Ok(
                 json!({"username": entry.username, "enabled": true, "endpoint": endpoint,
                 "token_expires_at": (token_expires_at > 0).then_some(token_expires_at),
-                "next": "The account connects from its Settings > Advanced > Cloud storage (or pta cloud connect --endpoint with no stdin) and then migrates its own data."}),
+                "next": "The account connects from its Settings > Advanced > Cloud storage (or kuroko cloud connect --endpoint with no stdin) and then migrates its own data."}),
             )
         }
         "disable" => {
@@ -330,7 +330,7 @@ pub(super) fn apply_cloud_grant(
             Ok(json!({"username": entry.username, "enabled": false,
                 "next": "Delete the account's service token in Cloudflare Access. The account's local data and its copy in the store stay; it can no longer reach the store."}))
         }
-        _ => anyhow::bail!("use: pta web users cloud enable|disable USER"),
+        _ => anyhow::bail!("use: kuroko web users cloud enable|disable USER"),
     }
 }
 
@@ -376,7 +376,7 @@ pub(super) fn admin(args: &[String]) -> Result<control::Reply> {
     let data = match action {
         "status" => {
             json!({"settings":settings(&root)?,"access_configured":settings(&root)?.access.is_some(),
-            "accounts":accounts(&root)?.iter().map(public_account).collect::<Vec<_>>(),"start":"personal-teams-assistant --web"})
+            "accounts":accounts(&root)?.iter().map(public_account).collect::<Vec<_>>(),"start":"kuroko-host --web"})
         }
         "callbacks" => {
             json!({"hostname":url::Url::parse(&settings(&root)?.public_url)?.host_str(),"paths":callbacks(&root)?})
@@ -400,7 +400,7 @@ pub(super) fn admin(args: &[String]) -> Result<control::Reply> {
                 args.get(2).map(String::as_str) == Some("authorize")
                     && matches!(args.len(), 6 | 7)
                     && args[args.len() - 2] == "--output",
-                "use: pta web machines authorize MACHINE_ID [USER] --output PRIVATE_FILE"
+                "use: kuroko web machines authorize MACHINE_ID [USER] --output PRIVATE_FILE"
             );
             authorize_machine(
                 &root,

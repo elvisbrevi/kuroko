@@ -417,7 +417,7 @@
           <details class="panel fold-panel" id="panel-server">
             <summary>Public URL and tunnel <span id="server-summary" class="hint"></span></summary>
             <p id="web-hosting-note" class="hint" hidden>The portal operator manages this profile's address and tunnel. Your assistant uses its own Teams callbacks through the same public address.</p>
-            <p class="hint">Microsoft Graph delivers messages to a public HTTPS URL that must reach the local port. For a tunnel managed in Cloudflare, turn on the option, store <code>CLOUDFLARE_TUNNEL_TOKEN</code> through <code>pta credentials set</code> on this computer and leave the local file empty; you can also use a local file with a final 404 rule. If another supervisor runs the tunnel, leave both off.</p>
+            <p class="hint">Microsoft Graph delivers messages to a public HTTPS URL that must reach the local port. For a tunnel managed in Cloudflare, turn on the option, store <code>CLOUDFLARE_TUNNEL_TOKEN</code> through <code>kuroko credentials set</code> on this computer and leave the local file empty; you can also use a local file with a final 404 rule. If another supervisor runs the tunnel, leave both off.</p>
             <div class="grid">
               <label>Public HTTPS URL<input id="public-url" class="cfg" translate="no" placeholder="https://assistant.example.com" spellcheck="false"></label>
               <label>Local port<input id="bind" class="cfg" placeholder="127.0.0.1:38655" spellcheck="false"></label>
@@ -697,7 +697,7 @@
           </div>
           <div class="panel" id="panel-updates">
             <div class="panel-head"><h2>Updates</h2><span id="update-state" class="badge muted"></span><button id="update-check" type="button" class="secondary">Check now</button></div>
-            <p id="update-intro" class="hint">Preparing an update builds it, or downloads the release's archive when the application came from the install command or cargo binstall, and verifies it next to the installed version, which keeps running. Installing it waits for work in progress, replaces the application and pta together, restarts the application and restores the previous version if the new one is not healthy.</p>
+            <p id="update-intro" class="hint">Preparing an update builds it, or downloads the release's archive when the application came from the install command or cargo binstall, and verifies it next to the installed version, which keeps running. Installing it waits for work in progress, replaces the application and kuroko together, restarts the application and restores the previous version if the new one is not healthy.</p>
             <p id="update-managed" class="callout" role="status" hidden></p>
             <p id="update-diagnostic" class="callout warn" role="status" hidden></p>
             <div id="update-versions" class="list"></div>
@@ -879,7 +879,7 @@
               </div>
               <label>Description<input id="source-description" placeholder="Which questions it answers"></label>
               <div class="actions"><button id="add-source" class="secondary">Add source</button></div>
-              <p class="hint">A whole repository is searched by relevance: each answer reads the sections that best match the request, from its Markdown and text files. A new source starts disabled, without audiences and without external processing. The Wiki, Azure DevOps activity, your Teams messages and other tools are added with <code>pta sources add</code>; here you can enable and authorize them.</p>
+              <p class="hint">A whole repository is searched by relevance: each answer reads the sections that best match the request, from its Markdown and text files. A new source starts disabled, without audiences and without external processing. The Wiki, Azure DevOps activity, your Teams messages and other tools are added with <code>kuroko sources add</code>; here you can enable and authorize them.</p>
             </details>
             <details class="add-form" id="url-source-form">
               <summary>Add a source from URLs</summary>

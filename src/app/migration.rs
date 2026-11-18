@@ -1057,7 +1057,7 @@ async fn process(
 }
 
 /// Replace this computer's portable settings with the account's (backed up first by the same
-/// operation `pta account sync --reset` uses). Folders, sign-ins and providers stay local.
+/// operation `kuroko account sync --reset` uses). Folders, sign-ins and providers stay local.
 async fn adopt_settings(host: &Arc<Host>, journal: &mut Journal) -> Value {
     let reply = call(host, "portable_sync", json!({"reset": true})).await;
     let settings = if reply.ok {

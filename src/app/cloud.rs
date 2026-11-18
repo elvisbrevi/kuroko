@@ -34,7 +34,7 @@ pub(in crate::app) const GRANT_FILE: &str = "cloud-grant.json";
 /// The protocol version this host speaks.
 const PROTOCOL: u64 = 1;
 
-/// What the operator enabled for a portal account (`pta web users cloud enable`): the account
+/// What the operator enabled for a portal account (`kuroko web users cloud enable`): the account
 /// store it may use. Only operator-local administration writes it, next to the Access service
 /// token it stored in the account's own credential store; the account's host only reads it.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -814,7 +814,7 @@ async fn connect(host: &Arc<Host>, args: ConnectArgs) -> std::result::Result<Rep
         Failure::Refused(code) if code == "outdated" => boxed(
             "state_conflict",
             6,
-            "Another computer of this account runs a version older than 0.10.37: update it (or revoke it with pta cloud installations revoke) before connecting this one.",
+            "Another computer of this account runs a version older than 0.10.37: update it (or revoke it with kuroko cloud installations revoke) before connecting this one.",
         ),
         failure => Box::new(refused(&failure)),
     })?;
@@ -1041,7 +1041,7 @@ pub(super) async fn outdated_elsewhere(host: &Arc<Host>) -> Option<Reply> {
             "state_conflict",
             6,
             &format!(
-                "Another computer of this account runs a version older than {MIXED_MINIMUM}: update it (or revoke it with pta cloud installations revoke) first; nothing was changed."
+                "Another computer of this account runs a version older than {MIXED_MINIMUM}: update it (or revoke it with kuroko cloud installations revoke) first; nothing was changed."
             ),
         )
     })
@@ -1134,7 +1134,7 @@ async fn revoke(host: &Arc<Host>, args: RevokeArgs) -> Reply {
 /// Revoke a revoked computer's installation in the account store (`machine_revoke`). It still
 /// holds the account's content key and service token, so the reply says what else to do.
 pub(in crate::app) async fn revoke_installation(host: &Arc<Host>, id: &str) -> Value {
-    let next = "That computer still has the account's content key and service token: for a lost or stolen computer, run cloud lost for it (pta cloud lost INSTALLATION --confirmed), which replaces the service token and rotates the content key.";
+    let next = "That computer still has the account's content key and service token: for a lost or stolen computer, run cloud lost for it (kuroko cloud lost INSTALLATION --confirmed), which replaces the service token and rotates the content key.";
     let reply = revoke(
         host,
         RevokeArgs {

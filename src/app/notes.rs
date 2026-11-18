@@ -1,4 +1,4 @@
-//! Verified notes and the knowledge index, for the GUI, `pta` and agents: list, save and
+//! Verified notes and the knowledge index, for the GUI, `kuroko` and agents: list, save and
 //! remove notes, search what the assistant would read, and see or refresh what each indexed
 //! source holds. Notes are data, not profile: saving one needs no revision and no restart.
 

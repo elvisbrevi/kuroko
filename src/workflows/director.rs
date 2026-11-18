@@ -435,7 +435,7 @@ fn validate_supervisor(supervisor: &Supervisor) -> Result<()> {
 fn validate_director(director: &Director, whose: &str) -> Result<()> {
     ensure!(
         uuid::Uuid::parse_str(&director.machine).is_ok() && director.machine.len() == 36,
-        "{whose} needs the ID of its machine (pta tools call machine_list)."
+        "{whose} needs the ID of its machine (kuroko tools call machine_list)."
     );
     ensure!(
         PROVIDERS.contains(&director.provider.as_str())

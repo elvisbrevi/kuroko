@@ -734,7 +734,7 @@ async fn unattended_updating_defers_while_the_microsoft_session_needs_renewal() 
     };
     assert_eq!(renewal(&f).await, json!(false));
     needs_renewal(&f);
-    // `pta --json status` says so, for the server's updater (scripts/vps-update.py).
+    // `kuroko --json status` says so, for the server's updater (scripts/vps-update.py).
     assert_eq!(renewal(&f).await, json!(true));
     assert_eq!(unattended(&f.host, &f.env).await, Pass::Deferred);
     let saved = load(&dir);
@@ -895,7 +895,7 @@ async fn left(f: &Fixture, state: &str) -> Value {
     panic!("the state stayed {state}");
 }
 
-/// The 2026-11 finding: `pta update --machine NAME` minutes after a release failed on Windows
+/// The 2026-11 finding: `kuroko update --machine NAME` minutes after a release failed on Windows
 /// because the release job had not attached that target's archive yet.
 #[cfg(unix)]
 #[tokio::test]

@@ -367,7 +367,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   check('with a portal, Connect an agent shows its /mcp address with a copy action and how to add it',
     await page.textContent('#agent-endpoint-url') === 'https://assistant.example.com/mcp'
       && await page.isVisible('#agent-endpoint-copy')
-      && (await page.textContent('#agent-step-claude')).includes('claude mcp add --transport http personal-teams-assistant https://assistant.example.com/mcp'));
+      && (await page.textContent('#agent-step-claude')).includes('claude mcp add --transport http kuroko https://assistant.example.com/mcp'));
   await page.evaluate(async () => { await invoke('machine_save', { coordinator: null }); await loadAgentEndpoint(); });
   // Repeated providers survive model selection, reordering, removal and saving.
   await page.click('#settings-tab-models');
@@ -1444,13 +1444,13 @@ for (const [label, ctx] of [['readiness-desktop', {}], ['readiness-phone', { vie
     const step = (id, scope, state, detail, facts = {}, required = true) => ({ id, scope, required, state, detail, facts, actions: [] });
     window.__ptaReadiness = {
       ready: false, mode: 'signed_in', client: 'window', local_owner: true, coordinator: 'https://assistant.example.test',
-      next: { step: 'variables', state: 'todo', detail: 'Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `pta variables entry complete`); it never goes through chat.', actions: [] },
+      next: { step: 'variables', state: 'todo', detail: 'Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `kuroko variables entry complete`); it never goes through chat.', actions: [] },
       steps: [
         step('coordinator', 'coordinator', 'done', 'This computer is signed in to your account\'s coordinator.'),
         step('connection', 'coordinator', 'done', 'The coordinator answered and accepts this computer.', { standing: 'live', checked_at: Math.floor(Date.now() / 1000) - 60 }),
         step('machine', 'coordinator', 'done', 'This computer is on your account\'s machine list, which every signed-in client shows.', { machines: 3, online: 2 }),
         step('configuration', 'coordinator', 'done', 'Your account configuration is restored and up to date on this computer.', { loaded: { generation: 5 }, saved: { generation: 5 } }),
-        step('variables', 'coordinator', 'todo', 'Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `pta variables entry complete`); it never goes through chat.',
+        step('variables', 'coordinator', 'todo', 'Some variables you need are not stored yet. Type each value in the protected entry (Settings > Variables, or `kuroko variables entry complete`); it never goes through chat.',
           { count: 2, expected: [{ name: 'DEPLOY_ENDPOINT', state: 'present', version: 3 }, { name: 'PARTNER_TOKEN', state: 'waiting' }, { name: 'SIGNING_KEY', state: 'missing' }] }),
         step('migration', 'this_machine', 'optional', 'Optional: review which existing credentials of this installation to move into your account. Nothing is moved until you confirm each one.', {}, false),
         step('providers', 'this_machine', 'attention', 'A model provider in the configuration is not installed or signed in on this computer. Nothing is installed or used in its place; install it and sign in yourself, then check again.', { providers: ['codex'] }, false),
@@ -1552,7 +1552,7 @@ for (const [label, ctx] of [['standing-desktop', {}], ['standing-phone', { viewp
   check(`${label}: the cached list stays readable`, await page.locator('#variables .row').count() > 0);
   check(`${label}: the warning is a status region`, await page.locator('#variables-standing').getAttribute('role') === 'status');
   await page.evaluate(() => {
-    window.__ptaStanding = { ...window.__ptaStanding, state: 'revoked', recovery: 'The coordinator no longer accepts this installation (it was signed out or revoked, or its account changed). Nothing was used. Sign in again from the sidebar or with `pta auth machine login`.' };
+    window.__ptaStanding = { ...window.__ptaStanding, state: 'revoked', recovery: 'The coordinator no longer accepts this installation (it was signed out or revoked, or its account changed). Nothing was used. Sign in again from the sidebar or with `kuroko auth machine login`.' };
     return loadVariables();
   });
   check(`${label}: revoked is distinct and says how to sign in again`, await page.locator('#variables-standing').innerText().then(text => text.includes('Sesión cerrada o revocada') && text.includes('Vuelve a iniciar sesión')));
@@ -1886,12 +1886,12 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['ph
   await page.evaluate(() => { window.__ptaUpdateSet('applying', { state: 'verifying', phase: 'verifying' }); return loadUpdates(); });
   await panel.locator('#update-progress').getByText('Comprobando que la versión 0.9.14 funciona bien').waitFor();
   check(`${label}: the installed version is not shown as the new one until the host says success`, await panel.locator('#update-versions').innerText().then(text => /Instalada\s*0\.9\.13/.test(text)) && await panel.locator('#update-result').isHidden());
-  await page.evaluate(() => { window.__ptaUpdateSet('idle', { state: 'success', phase: 'success', notes: ['Refreshed 1 installed skill copy to version 0.9.14.', 'Agents that keep `pta mcp` running still use the previous tool catalog: reconnect or restart their MCP server so they read version 0.9.14.'] }); return loadUpdates(); });
+  await page.evaluate(() => { window.__ptaUpdateSet('idle', { state: 'success', phase: 'success', notes: ['Refreshed 1 installed skill copy to version 0.9.14.', 'Agents that keep `kuroko mcp` running still use the previous tool catalog: reconnect or restart their MCP server so they read version 0.9.14.'] }); return loadUpdates(); });
   await panel.locator('#update-result').waitFor();
   check(`${label}: success is reported from the journal with the reconnect instruction`, await panel.locator('#update-result').innerText().then(text => text.includes('La versión 0.9.14 está instalada y funciona bien') && text.includes('Se actualizó 1 copia instalada') && text.includes('reconecta o reinicia su servidor MCP')));
   await page.evaluate(() => { window.__ptaUpdateSet('staged', { state: 'rolled_back', phase: 'rolled_back', error: 'Version 0.9.14 did not become healthy in time.' }); return loadUpdates(); });
   check(`${label}: a rollback says the previous version runs again and why`, await panel.locator('#update-result').innerText().then(text => text.includes('La versión 0.9.14 no se conservó y la versión 0.9.13 funciona de nuevo') && text.includes('0.9.14')) && await panel.locator('#update-result').getAttribute('class').then(c => c.includes('warn')));
-  await page.evaluate(() => { window.__ptaUpdateSet('idle', { state: 'failed', phase: 'failed', error: 'The previous version 0.9.13 does not start.', recovery: 'Reinstall the exact version with `cargo install personal-teams-assistant --version X.Y.Z --locked --force`, then start the application.' }); return loadUpdates(); });
+  await page.evaluate(() => { window.__ptaUpdateSet('idle', { state: 'failed', phase: 'failed', error: 'The previous version 0.9.13 does not start.', recovery: 'Reinstall the exact version with `cargo install kuroko --version X.Y.Z --locked --force`, then start the application.' }); return loadUpdates(); });
   check(`${label}: a failed update gives the recovery path`, await panel.locator('#update-result-error').innerText().then(text => text.includes('cargo install')) && await panel.locator('#update-result-text').innerText().then(text => text.includes('necesita tu atención')));
   await page.evaluate(axeSource);
   check(`${label}: update outcomes pass axe`, (await scan(page)).length === 0, JSON.stringify(await scan(page)));
@@ -1964,7 +1964,7 @@ for (const [label, options] of [['desktop', {}], ['phone', { context: { viewport
   await panel.locator('#cloud-mirror').waitFor();
   const start = panel.locator('#cloud-migrate');
   const rollback = panel.locator('#cloud-rollback');
-  check(`${label}: the migration is offered with the key notice`, await start.isVisible() && (await panel.locator('#cloud-mirror-summary').innerText()).includes('pta variables key backup') && await panel.locator('#cloud-erase-box').isHidden());
+  check(`${label}: the migration is offered with the key notice`, await start.isVisible() && (await panel.locator('#cloud-mirror-summary').innerText()).includes('kuroko variables key backup') && await panel.locator('#cloud-erase-box').isHidden());
   check(`${label}: a connected computer does not offer to connect again`, await panel.locator('#cloud-connect-fold').isHidden());
   await start.click();
   check(`${label}: the first tap only arms the migration`, (await start.innerText()).includes('Toca de nuevo') && await page.evaluate(() => !window.__ptaCloudMirror));
@@ -1994,7 +1994,7 @@ for (const [label, options] of [['desktop', {}], ['phone', { context: { viewport
   await page.waitForFunction(() => window.__ptaCloudRotated === true);
   check(`${label}: the second tap rotates the key and says to back it up`, await page.waitForFunction(() => {
     const text = document.querySelector('#notice-text')?.textContent ?? '';
-    return text.includes('42') && text.includes('pta variables key backup');
+    return text.includes('42') && text.includes('kuroko variables key backup');
   }, null, { timeout: 5000 }).then(() => true, () => false), await page.locator('#notice-text').textContent());
   const promote = panel.locator('#cloud-promote');
   check(`${label}: a verified copy can become the source`, await promote.isVisible() && await panel.locator('#cloud-demote').isHidden());
@@ -2051,7 +2051,7 @@ for (const [label, options] of [['desktop', {}], ['phone', { context: { viewport
   await panel.locator('#cloud-lost-continue').click();
   await lostBox.waitFor({ state: 'hidden' });
   check(`${label}: continuing finishes the steps for the same computer and says to back up the key`, await page.evaluate(() => window.__ptaCloudLostArgs.installation === '00000000-0000-4000-8000-000000000002')
-    && await page.waitForFunction(() => (document.querySelector('#notice-text')?.textContent ?? '').includes('pta variables key backup'), null, { timeout: 5000 }).then(() => true, () => false));
+    && await page.waitForFunction(() => (document.querySelector('#notice-text')?.textContent ?? '').includes('kuroko variables key backup'), null, { timeout: 5000 }).then(() => true, () => false));
   const backupList = panel.locator('#cloud-backup-list');
   check(`${label}: the backups are listed and a damaged one cannot be restored`, await panel.locator('#cloud-backups').isVisible()
     && await backupList.innerText().then(text => text.includes('Antes de migrar') && text.includes('No se puede restaurar') && text.includes('no coincide'))

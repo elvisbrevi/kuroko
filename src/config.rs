@@ -36,7 +36,7 @@ pub struct Config {
     pub cloud: Cloud,
 }
 
-/// What the account lets any of its computers read in Teams on request (`pta teams messages|
+/// What the account lets any of its computers read in Teams on request (`kuroko teams messages|
 /// search|chats` and the MCP `teams_*` reads), with that computer's own Microsoft session; Graph
 /// still checks that the user belongs to the chat. It follows the account and adds to the chats
 /// the profile receives (`graph.*`), which stay each computer's own: it never subscribes to,
@@ -50,7 +50,7 @@ pub struct TeamsReading {
     /// The personal chat (the user's Teams notes).
     #[serde(default)]
     pub personal_chat: bool,
-    /// Chat IDs, as `pta teams chats` lists them.
+    /// Chat IDs, as `kuroko teams chats` lists them.
     #[serde(default)]
     pub chats: Vec<String>,
 }
@@ -694,7 +694,7 @@ mod tests {
         let english = example.replace("language = \"es\"", "language = \"en\"");
         assert_eq!(parse(&english).unwrap(), Language::En);
         assert!(parse(&example.replace("language = \"es\"", "language = \"fr\"")).is_err());
-        // JSON, as `pta config set llm.language '"en"'` and the app send it.
+        // JSON, as `kuroko config set llm.language '"en"'` and the app send it.
         assert_eq!(
             serde_json::from_str::<Language>("\"en\"").unwrap(),
             Language::En

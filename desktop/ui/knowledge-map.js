@@ -236,7 +236,7 @@ function renderEntries() {
   const organization = current.map.organization ??= {};
   const entries = organization.entries ??= [];
   $('#entries-summary').textContent = entries.length ? tn(entries.length, '1 entry', '{n} entries') : '';
-  if (!entries.length) container.append(el('div', { class: 'empty' }, el('p', { textContent: t('No entries yet. Add the norms, architecture and conventions you follow, or ask an agent to add them with pta organization entries add.') })));
+  if (!entries.length) container.append(el('div', { class: 'empty' }, el('p', { textContent: t('No entries yet. Add the norms, architecture and conventions you follow, or ask an agent to add them with kuroko organization entries add.') })));
   for (const entry of entries) {
     entry.projects ??= [];
     const facts = el('p', { class: 'resource-facts' });

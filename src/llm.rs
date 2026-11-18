@@ -1110,7 +1110,7 @@ pub fn from_config(llm: &Llm) -> Result<(Chain, Vec<String>)> {
     Ok((Chain::new(members)?, secrets))
 }
 
-/// One provider on its own, as `pta test providers` probes each member of the chain.
+/// One provider on its own, as `kuroko test providers` probes each member of the chain.
 pub fn model_for(choice: &LlmChoice, llm: &Llm, secrets: &mut Vec<String>) -> Result<Model> {
     let style = llm.style.as_str();
     let model = match choice.provider.as_str() {

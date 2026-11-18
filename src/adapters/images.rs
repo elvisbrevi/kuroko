@@ -1,6 +1,6 @@
 //! Images posted inside a Teams message as Graph hosted contents: no external host, no link.
 //!
-//! The `pta` process that receives the call reads a path (the host never opens one) and sends
+//! The `kuroko` process that receives the call reads a path (the host never opens one) and sends
 //! the bytes to the host, which checks them again. The type comes only from the bytes (PNG,
 //! JPEG, GIF), never from a name, an extension or a declared type. Graph caps a write request at
 //! 4 MB and base64 adds a third, so all the images of a message share [`MAX_TOTAL`] bytes.
@@ -160,7 +160,7 @@ impl Image {
         }
         line
     }
-    /// The form the `pta` process sends to the host, which checks it again with [`from_wire`].
+    /// The form the `kuroko` process sends to the host, which checks it again with [`from_wire`].
     pub fn wire(&self) -> Value {
         json!({"name": self.name, "alt": self.alt,
             "data": base64::engine::general_purpose::STANDARD.encode(&self.bytes)})

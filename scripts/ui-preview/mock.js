@@ -208,13 +208,13 @@
   let serviceInstalled = false;
   window.__ptaServiceCalls = [];
   const serviceView = () => ({
-    supported: true, manager: 'systemd', name: 'personal-teams-assistant-0a1b2c3d4e5f.service',
+    supported: true, manager: 'systemd', name: 'kuroko-0a1b2c3d4e5f.service',
     installed: serviceInstalled, current: serviceInstalled, running: false, last_error: null,
     linger: serviceInstalled ? false : null, this_host: false,
     notes: serviceInstalled ? ['Lingering is off, so the host runs only while you are logged in. To keep it running without a session, run loginctl enable-linger.'] : [],
   });
   const serviceCall = (method, installed) => {
-    if (sharedAccount) throw new Error('Starting the host at login is set up by the owner of this computer, with pta or the application\'s page on that computer.');
+    if (sharedAccount) throw new Error('Starting the host at login is set up by the owner of this computer, with kuroko or the application\'s page on that computer.');
     window.__ptaServiceCalls.push(method);
     if (installed !== undefined) serviceInstalled = installed;
     return structuredClone(serviceView());
@@ -650,7 +650,7 @@
       window.__ptaWorkflowCalls.push({ method: 'workflow_block_save', ...structuredClone(args) });
       const block = structuredClone(args.block);
       if (block.kind !== 'instruction' && !args.confirmed) throw new Error('Confirm this block with the user, then save it with confirmed: true.');
-      if (block.chat && [...block.chat.name].length > 200) throw new Error(`Teams notification block ${block.id} needs a chat ID as pta teams chats lists it and the chat's name (at most 200 characters).`);
+      if (block.chat && [...block.chat.name].length > 200) throw new Error(`Teams notification block ${block.id} needs a chat ID as kuroko teams chats lists it and the chat's name (at most 200 characters).`);
       if (block.kind === 'launcher') {
         const launcher = launchers.find(l => l.id === block.launcher.id);
         if (!launcher?.approved) throw new Error(`Launcher ${block.launcher.id} is not approved yet; approve it first.`);
@@ -741,7 +741,7 @@
     machine_settings: () => structuredClone(machineSettings),
     // Built by the portal from its own origin (src/app/implementation/join.rs); synthetic here.
     machine_join_command: () => {
-      const base = 'https://github.com/example/personal-teams-assistant/releases/latest/download';
+      const base = 'https://github.com/example/kuroko/releases/latest/download';
       const unix = `curl --proto '=https' --tlsv1.2 -fsSL ${base}/install.sh | sh -s -- --origin https://assistant.example.com`;
       return { origin: 'https://assistant.example.com', commands: { macos: unix, linux: unix,
         windows: `Invoke-RestMethod -UseBasicParsing ${base}/install.ps1 -OutFile "$env:TEMP\\pta-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\\pta-install.ps1" -Origin https://assistant.example.com` } };
@@ -1087,7 +1087,7 @@
     cloud_token: () => ({
       connected: true, coordinator: true, service_token: { stored: true, expires_at: secs(NOW) + 300 * 86400 },
       ...(window.__ptaCloudLost ? { lost: structuredClone(window.__ptaCloudLost) } : {}),
-      replace: { where: 'here', runs_here: true, launcher: { id: 'cloud-token-rotate', defined: true, approved: true }, command: 'pta variables launcher run cloud-token-rotate --confirmed' },
+      replace: { where: 'here', runs_here: true, launcher: { id: 'cloud-token-rotate', defined: true, approved: true }, command: 'kuroko variables launcher run cloud-token-rotate --confirmed' },
       pending: window.__ptaCloudTokenRotated ? 1 : 2,
       computers: [
         { machine: '00000000-0000-4000-8000-0000000000a1', name: 'Synthetic <i>desktop</i>', receives: true, token: window.__ptaCloudTokenRotated ? 'current' : 'previous', key: window.__ptaCloudRotated ? 'previous' : 'current', reported_at: secs(NOW) - 120 },

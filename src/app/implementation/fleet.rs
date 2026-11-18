@@ -116,7 +116,7 @@ pub(super) async fn operate(host: &Arc<Host>, method: &str, args: &Value) -> Res
             let origin = args["url"].as_str().context("Choose a coordinator URL.")?;
             let url = endpoint(origin)?;
             let token = args["pairing_token"].as_str().filter(|v| v.len() == 44)
-                .context("Authorize this machine on your own coordinator with `pta web machines authorize`, then pass its private JSON file to `pta tools call machine_connect` on stdin.")?;
+                .context("Authorize this machine on your own coordinator with `kuroko web machines authorize`, then pass its private JSON file to `kuroko tools call machine_connect` on stdin.")?;
             let mut data = state.registry.lock().await;
             let response=client()?.post(url).bearer_auth(token).json(&json!({"action":"register","id":data.id,"name":data.settings.name,"os":std::env::consts::OS,"installation":super::login::installation(&state.root)?})).send().await?;
             ensure!(
@@ -769,7 +769,7 @@ async fn call_bounded(
                 .machines
                 .iter()
                 .any(|m| m.id == machine && m.upgrade),
-            "This machine cannot be updated from another device: update it at the computer with pta update. Its version is too old for remote updates, or its installation is not one the application updates by itself."
+            "This machine cannot be updated from another device: update it at the computer with kuroko update. Its version is too old for remote updates, or its installation is not one the application updates by itself."
         );
     }
     if method == "workflow_direct" {
@@ -872,7 +872,7 @@ async fn call_bounded(
                     result["error"]
                         .as_str()
                         .filter(|e| !e.is_empty() && e.len() <= 600)
-                        .unwrap_or("The machine could not start the update. Check it with pta update status on that computer.")
+                        .unwrap_or("The machine could not start the update. Check it with kuroko update status on that computer.")
                 );
             }
             if method == "workflow_direct" && result["ok"] != true {

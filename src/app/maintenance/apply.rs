@@ -19,7 +19,7 @@ pub(super) const FLAG: &str = "--maintenance-apply";
 /// Set by the helper on the host it starts, so that host is not mistaken for one started in the
 /// middle of an update.
 pub(crate) const HANDOVER: &str = "PTA_UPDATE_HANDOVER";
-const SERVICE: &str = "The application runs under a systemd unit that pta did not install, which would start a second copy when the update restarts it. Update it through that unit (install the new version with `cargo install personal-teams-assistant --locked --force` and restart it), or replace the unit with pta service install, whose entries updates restart themselves.";
+const SERVICE: &str = "The application runs under a systemd unit that kuroko did not install, which would start a second copy when the update restarts it. Update it through that unit (install the new version with `cargo install kuroko --locked --force` and restart it), or replace the unit with kuroko service install, whose entries updates restart themselves.";
 
 /// Time limits, shortened by tests.
 #[derive(Clone, Copy)]
@@ -63,7 +63,7 @@ pub(super) trait Platform {
 
 /// A headless host started by a systemd unit someone wrote by hand (the shared server's, or one of
 /// older instructions): that unit would start a second copy when the update restarts it. The
-/// entry of `pta service install` starts the host with `--service` instead, and an update restarts
+/// entry of `kuroko service install` starts the host with `--service` instead, and an update restarts
 /// it through its manager.
 pub(super) fn unsupported(env: &Environment) -> Option<&'static str> {
     (env.launch.iter().any(|flag| flag == "--headless")
@@ -275,7 +275,7 @@ pub(super) async fn request(
             crate::state::Store::subscription_health(&data).map_or(0, |(count, _)| count as u64),
         )
     };
-    // An entry of `pta service install` that starts the installed executable for this profile:
+    // An entry of `kuroko service install` that starts the installed executable for this profile:
     // the helper stops and starts the host through its manager, which then keeps tracking it.
     let service = !env.manual && {
         let profile = host.state.settings.profile().to_path_buf();
@@ -427,7 +427,7 @@ fn detach(command: &mut std::process::Command) {
 // ---------------------------------------------------------------------------------------------
 // The helper.
 
-/// Entry of `personal-teams-assistant --maintenance-apply`. Returns the process exit status:
+/// Entry of `kuroko-host --maintenance-apply`. Returns the process exit status:
 /// 0 when the update was applied, rolled back or deferred, 1 when a person has to look.
 pub(crate) fn run_helper() -> i32 {
     let Ok(profile) = control::profile_dir() else {

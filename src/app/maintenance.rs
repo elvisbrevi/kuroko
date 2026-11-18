@@ -41,14 +41,14 @@ const ARCHIVE_WAIT: i64 = 30 * 60;
 /// How often a waiting update looks at the release again.
 const ARCHIVE_POLL: u64 = 60;
 /// Why an unattended update waits while the assistant's Microsoft session needs renewal.
-pub(super) const RENEWAL: &str = "The Microsoft session needs renewal, so the assistant would not start again after a restart. Sign in to Microsoft again (Settings > Microsoft Teams, or pta auth microsoft login); the update is installed afterwards.";
+pub(super) const RENEWAL: &str = "The Microsoft session needs renewal, so the assistant would not start again after a restart. Sign in to Microsoft again (Settings > Microsoft Teams, or kuroko auth microsoft login); the update is installed afterwards.";
 /// Why an unattended update waits for the person on a Mac whose credentials are in the Keychain.
-const KEYCHAIN: &str = "On this Mac the Keychain asks to allow each new version of the application before it may read the saved credentials, so the prepared version waits for you: install it from Settings > Advanced > Updates (or pta update apply) and choose Always Allow when macOS asks.";
+const KEYCHAIN: &str = "On this Mac the Keychain asks to allow each new version of the application before it may read the saved credentials, so the prepared version waits for you: install it from Settings > Advanced > Updates (or kuroko update apply) and choose Always Allow when macOS asks.";
 const MANAGED: &str =
     "Updates for this server are applied by its operator; there is nothing to install from here.";
-const LOCAL_ONLY: &str = "Updating this installation needs the local owner of the computer: use the application (the local page pta app open shows) or pta on that computer.";
+const LOCAL_ONLY: &str = "Updating this installation needs the local owner of the computer: use the application (the local page kuroko app open shows) or kuroko on that computer.";
 /// Why a Mac whose credentials are in the Keychain is not updated at another device's request.
-const KEYCHAIN_REMOTE: &str = "On this Mac the Keychain asks to allow each new version of the application before it may read the saved credentials, so it is updated at the computer: run pta update there (or use Settings > Advanced > Updates) and choose Always Allow when macOS asks.";
+const KEYCHAIN_REMOTE: &str = "On this Mac the Keychain asks to allow each new version of the application before it may read the saved credentials, so it is updated at the computer: run kuroko update there (or use Settings > Advanced > Updates) and choose Always Allow when macOS asks.";
 
 pub(super) fn handles(method: &str) -> bool {
     method.starts_with("crate_update_")
@@ -185,7 +185,7 @@ struct Pending {
     version: String,
     since: i64,
     until: i64,
-    /// Install once prepared (`pta update`, another device), not only prepare (`update stage`).
+    /// Install once prepared (`kuroko update`, another device), not only prepare (`update stage`).
     #[serde(default)]
     install: bool,
     /// `cli`, `local_page` or `remote`.
@@ -1760,7 +1760,7 @@ pub(super) async fn remote_latest(host: &Arc<Host>) -> Result<Value> {
 }
 
 /// The update to the newest release asked from this installation's own row of the machine list:
-/// only its local owner (the local page or pta on this computer) may, like every update here.
+/// only its local owner (the local page or kuroko on this computer) may, like every update here.
 pub(super) async fn own_latest(host: &Arc<Host>) -> Result<Value> {
     let invocation = authority::invocation(&host.state)?;
     ensure!(

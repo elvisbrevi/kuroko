@@ -9,7 +9,7 @@
 //! restarted three times on the way. A task then goes through the direct coding path. Every write
 //! to a provider is counted: the children only through the user's confirmation, one post per
 //! notification and one per send. A second test drives the same operations through the tool layer
-//! that `pta tools call` and `pta mcp` share, with the confirmations the catalog declares.
+//! that `kuroko tools call` and `kuroko mcp` share, with the confirmations the catalog declares.
 use super::record::{Run, State as Phase};
 use super::runs::tests::{Bench, HU, TASK};
 use super::*;

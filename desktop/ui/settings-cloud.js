@@ -122,7 +122,7 @@ function renderCloudBackups() {
   if (data.pending) lines.push(t('A restore is waiting for the application to restart.'));
   else if (outcome?.ok) lines.push(t('Last restore {when}: {n} files put back; the data from just before is kept in {copy}.', { when: ago(outcome.finished_at * 1000), n: outcome.files, copy: outcome.before }));
   else if (outcome) lines.push(t('The last restore did not complete: {problem}', { problem: tx(outcome.error) }));
-  if (data.backups?.length && !data.restores_here) lines.push(t('Restore from this computer\'s own local page or with pta cloud restore NAME --confirmed.'));
+  if (data.backups?.length && !data.restores_here) lines.push(t('Restore from this computer\'s own local page or with kuroko cloud restore NAME --confirmed.'));
   $('#cloud-backups-summary').textContent = lines.join(' ');
   $('#cloud-backups-summary').hidden = !lines.length;
   $('#cloud-backup-list').replaceChildren(...(data.backups ?? []).map(entry => {
@@ -244,7 +244,7 @@ async function cloudLost(target) {
   const reply = await invoke('cloud_lost', target);
   await loadCloud();
   if (!reply.complete) throw t('Some steps are not done yet: see Lost computer.');
-  done(t('{name} can no longer use this account: the service token was replaced and the content key rotated. Back up the new key now with pta variables key backup.', { name: reply.name }));
+  done(t('{name} can no longer use this account: the service token was replaced and the content key rotated. Back up the new key now with kuroko variables key backup.', { name: reply.name }));
 }
 
 /** The last lost computer secured from here: each step, and Continue while one is left. */
@@ -375,7 +375,7 @@ function renderCloudMirror() {
       : mirror.erased_at ? t('The account store\'s copy was erased. Migrating again starts a new copy with a new content key.')
       : t('Nothing is copied yet. Migrating backs up this computer first, uploads every record, verifies the copy and then keeps it up to date.'));
   }
-  if (mirror.key?.present === false && status?.mode !== 'mirror') lines.push(t('Migrating creates the account content key on this computer. Back it up right after with pta variables key backup.'));
+  if (mirror.key?.present === false && status?.mode !== 'mirror') lines.push(t('Migrating creates the account content key on this computer. Back it up right after with kuroko variables key backup.'));
   if (mirror.backups?.latest?.created_at) lines.push(t('Last backup of this computer {when}.', { when: ago(mirror.backups.latest.created_at * 1000) }));
   if (mirror.last_verify) lines.push(mirror.last_verify.ok ? t('Last verification {when}: the copy matches.', { when: ago(mirror.last_verify.at * 1000) }) : t('Last verification {when}: the copy differs.', { when: ago(mirror.last_verify.at * 1000) }));
   const adoptable = status?.adopt === true && status?.mode !== 'mirror' && !primary;
@@ -424,7 +424,7 @@ cloudTwoTaps('#cloud-adopt', () => cloudAdoptArmed, v => { cloudAdoptArmed = v; 
 cloudTwoTaps('#cloud-rotate', () => cloudRotateArmed, v => { cloudRotateArmed = v; }, async () => {
   const reply = await invoke('cloud_rotate_key', {});
   await loadCloud();
-  done(tn(reply.resealing, 'A new content key is active; {n} record is being sealed again with it. Back up the key now with pta variables key backup; your other computers trusted with the account store receive it within minutes.', 'A new content key is active; {n} records are being sealed again with it. Back up the key now with pta variables key backup; your other computers trusted with the account store receive it within minutes.'));
+  done(tn(reply.resealing, 'A new content key is active; {n} record is being sealed again with it. Back up the key now with kuroko variables key backup; your other computers trusted with the account store receive it within minutes.', 'A new content key is active; {n} records are being sealed again with it. Back up the key now with kuroko variables key backup; your other computers trusted with the account store receive it within minutes.'));
 });
 
 cloudTwoTaps('#cloud-disconnect', () => cloudDisconnectArmed, v => { cloudDisconnectArmed = v; }, async () => {
@@ -475,7 +475,7 @@ cloudTwoTaps('#cloud-migrate', () => cloudMigrateArmed, v => { cloudMigrateArmed
   await loadCloud();
   if (!reply.complete) throw t('The copy is not complete yet. Migrate again to continue where it stopped.');
   done(reply.key_created
-    ? t('The encrypted copy is up to date, and a backup of this computer was kept first. Back up the new account content key now with pta variables key backup.')
+    ? t('The encrypted copy is up to date, and a backup of this computer was kept first. Back up the new account content key now with kuroko variables key backup.')
     : t('The encrypted copy is up to date, and a backup of this computer was kept first.'));
 });
 

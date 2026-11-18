@@ -327,7 +327,7 @@ fn launchd_install_is_idempotent_and_uninstall_removes_only_its_own_entry() {
         ),
         Ok(false)
     );
-    // A file with this name that pta did not write is never changed or removed.
+    // A file with this name that kuroko did not write is never changed or removed.
     fs::write(&file, "<plist>someone else's</plist>").unwrap();
     let foreign = Script::default().answer("launchctl print", false, "");
     assert_eq!(install(&t, &foreign).unwrap_err().0, "state_conflict");
@@ -455,7 +455,7 @@ fn the_scheduled_task_is_created_from_a_temporary_definition_and_read_back_by_it
         removing.changes(),
         [format!("schtasks /Delete /TN {name} /F")]
     );
-    // A task with this name that pta did not create is left alone.
+    // A task with this name that kuroko did not create is left alone.
     let foreign = Script::default().answer(
         "schtasks /Query",
         true,

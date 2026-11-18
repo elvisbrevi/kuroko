@@ -36,7 +36,7 @@ pub(crate) const FLAG: &str = "--service";
 pub(crate) const PROFILE_FLAG: &str = "--profile-dir";
 /// Where the person's last start or stop of the assistant is kept.
 const INTENT: &str = "assistant-intent.json";
-const LOCAL_ONLY: &str = "Starting the host at login is set up by the owner of this computer, with pta or the application's page on that computer.";
+const LOCAL_ONLY: &str = "Starting the host at login is set up by the owner of this computer, with kuroko or the application's page on that computer.";
 /// Windows Task Scheduler: the task is running (`SCHED_S_TASK_RUNNING`).
 const TASK_RUNNING: &str = "267009";
 /// Results that are not an error: success, ready, running, never run, terminated by the user.
@@ -801,10 +801,10 @@ fn csv_fields(line: &str) -> Vec<String> {
 /// Why a change was refused, as `(code, message)`.
 type Refusal = (&'static str, String);
 
-const FOREIGN: &str = "An entry with this name exists that pta did not create; it was left unchanged. Remove it with the operating system's tools first.";
+const FOREIGN: &str = "An entry with this name exists that kuroko did not create; it was left unchanged. Remove it with the operating system's tools first.";
 const UNAVAILABLE: &str = "The systemd user manager is not available in this session (systemctl --user does not answer). Log in to a session with systemd, or enable lingering with loginctl enable-linger, and try again.";
-const SANDBOXED: &str = "This host runs with the isolated profile's private home, as pta starts it, so it cannot register an entry for your login. Quit it with pta app quit, start personal-teams-assistant --host from your own session with PTA_PROFILE_DIR set, and try again.";
-const RUNNING_OTHER: &str = "The service is running with another executable or profile. Quit the host with pta app quit, then install the service again.";
+const SANDBOXED: &str = "This host runs with the isolated profile's private home, as kuroko starts it, so it cannot register an entry for your login. Quit it with kuroko app quit, start kuroko-host --host from your own session with KUROKO_PROFILE_DIR set, and try again.";
+const RUNNING_OTHER: &str = "The service is running with another executable or profile. Quit the host with kuroko app quit, then install the service again.";
 
 fn failed(what: &str) -> Refusal {
     (
@@ -1233,7 +1233,7 @@ fn unsupported() -> Value {
 }
 
 /// The executable an entry should start: this host's own.
-/// A host `pta` started for an isolated profile runs with that profile's private home and
+/// A host `kuroko` started for an isolated profile runs with that profile's private home and
 /// without the session's variables, so it cannot see or register the user's own entry.
 fn sandboxed(profile: &Path) -> bool {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })

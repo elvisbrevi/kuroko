@@ -535,7 +535,7 @@ const UNSUPPORTED: Failure = Failure {
 const REFUSED: Failure = Failure {
     code: "operation_failed",
     exit: 1,
-    message: "The coordinator refused the synchronization. Sign this installation in again from the sidebar or with `pta auth machine login`.",
+    message: "The coordinator refused the synchronization. Sign this installation in again from the sidebar or with `kuroko auth machine login`.",
 };
 const INVALID: Failure = Failure {
     code: "operation_failed",
@@ -567,7 +567,7 @@ const CANNOT_APPLY: Failure = Failure {
     exit: 1,
     message: "The account configuration cannot be applied with this computer's repositories and settings. Nothing was changed.",
 };
-const NOT_LOADED: &str = "[conflict] This installation has not loaded the account configuration yet. Synchronize first (pta account sync); nothing was saved.";
+const NOT_LOADED: &str = "[conflict] This installation has not loaded the account configuration yet. Synchronize first (kuroko account sync); nothing was saved.";
 const BEHIND: &str = "[conflict] The account configuration changed elsewhere. Synchronize, review it and repeat the change; nothing was saved.";
 const DIVERGED: &str = "[conflict] This computer has configuration changes that were never saved to the account. Synchronize with reset to adopt the account's configuration; nothing was saved.";
 const OFFLINE: &str = "[network] The coordinator could not be reached, so the account configuration was not changed. Local-only settings can still be saved.";
@@ -1139,7 +1139,7 @@ pub(super) async fn operate(host: &Arc<Host>, request: &control::Request) -> Rep
             // Joined to the account store as its source: the configuration comes from there.
             if cloud::primary::active(&host.state) {
                 return Reply::success(json!({
-                    "sync": {"source": "account_store", "next": "pta cloud pull brings what the account store changed."},
+                    "sync": {"source": "account_store", "next": "kuroko cloud pull brings what the account store changed."},
                     "standing": host.state.standing.view(Some(&link)),
                 }));
             }

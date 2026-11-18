@@ -12,6 +12,23 @@ use std::{
 /// Written into every copy this application installs: the version and the SHA-256 of each file.
 /// Only a directory whose files still match it is the application's to refresh.
 const MANIFEST: &str = ".pta-skill.json";
+/// The skill's name, and the one it had before 0.18.2 (docs/rename-kuroko.md).
+const NAME: &str = "kuroko";
+const FORMER_NAME: &str = "personal-teams-assistant";
+
+/// After installing into `<parent>/kuroko`, removes `<parent>/personal-teams-assistant` when it is
+/// a copy this application installed (it holds the manifest), so an agent does not load the skill
+/// twice under two names. A folder without the manifest is someone else's and is left alone.
+fn remove_former(installed: &Path) -> Option<PathBuf> {
+    (installed.file_name()? == NAME).then_some(())?;
+    let former = installed.with_file_name(FORMER_NAME);
+    former.join(MANIFEST).is_file().then_some(())?;
+    fs::remove_dir_all(&former).ok()?;
+    if let Ok(profile) = crate::app::control::profile_dir() {
+        let _ = unregister(&profile, &former);
+    }
+    Some(former)
+}
 
 #[derive(Serialize, Deserialize)]
 struct Installed {
@@ -37,63 +54,55 @@ fn current() -> Installed {
 const FILES: &[(&str, &str)] = &[
     (
         "SKILL.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/SKILL.md"),
+        include_str!("../../desktop/skills/kuroko/SKILL.md"),
     ),
     (
         "references/tools-and-todo.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/tools-and-todo.md"),
+        include_str!("../../desktop/skills/kuroko/references/tools-and-todo.md"),
     ),
     (
         "references/web-access.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/web-access.md"),
+        include_str!("../../desktop/skills/kuroko/references/web-access.md"),
     ),
     (
         "references/activity-registration.md",
-        include_str!(
-            "../../desktop/skills/personal-teams-assistant/references/activity-registration.md"
-        ),
+        include_str!("../../desktop/skills/kuroko/references/activity-registration.md"),
     ),
     (
         "references/configuration.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/configuration.md"),
+        include_str!("../../desktop/skills/kuroko/references/configuration.md"),
     ),
     (
         "references/lifecycle.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/lifecycle.md"),
+        include_str!("../../desktop/skills/kuroko/references/lifecycle.md"),
     ),
     (
         "references/auth-and-knowledge.md",
-        include_str!(
-            "../../desktop/skills/personal-teams-assistant/references/auth-and-knowledge.md"
-        ),
+        include_str!("../../desktop/skills/kuroko/references/auth-and-knowledge.md"),
     ),
     (
         "references/tests-and-diagnostics.md",
-        include_str!(
-            "../../desktop/skills/personal-teams-assistant/references/tests-and-diagnostics.md"
-        ),
+        include_str!("../../desktop/skills/kuroko/references/tests-and-diagnostics.md"),
     ),
     (
         "references/mcp.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/mcp.md"),
+        include_str!("../../desktop/skills/kuroko/references/mcp.md"),
     ),
     (
         "references/variables.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/variables.md"),
+        include_str!("../../desktop/skills/kuroko/references/variables.md"),
     ),
     (
         "references/account-configuration.md",
-        include_str!(
-            "../../desktop/skills/personal-teams-assistant/references/account-configuration.md"
-        ),
+        include_str!("../../desktop/skills/kuroko/references/account-configuration.md"),
     ),
     (
         "references/setup.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/setup.md"),
+        include_str!("../../desktop/skills/kuroko/references/setup.md"),
     ),
     (
         "references/azure-wiki.md",
-        include_str!("../../desktop/skills/personal-teams-assistant/references/azure-wiki.md"),
+        include_str!("../../desktop/skills/kuroko/references/azure-wiki.md"),
     ),
 ];
 fn install(target: &Path) -> Result<()> {
@@ -125,7 +134,7 @@ fn install(target: &Path) -> Result<()> {
 pub fn command(action: &str, destination: Option<&str>) -> Result<Reply> {
     Ok(match action {
         "show" => Reply::success(
-            json!({"name":"personal-teams-assistant","version":env!("CARGO_PKG_VERSION"),"content":FILES[0].1}),
+            json!({"name":NAME,"version":env!("CARGO_PKG_VERSION"),"content":FILES[0].1}),
         ),
         "install" => {
             let path =
@@ -135,15 +144,15 @@ pub fn command(action: &str, destination: Option<&str>) -> Result<Reply> {
             if let Ok(profile) = crate::app::control::profile_dir() {
                 let _ = register(&profile, path);
             }
-            Reply::success(json!({"path":path,"version":env!("CARGO_PKG_VERSION")}))
+            let removed = remove_former(path);
+            Reply::success(
+                json!({"path":path,"version":env!("CARGO_PKG_VERSION"),"removed_former":removed}),
+            )
         }
         "path" => {
             let parent = crate::app::control::profile_dir()?.join("skills");
             fs::create_dir_all(&parent)?;
-            let path = parent.join(format!(
-                "personal-teams-assistant-{}",
-                env!("CARGO_PKG_VERSION")
-            ));
+            let path = parent.join(format!("{NAME}-{}", env!("CARGO_PKG_VERSION")));
             if !path.exists() {
                 install(&path)?;
             } else {
@@ -161,7 +170,7 @@ pub fn command(action: &str, destination: Option<&str>) -> Result<Reply> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Copies installed with `pta skill install`, refreshed by an update.
+// Copies installed with `kuroko skill install`, refreshed by an update.
 
 fn registry(profile: &Path) -> PathBuf {
     profile.join("skills").join("registry.json")
@@ -189,6 +198,14 @@ fn register(profile: &Path, path: &Path) -> Result<()> {
     if !copies.iter().any(|c| c == path) {
         copies.push(path.to_owned());
     }
+    store(profile, &copies)
+}
+
+fn unregister(profile: &Path, path: &Path) -> Result<()> {
+    let copies: Vec<PathBuf> = registered(profile)
+        .into_iter()
+        .filter(|c| c != path)
+        .collect();
     store(profile, &copies)
 }
 
@@ -248,7 +265,7 @@ fn rewrite(dir: &Path, old: &Installed) -> Result<()> {
 /// Brings the application's own installed copies up to this version and says what it did not
 /// touch. A copy the user changed, or that is not recorded, is never overwritten. The returned
 /// notes are for the person: what was refreshed, what to do about the rest, and that agents which
-/// keep `pta mcp` running must reconnect.
+/// keep `kuroko mcp` running must reconnect.
 pub fn refresh(profile: &Path) -> Vec<String> {
     let mut refreshed = 0usize;
     let mut custom: Vec<String> = Vec::new();
@@ -278,18 +295,36 @@ pub fn refresh(profile: &Path) -> Vec<String> {
     }
     if !custom.is_empty() {
         notes.push(format!(
-            "Not changed because you modified them or they could not be written: {}. Install the new skill into a new folder with `pta skill install DIRECTORY` and merge your changes.",
+            "Not changed because you modified them or they could not be written: {}. Install the new skill into a new folder with `kuroko skill install DIRECTORY` and merge your changes.",
             custom.join(", ")
         ));
     }
-    notes.push("Skill folders you copied by hand are not tracked: install again with `pta skill install DIRECTORY` if you have any.".into());
-    notes.push("Agents that keep `pta mcp` running still use the previous tool catalog: reconnect or restart their MCP server so they read version ".to_owned() + env!("CARGO_PKG_VERSION") + ".");
+    notes.push("Skill folders you copied by hand are not tracked: install again with `kuroko skill install DIRECTORY` if you have any.".into());
+    notes.push("Agents that keep `kuroko mcp` running still use the previous tool catalog: reconnect or restart their MCP server so they read version ".to_owned() + env!("CARGO_PKG_VERSION") + ".");
     notes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installing_beside_the_former_skill_name_removes_only_a_copy_of_ours() {
+        let parent = tempfile::tempdir().unwrap();
+        let former = parent.path().join(FORMER_NAME);
+        install(&former).unwrap();
+        let current = parent.path().join(NAME);
+        install(&current).unwrap();
+        assert_eq!(remove_former(&current), Some(former.clone()));
+        assert!(!former.exists() && current.join("SKILL.md").is_file());
+        // A folder of that name without the manifest is someone else's.
+        std::fs::create_dir(&former).unwrap();
+        std::fs::write(former.join("SKILL.md"), "mine").unwrap();
+        assert_eq!(remove_former(&current), None);
+        assert!(former.join("SKILL.md").is_file());
+        // Only an installation named `kuroko` replaces the former one.
+        assert_eq!(remove_former(&parent.path().join("elsewhere")), None);
+    }
 
     #[test]
     fn only_unmodified_registered_copies_are_refreshed() {
@@ -337,7 +372,7 @@ mod tests {
             note.contains("edited") && note.contains("extra") && !note.contains("clean"),
             "{note}"
         );
-        assert!(notes.iter().any(|n| n.contains("pta mcp")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("kuroko mcp")), "{notes:?}");
         // The vanished folder is forgotten; the others stay registered.
         let kept = registered(&profile);
         assert_eq!(kept.len(), 3, "{kept:?}");

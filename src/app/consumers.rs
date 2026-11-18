@@ -271,7 +271,7 @@ pub(super) async fn operate(host: &Arc<Host>, request: &control::Request) -> Rep
 
 fn consumer_of(id: &str) -> std::result::Result<&'static rules::BuiltIn, vault::Error> {
     rules::built_in(id).ok_or_else(|| {
-        input("Unknown consumer. List the supported ones with `pta consumers list`.")
+        input("Unknown consumer. List the supported ones with `kuroko consumers list`.")
     })
 }
 
@@ -347,7 +347,7 @@ async fn run(
                     store.audit("launcher_approve", None, "denied_client");
                 }
                 return Err(vault::Error::Conflict(
-                    "Only the owner approves a launcher, on this machine (its application or pta) or in the owner's portal."
+                    "Only the owner approves a launcher, on this machine (its application or kuroko) or in the owner's portal."
                         .into(),
                 ));
             }
@@ -543,7 +543,7 @@ async fn check(
 ) -> std::result::Result<Value, vault::Error> {
     let Some(binding) = store.binding(consumer.id, consumer.slot)? else {
         return Err(input(
-            "No variable is bound to this consumer. Choose one with `pta consumers bind`.",
+            "No variable is bound to this consumer. Choose one with `kuroko consumers bind`.",
         ));
     };
     let (metadata, value) = store.use_entry(&binding.entry, version)?;

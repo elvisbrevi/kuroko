@@ -545,12 +545,12 @@ fn missing_reply(missing: &Missing) -> Reply {
         Missing::NotLinked => Reply::error(
             "not_ready",
             3,
-            "This installation is not connected to an account store: run pta cloud connect first.",
+            "This installation is not connected to an account store: run kuroko cloud connect first.",
         ),
         Missing::NoKey => Reply::error(
             "not_ready",
             3,
-            "There is no account content key on this installation: run pta cloud migrate to create it, or restore it from the key backup.",
+            "There is no account content key on this installation: run kuroko cloud migrate to create it, or restore it from the key backup.",
         ),
         Missing::Broken => Reply::error(
             "operation_failed",
@@ -721,11 +721,11 @@ async fn start(host: &Arc<Host>) -> std::result::Result<Reply, Box<Reply>> {
         "verify": report,
         "batch_ms_median": median(&mut sorted),
         "next": if key_created {
-            "Back up the new account content key now: pta variables key backup --output PATH (keep the file apart from this profile)."
+            "Back up the new account content key now: kuroko variables key backup --output PATH (keep the file apart from this profile)."
         } else if complete {
             "The account store now mirrors this installation; local stays the source of truth."
         } else {
-            "The copy is not complete yet: run pta cloud migrate --confirmed again (the outbox continues where it stopped)."
+            "The copy is not complete yet: run kuroko cloud migrate --confirmed again (the outbox continues where it stopped)."
         },
     })))
 }
@@ -810,9 +810,9 @@ pub(super) async fn operate_repair(host: &Arc<Host>) -> Reply {
     let next = if report.ok {
         "The copy matches this computer again."
     } else if unknown > 0 {
-        "The account store holds records this computer does not have; they were left alone. Compare with pta cloud verify; bringing everything back (cloud rollback) keeps them in the store."
+        "The account store holds records this computer does not have; they were left alone. Compare with kuroko cloud verify; bringing everything back (cloud rollback) keeps them in the store."
     } else if primary {
-        "Configuration differences in primary are conflicts: see pta cloud conflicts. The history was sent again."
+        "Configuration differences in primary are conflicts: see kuroko cloud conflicts. The history was sent again."
     } else {
         "Some records were not sent yet; run the repair again (the outbox continues where it stopped)."
     };

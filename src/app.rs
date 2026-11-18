@@ -45,6 +45,7 @@ mod headless;
 pub(crate) mod implementation;
 mod maintenance;
 mod mcp;
+mod mcp_migrate;
 mod migration;
 mod notes;
 mod page;
@@ -565,7 +566,7 @@ async fn teams_search(
     Ok(value)
 }
 
-/// Post a message the user wrote, once, in a chat they belong to, with the images the `pta`
+/// Post a message the user wrote, once, in a chat they belong to, with the images the `kuroko`
 /// process read for it (checked again here: the host never opens a path).
 async fn teams_post(
     state: &DesktopState,
@@ -1429,7 +1430,7 @@ async fn simulation_teams(state: &DesktopState, input: &SimulationRequest) -> lo
     });
     if !signed_in {
         return Teams::Missing(
-            "this profile has no Microsoft session; sign in with pta auth microsoft login",
+            "this profile has no Microsoft session; sign in with kuroko auth microsoft login",
         );
     }
     let graph = match profile_graph(state).await {
@@ -1448,11 +1449,11 @@ async fn simulation_teams(state: &DesktopState, input: &SimulationRequest) -> lo
                 .is_some() =>
         {
             Teams::Missing(
-                "the Microsoft session needs renewal; run pta auth microsoft login, then finish",
+                "the Microsoft session needs renewal; run kuroko auth microsoft login, then finish",
             )
         }
         Err(_) => Teams::Missing(
-            "the Microsoft session could not be renewed; check pta test connectivity",
+            "the Microsoft session could not be renewed; check kuroko test connectivity",
         ),
     }
 }
@@ -1875,8 +1876,8 @@ pub(crate) fn keep_running_after_update(interactive: bool) -> bool {
     !matches!(answer.trim().to_lowercase().as_str(), "n" | "no")
 }
 
-/// Entry point of the `personal-teams-assistant` binary. The host always runs without a window:
-/// its owner's GUI is the local page in the system browser, and `pta` operates it. `--headless`
+/// Entry point of the `kuroko-host` binary (and of its former name `personal-teams-assistant`). The host always runs without a window:
+/// its owner's GUI is the local page in the system browser, and `kuroko` operates it. `--headless`
 /// and `PTA_HEADLESS` are accepted and ignored, so launchers, units and updates of installations
 /// that used them keep working.
 pub fn run() {
@@ -1905,7 +1906,9 @@ pub fn run() {
     }
     if args.as_slice() == ["--web"] {
         if web::run().is_err() {
-            eprintln!("Web portal stopped. Check pta web status and the listener configuration.");
+            eprintln!(
+                "Web portal stopped. Check kuroko web status and the listener configuration."
+            );
             std::process::exit(1);
         }
         return;
@@ -1925,7 +1928,7 @@ pub fn run() {
         }
         return;
     }
-    // Started at login by the entry `pta service install` created.
+    // Started at login by the entry `kuroko service install` created.
     let service = args.iter().any(|a| a == service::FLAG);
     // The update's helper starts the new host itself, or through the service manager, which
     // cannot pass it a variable: then the journal it holds names the hand-over.
@@ -1934,7 +1937,7 @@ pub fn run() {
             && control::profile_dir().is_ok_and(|profile| {
                 crate::maintenance::apply::handover(&profile.join(crate::maintenance::DIRECTORY))
             }));
-    // Started by `pta`, the service manager or the update's helper (not by a person launching
+    // Started by `kuroko`, the service manager or the update's helper (not by a person launching
     // the application): no page opens by itself.
     let background = args.iter().any(|a| a == "--host") || service || handover;
     // A new `cargo install` replaced this executable while the previous build keeps running:
@@ -1951,7 +1954,7 @@ pub fn run() {
             Ok(Ok(running)) => previous_running = running,
             _ => {
                 eprintln!(
-                    "Could not stop the previous version of the host. Quit it with pta app quit and retry."
+                    "Could not stop the previous version of the host. Quit it with kuroko app quit and retry."
                 );
                 std::process::exit(1);
             }
@@ -1969,7 +1972,7 @@ pub fn run() {
         });
         if !opened {
             eprintln!(
-                "Another host already owns this profile. Run pta app open in a desktop session to open its page."
+                "Another host already owns this profile. Run kuroko app open in a desktop session to open its page."
             );
             std::process::exit(1);
         }

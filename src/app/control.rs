@@ -334,7 +334,7 @@ pub async fn retire_outdated_host() -> Result<bool> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    anyhow::bail!("previous host did not stop; quit it with pta app quit and retry")
+    anyhow::bail!("previous host did not stop; quit it with kuroko app quit and retry")
 }
 /// The installed host executable used by this CLI.
 pub fn installed_host() -> Result<PathBuf> {
@@ -1382,7 +1382,7 @@ async fn operate(
             let mut reply = json!({"pending":true,"authorization_url":url,"provider":"microsoft"});
             if !host.shell.browser() {
                 reply["remote_browser"] = json!(
-                    "If the browser runs on another machine, copy the final http://localhost address it fails to open and run: pta auth microsoft finish --redirect 'URL'"
+                    "If the browser runs on another machine, copy the final http://localhost address it fails to open and run: kuroko auth microsoft finish --redirect 'URL'"
                 );
             }
             reply

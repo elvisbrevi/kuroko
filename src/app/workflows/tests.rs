@@ -1912,7 +1912,7 @@ async fn a_workflow_larger_than_older_hosts_accept_warns_and_names_the_older_mac
         warning.contains("11 blocks")
             && warning.contains("release 0.12.22 or older")
             && warning.contains("Worker (unknown version)")
-            && warning.contains("pta update --machine NAME"),
+            && warning.contains("kuroko update --machine NAME"),
         "{warning}"
     );
 }

@@ -262,7 +262,7 @@ async fn the_host_opens_its_page_with_a_single_use_code_for_an_http_only_strict_
     assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
     assert!(!replay.headers().contains_key(header::SET_COOKIE));
     let signed_out = body(replay).await;
-    assert!(signed_out.contains("pta app open"));
+    assert!(signed_out.contains("kuroko app open"));
     assert!(!signed_out.contains("/open?code"));
 }
 
@@ -484,7 +484,7 @@ async fn another_local_server_holding_the_cookie_alone_gets_nothing() {
         get(&host, "/signed-out").body(Body::empty()).unwrap(),
     )
     .await;
-    assert!(body(signed_out).await.contains("pta app open"));
+    assert!(body(signed_out).await.contains("kuroko app open"));
 }
 
 #[tokio::test]

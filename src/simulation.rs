@@ -89,7 +89,7 @@ pub fn sources(
         ensure!(
             input.sources.iter().all(|id| readable.contains(id)),
             InvalidRequest(
-                "A selected source is unknown, disabled or does not allow external processing; see pta sources list."
+                "A selected source is unknown, disabled or does not allow external processing; see kuroko sources list."
             )
         );
         return Ok(Some(input.sources.clone()));
@@ -263,7 +263,8 @@ url = "https://example.com/off"
         );
         for named in ["off", "unknown"] {
             assert!(
-                refusal(sources(&map(true, ""), &request(&[named]))).contains("pta sources list")
+                refusal(sources(&map(true, ""), &request(&[named])))
+                    .contains("kuroko sources list")
             );
         }
         let mut none = map(true, "");

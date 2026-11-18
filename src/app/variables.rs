@@ -359,7 +359,7 @@ pub(super) fn check_rename(host: &Host, args: &Value) -> std::result::Result<(),
         .find(|n| read_by_name(&config, n))
     {
         return Err(vault::Error::Conflict(format!(
-            "The application reads the variable {used} by name, so renaming to or from it would change which value it uses. Point the reference to another name first (Settings > Variables > Where variables are used, or pta config set secrets), or bind the consumer by ID."
+            "The application reads the variable {used} by name, so renaming to or from it would change which value it uses. Point the reference to another name first (Settings > Variables > Where variables are used, or kuroko config set secrets), or bind the consumer by ID."
         )));
     }
     let now = chrono::Utc::now().timestamp();
@@ -556,7 +556,7 @@ fn run(host: &Host, method: &str, args: &Value) -> std::result::Result<Value, va
             Ok(json!({
                 "request": request, "state": "pending", "name": start.name, "description": start.description,
                 "expires_at": now + ENTRY_SECONDS,
-                "next": "Ask the user to type the value in Settings > Variables, or run pta variables entry complete REQUEST with the value on standard input. You never receive the value; check variable_entry_status afterwards.",
+                "next": "Ask the user to type the value in Settings > Variables, or run kuroko variables entry complete REQUEST with the value on standard input. You never receive the value; check variable_entry_status afterwards.",
             }))
         }
         "variable_rotation_start" => {
@@ -604,7 +604,7 @@ fn run(host: &Host, method: &str, args: &Value) -> std::result::Result<Value, va
             Ok(json!({
                 "request": request, "state": "pending", "action": "replace_value", "id": target.id,
                 "name": target.name, "description": target.description, "expires_at": now + ENTRY_SECONDS,
-                "next": "Ask the user to type the new value in Settings > Variables, or run pta variables entry complete REQUEST with the value on standard input. You never receive the value; check variable_entry_status afterwards. The request fails if the variable changes first.",
+                "next": "Ask the user to type the new value in Settings > Variables, or run kuroko variables entry complete REQUEST with the value on standard input. You never receive the value; check variable_entry_status afterwards. The request fails if the variable changes first.",
             }))
         }
         "variable_audit" => {

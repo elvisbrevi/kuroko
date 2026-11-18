@@ -178,11 +178,11 @@ async function loadAgentEndpoint() {
   $('#agent-endpoint-url').textContent = address;
   const missing = $('#agent-endpoint-missing');
   missing.hidden = Boolean(address);
-  missing.replaceChildren(t('This computer is not signed in to a portal, so there is no address yet. Agents on this computer use the local server: run pta mcp config to see how to add it.'));
+  missing.replaceChildren(t('This computer is not signed in to a portal, so there is no address yet. Agents on this computer use the local server: run kuroko mcp config to see how to add it.'));
   $('#agent-endpoint-help').hidden = !address;
-  $('#agent-step-claude').replaceChildren(t('Claude Code:'), ' ', agentCommand(`claude mcp add --transport http personal-teams-assistant ${address}`));
+  $('#agent-step-claude').replaceChildren(t('Claude Code:'), ' ', agentCommand(`claude mcp add --transport http kuroko ${address}`));
   $('#agent-step-other').replaceChildren(t('Other agents: add a remote MCP server (Streamable HTTP) with this address. The agent opens the browser for you to sign in; no key is copied.'));
-  $('#agent-step-local').replaceChildren(t('On a computer where this app is installed, the local server (pta mcp) needs no browser and keeps that computer\'s own permissions.'));
+  $('#agent-step-local').replaceChildren(t('On a computer where this app is installed, the local server (kuroko mcp) needs no browser and keeps that computer\'s own permissions.'));
 }
 $('#agent-endpoint-copy').onclick = async () => {
   const copied = await copy($('#agent-endpoint-url').textContent);
@@ -355,7 +355,7 @@ function canSignIn() {
 async function syncAccount({ adopt = false } = {}) {
   // Unsaved edits would be saved over the account's newer configuration later: settle them first.
   if (dirty) throw t('Save or discard your changes before synchronizing with your account.');
-  // One host step brings the variable catalog, then the configuration (`pta account sync`, MCP account_sync).
+  // One host step brings the variable catalog, then the configuration (`kuroko account sync`, MCP account_sync).
   let changed = false, problem = null;
   try {
     const reply = await invoke('account_sync', adopt ? { reset: true } : {});

@@ -33,16 +33,16 @@ fields retained for profile compatibility. They cannot enable Azure writes. Task
 project's process.
 
 ```sh
-pta config set activity_registration.sources '["azure-devops-status"]'
-pta config set activity_registration.time_zone '"America/Santiago"'
-pta config set activity_registration.at '"18:30"'
-pta config set activity_registration.effort_fields '{"Bug":"Custom.EsfuerzoReal"}'
-pta config set activity_registration.enabled true
-pta activity run
-pta activity run 2026-10-14
-pta --json activity status
-pta --json activity history 2026-10-14
-pta --json activity history 2026-10-01..2026-10-20
+kuroko config set activity_registration.sources '["azure-devops-status"]'
+kuroko config set activity_registration.time_zone '"America/Santiago"'
+kuroko config set activity_registration.at '"18:30"'
+kuroko config set activity_registration.effort_fields '{"Bug":"Custom.EsfuerzoReal"}'
+kuroko config set activity_registration.enabled true
+kuroko activity run
+kuroko activity run 2026-10-14
+kuroko --json activity status
+kuroko --json activity history 2026-10-14
+kuroko --json activity history 2026-10-01..2026-10-20
 ```
 
 Runs return immediately. Poll `activity status` until `running=false`, then inspect the

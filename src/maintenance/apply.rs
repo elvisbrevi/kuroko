@@ -75,7 +75,7 @@ pub struct Intent {
     pub assistant: bool,
     pub subscriptions: u64,
     pub tunnel: bool,
-    /// The service manager runs the host (`pta service install`): it is stopped and started
+    /// The service manager runs the host (`kuroko service install`): it is stopped and started
     /// through the manager.
     #[serde(default)]
     pub service: bool,
@@ -1051,7 +1051,7 @@ pub fn describe(journal: &Journal) -> serde_json::Value {
         "recovery": (journal.phase == Phase::Failed).then_some(if journal.manifest.archive.is_some() {
             "Run the install command again with --version X.Y.Z (install.sh) or -Version X.Y.Z (install.ps1) for the version you want, then start the application. Your data and credentials were not removed."
         } else {
-            "Reinstall the exact version with `cargo install personal-teams-assistant --version X.Y.Z --locked --force`, then start the application. Your data and credentials were not removed."
+            "Reinstall the exact version with `cargo install kuroko --version X.Y.Z --locked --force`, then start the application. Your data and credentials were not removed."
         }),
         "unattended": journal.intent.unattended,
     })
@@ -1085,7 +1085,7 @@ pub fn handover(dir: &Path) -> bool {
 pub fn startup_block(dir: &Path) -> Option<String> {
     match recover(dir, now()) {
         Ok(Recovery::Active) => Some(
-            "An update is being applied. Try again in a moment; `pta update status` shows its progress.".into(),
+            "An update is being applied. Try again in a moment; `kuroko update status` shows its progress.".into(),
         ),
         Ok(Recovery::Failed(message)) => Some(message),
         _ => None,

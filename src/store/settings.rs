@@ -35,7 +35,7 @@ pub(crate) trait SettingsStore: Send + Sync {
     fn revision(&self) -> Result<String>;
 }
 
-/// The profile's files, which the Teams service, the local chat and `pta doctor --offline` read
+/// The profile's files, which the Teams service, the local chat and `kuroko doctor --offline` read
 /// directly. Writes are private temporary files renamed into place; `commit` keeps a journal
 /// that `open` replays when a commit was interrupted.
 pub(crate) struct LocalSettings {

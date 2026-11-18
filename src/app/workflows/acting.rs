@@ -20,7 +20,7 @@
 //! **Authority.** The engine reaches Teams and the launchers only here and only with
 //! `Transport::Workflow` (`authority`), which no token, session or credential maps to; each path
 //! checks it again (`require_workflow`), so the control channel, the browser, a machine
-//! credential, MCP and `pta tools call` cannot reach them this way. A notification posts through
+//! credential, MCP and `kuroko tools call` cannot reach them this way. A notification posts through
 //! the `post_chat` path of `teams_post` (the service's session, else the profile's, a chat the
 //! user belongs to, `@[Name]` mentions resolved against that chat's members only, never
 //! retried); a launcher runs through the launcher path (`consumers::run_for_block`) only while

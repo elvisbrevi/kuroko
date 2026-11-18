@@ -139,7 +139,7 @@ fn require_coordinator(state: &DesktopState) -> Result<(), String> {
     if editable(state)? {
         Ok(())
     } else {
-        Err("[not_ready] This computer is signed in to the account's coordinator, where workflows are saved and run: change them there (its local page, its portal or its pta). They reach this computer with the account's configuration.".into())
+        Err("[not_ready] This computer is signed in to the account's coordinator, where workflows are saved and run: change them there (its local page, its portal or its kuroko). They reach this computer with the account's configuration.".into())
     }
 }
 
@@ -253,7 +253,7 @@ async fn older_hosts(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
         )
     };
     Some(format!(
-        "Workflow {} has {} blocks and {characters} characters of instructions, more than hosts of release {} or older accept ({} blocks, {} characters): a computer of this account that runs one cannot take the account's configuration while this workflow is in it (it keeps the copy it has and reports the coordinator's configuration as invalid; its implementation runs work as before) until it is updated (pta update, or pta update --machine NAME from here). {machines}",
+        "Workflow {} has {} blocks and {characters} characters of instructions, more than hosts of release {} or older accept ({} blocks, {} characters): a computer of this account that runs one cannot take the account's configuration while this workflow is in it (it keeps the copy it has and reports the coordinator's configuration as invalid; its implementation runs work as before) until it is updated (kuroko update, or kuroko update --machine NAME from here). {machines}",
         workflow.id,
         workflow.blocks.len(),
         core::OLDER_LIMITS_UNTIL,
@@ -671,7 +671,7 @@ const PERSONAL_CHAT: &str = "48:notes";
 /// How long reading the user's chats may take while a block is saved.
 const CHATS_SECONDS: u64 = 60;
 
-/// Whether the user belongs to the chat, from the same chat list `pta teams chats` shows: a
+/// Whether the user belongs to the chat, from the same chat list `kuroko teams chats` shows: a
 /// refusal when the list says no, a warning when it cannot be read here (no Microsoft session
 /// on this computer, or Graph did not answer). Mentions are resolved when a notification is
 /// posted, against that chat's members.
@@ -687,7 +687,7 @@ async fn verify_chat(state: &DesktopState, chat: &str) -> Result<Option<String>,
     match read {
         Ok(Ok(chats)) if chats.iter().any(|c| c["id"] == chat) => Ok(None),
         Ok(Ok(_)) => Err(invalid(format!(
-            "You are not a member of the chat {chat}; choose one that pta teams chats lists."
+            "You are not a member of the chat {chat}; choose one that kuroko teams chats lists."
         ))),
         _ => Ok(Some(format!(
             "The chat {chat} could not be checked against your chats (no Microsoft session could read them here); it is checked again when the block posts."
@@ -722,7 +722,7 @@ pub(super) async fn preapproved_chats(
     for chat in chats {
         let Some(listed) = directory.iter().find(|c| c["id"] == chat.id.as_str()) else {
             return Err(invalid(format!(
-                "You are not a member of the chat {}; choose one that pta teams chats lists.",
+                "You are not a member of the chat {}; choose one that kuroko teams chats lists.",
                 chat.id
             )));
         };
@@ -768,7 +768,7 @@ async fn save_block(host: &Arc<Host>, args: BlockSaveArgs) -> Result<Value, Stri
                 ))
             {
                 return Err(conflict(
-                    "Only the owner saves a launcher block, in this computer's application (the local page pta app open shows) or the owner's own portal.",
+                    "Only the owner saves a launcher block, in this computer's application (the local page kuroko app open shows) or the owner's own portal.",
                 ));
             }
             let reference = block.launcher.clone().unwrap_or_default();

@@ -843,7 +843,7 @@ async fn the_engines_authority_reaches_only_its_two_paths_and_no_other_caller_ho
 }
 
 /// No code that reaches the host for a client names the engine's authority: the control token,
-/// the browser and machine credentials, the remote MCP endpoint, `pta mcp` and `pta tools call`
+/// the browser and machine credentials, the remote MCP endpoint, `kuroko mcp` and `kuroko tools call`
 /// all map to the other transports.
 #[test]
 fn no_client_path_names_the_workflow_authority() {
