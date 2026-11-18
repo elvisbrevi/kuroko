@@ -4208,7 +4208,40 @@ fn status_text(data: &Value) -> String {
     lines.push("Full detail: pta --json status".into());
     lines.join("\n")
 }
+/// The CLI's name, and the one it was published as before 0.18.0, which stays an alias until
+/// 0.21.0 (docs/rename-kuroko.md).
+pub const NAME: &str = "kuroko";
+pub const FORMER_NAME: &str = "pta";
+/// The release that removes the former names `pta` and `personal-teams-assistant`.
+pub const ALIASES_UNTIL: &str = "0.21.0";
+
+/// The note the former names print for a person at a terminal, never for a script, an agent or
+/// an MCP client (whose stderr is not a terminal): stdout and the exit status are unchanged.
+pub fn former_name_note(former: &str, current: &str) -> Option<String> {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal().then(|| {
+        format!(
+            "Note: `{former}` is the former name of `{current}` and is removed in {ALIASES_UNTIL}; run `{current}` instead."
+        )
+    })
+}
+
+/// The CLI started as `kuroko`.
 pub async fn run() -> i32 {
+    run_as(NAME).await
+}
+
+/// The CLI started under its former name `pta`: the same commands, after a note for a person.
+pub async fn run_former() -> i32 {
+    if let Some(note) = former_name_note(FORMER_NAME, NAME) {
+        eprintln!("{note}");
+    }
+    run_as(FORMER_NAME).await
+}
+
+/// `invoked` is the name the CLI was started as; it names itself so in `--version`, which scripts
+/// written for either name parse.
+async fn run_as(invoked: &str) -> i32 {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h")
         || args.is_empty()
@@ -4239,7 +4272,7 @@ pub async fn run() -> i32 {
             );
         } else {
             println!(
-                "pta {} (contract {})",
+                "{invoked} {} (contract {})",
                 env!("CARGO_PKG_VERSION"),
                 control::CONTRACT
             );
@@ -5240,6 +5273,16 @@ mod help_tests {
             human("update", &preparing)
                 .unwrap()
                 .starts_with("Preparing version 0.12.22 on this computer")
+        );
+    }
+
+    #[test]
+    fn the_former_names_say_nothing_where_no_person_reads_stderr() {
+        // Tests, scripts, agents and MCP clients have no terminal on stderr.
+        assert_eq!(former_name_note(FORMER_NAME, NAME), None);
+        assert_eq!(
+            (NAME, FORMER_NAME, ALIASES_UNTIL),
+            ("kuroko", "pta", "0.21.0")
         );
     }
 }
