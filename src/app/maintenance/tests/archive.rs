@@ -1158,6 +1158,7 @@ async fn the_release_probe_downloads_nothing_and_reads_a_redirect_as_attached() 
 
 /// The successor's release archive (docs/rename-kuroko.md): its own name, and its four executables,
 /// which report the successor's package and `reported`.
+#[cfg(unix)]
 fn successor_archive(version: &str, reported: &str) -> Vec<u8> {
     use crate::maintenance::release::tests::{Kind, tgz, zip};
     let successor = core::SUCCESSOR.unwrap();
