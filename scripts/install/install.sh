@@ -352,10 +352,12 @@ default_root() {
 # The first of these executables in the bin directory. The names of the release being installed
 # come first, then either layout's, so an installation from before the rename is stopped and
 # removed with its own.
+# The first of the given executables in $BIN. Its loop variable is its own: sh has no local
+# variables, and callers keep values such as the service entry's name in `name`.
 present() {
-    for name in "$@"; do
-        if [ -x "$BIN/$name" ]; then
-            printf '%s\n' "$BIN/$name"
+    for present_candidate in "$@"; do
+        if [ -x "$BIN/$present_candidate" ]; then
+            printf '%s\n' "$BIN/$present_candidate"
             return 0
         fi
     done
