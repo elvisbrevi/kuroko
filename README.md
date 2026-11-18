@@ -4,6 +4,8 @@
 
 <p align="center"><em>Personal Teams Assistant</em> · You on stage. Kuroko handles the rest.</p>
 
+> **Moving to `kuroko`.** From 0.18.0 the product is published as the crate [`kuroko`](https://crates.io/crates/kuroko), with the `kuroko` command; 0.17.0 is the last release of `personal-teams-assistant`. Installed copies move to it with their own updater, keeping the profile, the credentials and the Microsoft session; `pta` and `personal-teams-assistant` stay as aliases. To move a copy by hand, run `cargo install kuroko --locked --force` (`--force` lets it take over the two old command names). See [the rename plan](docs/rename-kuroko.md).
+
 <p align="center"><strong>Answers in Teams as you, and only with what you authorize.</strong><br>
 <a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/personal-teams-assistant">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a></p>
 

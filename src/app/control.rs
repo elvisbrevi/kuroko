@@ -149,10 +149,13 @@ struct Endpoint {
 const IDENTIFIER: &str = "dev.personalteams.assistant";
 
 pub(super) fn isolated_profile_dir() -> Result<Option<PathBuf>> {
-    std::env::var_os("PTA_PROFILE_DIR")
+    crate::env_names::var_os(crate::env_names::PROFILE_DIR)
         .map(|value| {
             let dir = PathBuf::from(value);
-            ensure!(dir.is_absolute(), "PTA_PROFILE_DIR must be absolute");
+            ensure!(
+                dir.is_absolute(),
+                "KUROKO_PROFILE_DIR (or PTA_PROFILE_DIR) must be absolute"
+            );
             let standard = standard_profile_dir()?;
             let same = dir == standard
                 || dir

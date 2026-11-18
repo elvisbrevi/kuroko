@@ -8,6 +8,7 @@ pub mod config;
 pub mod consumers;
 pub mod deliveries;
 pub mod diagnostics;
+pub mod env_names;
 pub mod evidence;
 pub mod hash;
 pub mod index;

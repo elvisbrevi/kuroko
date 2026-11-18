@@ -6,7 +6,10 @@
 //! `CARGO_PKG_REPOSITORY`, the version the registry listed and the target the installation
 //! recorded. Everything is written under the staging directory the caller gives; the installed
 //! executables are never opened.
-use super::{ArchiveFile, CLI, CRATE, Manifest, Version, exe_name, valid_target, verify_pair};
+use super::{
+    ArchiveFile, CRATE, Manifest, OWN, Package, Version, exe_name, other_package, valid_target,
+    verify_pair_for,
+};
 use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -72,6 +75,28 @@ impl Source {
     pub fn url(&self, version: &Version, file: &str) -> String {
         format!("{}/releases/download/v{version}/{file}", self.base)
     }
+
+    /// The same source for `package`'s releases: its own repository under the same owner and host,
+    /// with the same redirect rules. This package's source is returned unchanged.
+    pub fn for_package(&self, package: Package) -> Self {
+        let name = package.repository.trim_end_matches('/').rsplit('/').next();
+        match (package == OWN, name, self.base.rsplit_once('/')) {
+            (false, Some(name), Some((owner, _))) => Self {
+                base: format!("{owner}/{name}"),
+                ..self.clone()
+            },
+            _ => self.clone(),
+        }
+    }
+
+    /// The scheme, host and owner path of `base` (`https://github.com/OWNER/`): a renamed
+    /// repository answers its old address with a redirect there, which is followed for the
+    /// release download only.
+    fn owner_prefix(&self) -> Option<String> {
+        self.base
+            .rsplit_once('/')
+            .map(|(owner, _)| format!("{owner}/"))
+    }
 }
 
 fn windows_target(target: &str) -> bool {
@@ -80,13 +105,26 @@ fn windows_target(target: &str) -> bool {
 
 /// The directory the archive holds, named like the archive.
 pub fn directory_name(target: &str, version: &Version) -> String {
-    format!("{CRATE}-{target}-v{version}")
+    directory_name_for(OWN, target, version)
+}
+
+/// [`directory_name`] of `package`'s archive.
+pub fn directory_name_for(package: Package, target: &str, version: &Version) -> String {
+    format!("{}-{target}-v{version}", package.name)
 }
 
 /// The archive `binaries.yml` attaches for `target`: `.zip` on Windows, `.tgz` elsewhere.
 pub fn archive_name(target: &str, version: &Version) -> String {
+    archive_name_for(OWN, target, version)
+}
+
+/// [`archive_name`] of `package`'s archive.
+pub fn archive_name_for(package: Package, target: &str, version: &Version) -> String {
     let extension = if windows_target(target) { "zip" } else { "tgz" };
-    format!("{}.{extension}", directory_name(target, version))
+    format!(
+        "{}.{extension}",
+        directory_name_for(package, target, version)
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -141,15 +179,22 @@ impl std::error::Error for Failure {}
 fn client(source: &Source, timeout: Duration) -> Result<reqwest::Client> {
     let hosts = source.hosts.clone();
     let https_only = source.https_only;
+    let owner = source.owner_prefix();
     let policy = reqwest::redirect::Policy::custom(move |attempt| {
         let url = attempt.url();
+        // A repository renamed under the same owner: its old release address answers with a
+        // redirect to the new one, on the same host, which then redirects to the asset storage.
+        let renamed = owner.as_deref().is_some_and(|owner| {
+            url.as_str().starts_with(owner) && url.path().contains("/releases/download/")
+        });
         let allowed = attempt.previous().len() <= MAX_REDIRECTS
             && (url.scheme() == "https" || (!https_only && url.scheme() == "http"))
             && url.username().is_empty()
             && url.password().is_none()
-            && url
-                .host_str()
-                .is_some_and(|host| hosts.iter().any(|h| h.eq_ignore_ascii_case(host)));
+            && (renamed
+                || url
+                    .host_str()
+                    .is_some_and(|host| hosts.iter().any(|h| h.eq_ignore_ascii_case(host))));
         if allowed {
             attempt.follow()
         } else {
@@ -230,10 +275,21 @@ async fn fetch(
 /// redirect to the download (the download itself still follows only `source.hosts`) and a missing
 /// one, or a release that does not exist yet, with 404.
 pub async fn published(source: &Source, version: &Version, target: &str) -> Result<bool> {
+    published_for(OWN, source, version, target).await
+}
+
+/// [`published`] for `package`'s release, in its own repository.
+pub async fn published_for(
+    package: Package,
+    source: &Source,
+    version: &Version,
+    target: &str,
+) -> Result<bool> {
     ensure!(
         valid_target(target),
         "The recorded build target is not valid."
     );
+    let source = &source.for_package(package);
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .https_only(source.https_only)
@@ -244,7 +300,7 @@ pub async fn published(source: &Source, version: &Version, target: &str) -> Resu
             env!("CARGO_PKG_VERSION")
         ))
         .build()?;
-    let name = archive_name(target, version);
+    let name = archive_name_for(package, target, version);
     for file in [format!("{name}.sha256"), name] {
         let response = client
             .get(source.url(version, &file))
@@ -293,7 +349,7 @@ fn escape() -> anyhow::Error {
 /// Where an archive entry lands: the directory itself, one of the two executables (by index) or
 /// anything else inside the directory, which is skipped. A path that is absolute, climbs out, names
 /// a drive or lies outside the expected directory refuses the whole archive.
-fn place(path: &str, directory: &str, wanted: &[String; 2]) -> Result<Option<usize>> {
+fn place(path: &str, directory: &str, wanted: &[String]) -> Result<Option<usize>> {
     ensure!(
         !path.is_empty() && !path.starts_with(['/', '\\']) && !path.contains([':', '\0']),
         escape()
@@ -356,9 +412,20 @@ fn write_binary(mut from: impl Read, to: &Path) -> Result<()> {
 /// Windows) from `archive` into `bin`. Any link, special file or path outside `<directory>` refuses
 /// the archive; other regular files inside it (the licence, the readme) are skipped.
 pub fn unpack(archive: &Path, zip: bool, directory: &str, bin: &Path) -> Result<()> {
+    unpack_for(OWN, archive, zip, directory, bin)
+}
+
+/// [`unpack`] of every executable `package` installs, and nothing else.
+pub fn unpack_for(
+    package: Package,
+    archive: &Path,
+    zip: bool,
+    directory: &str,
+    bin: &Path,
+) -> Result<()> {
     fs::create_dir_all(bin)?;
-    let wanted = [exe_name(CRATE), exe_name(CLI)];
-    let mut found = [false, false];
+    let wanted: Vec<String> = package.bins.iter().map(|name| exe_name(name)).collect();
+    let mut found = vec![false; wanted.len()];
     let corrupt = "The archive is damaged or not a release archive, so nothing was taken from it.";
     let file = fs::File::open(archive)?;
     if zip {
@@ -402,8 +469,8 @@ pub fn unpack(archive: &Path, zip: bool, directory: &str, bin: &Path) -> Result<
         }
     }
     ensure!(
-        found == [true, true],
-        "The archive does not hold both the application and pta, so nothing was taken from it."
+        found.iter().all(|found| *found),
+        "The archive does not hold every executable of the application, so nothing was taken from it."
     );
     Ok(())
 }
@@ -424,11 +491,27 @@ pub async fn stage(
     now: i64,
     progress: impl FnMut(u64, Option<u64>),
 ) -> Result<Manifest> {
+    stage_for(OWN, source, version, target, partial, env, now, progress).await
+}
+
+/// [`stage`] of `package`'s archive, from `package`'s own repository (see [`Source::for_package`]).
+#[allow(clippy::too_many_arguments)]
+pub async fn stage_for(
+    package: Package,
+    source: &Source,
+    version: &Version,
+    target: &str,
+    partial: &Path,
+    env: &[(OsString, OsString)],
+    now: i64,
+    progress: impl FnMut(u64, Option<u64>),
+) -> Result<Manifest> {
     ensure!(
         valid_target(target),
         "The recorded build target is not valid."
     );
-    let name = archive_name(target, version);
+    let source = &source.for_package(package);
+    let name = archive_name_for(package, target, version);
     let downloads = partial.join("download");
     fs::create_dir_all(&downloads)?;
     let client = client(source, Duration::from_secs(DOWNLOAD_SECONDS))?;
@@ -467,15 +550,15 @@ pub async fn stage(
     let root = partial.join("root");
     let (archive, directory, bin) = (
         path.clone(),
-        directory_name(target, version),
+        directory_name_for(package, target, version),
         root.join("bin"),
     );
     let zip = windows_target(target);
-    tokio::task::spawn_blocking(move || unpack(&archive, zip, &directory, &bin))
+    tokio::task::spawn_blocking(move || unpack_for(package, &archive, zip, &directory, &bin))
         .await
         .context("The archive could not be unpacked.")??;
     let _ = fs::remove_dir_all(&downloads);
-    let binaries = verify_pair(&root, version, env).await?;
+    let binaries = verify_pair_for(package, &root, version, env).await?;
     Ok(Manifest {
         schema: 1,
         version: version.to_string(),
@@ -486,12 +569,14 @@ pub async fn stage(
         target: Some(target.to_owned()),
         binaries,
         archive: Some(received),
+        package: other_package(package),
     })
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::maintenance::CLI;
     use std::io::Cursor;
 
     /// What an archive entry is.
@@ -767,7 +852,7 @@ pub(crate) mod tests {
                 result
                     .unwrap_err()
                     .to_string()
-                    .contains("both the application and pta"),
+                    .contains("every executable of the application"),
                 "zip: {zip}"
             );
             // Not an archive at all.
@@ -834,6 +919,170 @@ mod hash_pins {
         assert_eq!(
             small.sha256,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}
+
+/// The successor package (docs/rename-kuroko.md): its releases live in its own repository under the
+/// same owner, its archive holds its four executables, and the old repository's address keeps
+/// working after the rename through GitHub's redirect.
+#[cfg(test)]
+mod successor {
+    use super::tests::{Kind, tgz, zip};
+    use super::*;
+    use crate::maintenance::SUCCESSOR;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+
+    fn successor() -> Package {
+        SUCCESSOR.expect("this package names its successor")
+    }
+
+    #[test]
+    fn the_successor_is_fetched_from_its_own_repository_under_the_same_owner() {
+        let official = Source::official().unwrap();
+        assert_eq!(
+            official.for_package(successor()).base,
+            "https://github.com/elvisbrevi/kuroko"
+        );
+        assert_eq!(official.for_package(OWN), official);
+        let double = Source {
+            base: "http://127.0.0.1:9/owner/repo".into(),
+            hosts: vec!["127.0.0.1".into()],
+            https_only: false,
+        };
+        let moved = double.for_package(successor());
+        assert_eq!(moved.base, "http://127.0.0.1:9/owner/kuroko");
+        assert_eq!((moved.hosts, moved.https_only), (double.hosts, false));
+        let version = Version(0, 18, 0);
+        assert_eq!(
+            archive_name_for(successor(), "x86_64-pc-windows-msvc", &version),
+            "kuroko-x86_64-pc-windows-msvc-v0.18.0.zip"
+        );
+        assert_eq!(
+            directory_name_for(successor(), "aarch64-apple-darwin", &version),
+            "kuroko-aarch64-apple-darwin-v0.18.0"
+        );
+    }
+
+    #[test]
+    fn every_executable_of_the_successor_is_unpacked_and_none_may_be_missing() {
+        let dir_name = "kuroko-x86_64-unknown-linux-gnu-v0.18.0";
+        for packed in [false, true] {
+            let mut entries: Vec<(String, Kind)> = successor()
+                .bins
+                .iter()
+                .map(|n| {
+                    (
+                        format!("{dir_name}/{}", exe_name(n)),
+                        Kind::File(n.as_bytes().to_vec()),
+                    )
+                })
+                .collect();
+            entries.push((format!("{dir_name}/README.md"), Kind::File(b"r".to_vec())));
+            let build = |entries: &[(String, Kind)]| {
+                let refs: Vec<(&str, Kind)> = entries
+                    .iter()
+                    .map(|(n, k)| {
+                        (
+                            n.as_str(),
+                            match k {
+                                Kind::File(b) => Kind::File(b.clone()),
+                                _ => unreachable!(),
+                            },
+                        )
+                    })
+                    .collect();
+                if packed { zip(&refs) } else { tgz(&refs) }
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let archive = dir.path().join("archive");
+            fs::write(&archive, build(&entries)).unwrap();
+            let bin = dir.path().join("bin");
+            unpack_for(successor(), &archive, packed, dir_name, &bin).unwrap();
+            for name in successor().bins {
+                assert_eq!(fs::read(bin.join(exe_name(name))).unwrap(), name.as_bytes());
+            }
+            assert!(!bin.join("README.md").exists());
+            // Without one of the aliases the archive is not the successor's.
+            entries.retain(|(n, _)| !n.ends_with(&format!("/{}", exe_name("pta"))));
+            let dir = tempfile::tempdir().unwrap();
+            let archive = dir.path().join("archive");
+            fs::write(&archive, build(&entries)).unwrap();
+            let error = unpack_for(
+                successor(),
+                &archive,
+                packed,
+                dir_name,
+                &dir.path().join("bin"),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("every executable"), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_renamed_repository_redirect_is_followed_only_under_the_same_owner() {
+        let server = MockServer::start().await;
+        let asset = "/releases/download/v0.17.1/file.tgz";
+        Mock::given(path(format!("/owner/repo{asset}")))
+            .respond_with(
+                ResponseTemplate::new(301)
+                    .insert_header("location", format!("{}/owner/kuroko{asset}", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/owner/kuroko{asset}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"archive".to_vec()))
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/owner/elsewhere{asset}")))
+            .respond_with(
+                ResponseTemplate::new(301)
+                    .insert_header("location", format!("{}/stranger/repo{asset}", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/stranger/repo{asset}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"other".to_vec()))
+            .mount(&server)
+            .await;
+        // No asset host is allowed: only the rename rule can let a redirect through.
+        let source = |name: &str| Source {
+            base: format!("{}/owner/{name}", server.uri()),
+            hosts: Vec::new(),
+            https_only: false,
+        };
+        let version = Version(0, 17, 1);
+        let renamed = source("repo");
+        let follows = client(&renamed, Duration::from_secs(10)).unwrap();
+        let mut sink = Vec::new();
+        fetch(
+            &follows,
+            &renamed.url(&version, "file.tgz"),
+            "file.tgz",
+            1 << 20,
+            &mut sink,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(sink, b"archive");
+        let elsewhere = source("elsewhere");
+        let refuses = client(&elsewhere, Duration::from_secs(10)).unwrap();
+        let error = fetch(
+            &refuses,
+            &elsewhere.url(&version, "file.tgz"),
+            "file.tgz",
+            1 << 20,
+            &mut Vec::new(),
+            |_, _| {},
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<Failure>(),
+            Some(&Failure::Redirected),
+            "{error}"
         );
     }
 }

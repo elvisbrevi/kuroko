@@ -778,7 +778,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
 {
   // Theme: this device's choice applies at once, asks for no save and survives a reload.
   const { context, page } = await open();
-  const theme = () => page.evaluate(() => [document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor, localStorage.getItem('pta-theme')]);
+  const theme = () => page.evaluate(() => [document.documentElement.dataset.theme ?? null, getComputedStyle(document.body).backgroundColor, localStorage.getItem('kuroko-theme')]);
   await page.click('nav [data-tab="settings"]');
   check('theme starts matching the system', JSON.stringify(await theme()) === JSON.stringify([null, 'rgb(255, 246, 229)', null])
     && await page.getAttribute('#theme-choice [data-theme-choice="system"]', 'aria-pressed') === 'true', JSON.stringify(await theme()));
@@ -795,7 +795,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   check('matching the system again forgets the choice', JSON.stringify(await theme()) === JSON.stringify([null, 'rgb(255, 246, 229)', null]), JSON.stringify(await theme()));
   // Palette and style: each applies at once on this device, asks for no save and survives a reload.
   const look = () => page.evaluate(() => [document.documentElement.dataset.palette ?? null, document.documentElement.dataset.style ?? null,
-    getComputedStyle(document.body).backgroundColor, localStorage.getItem('pta-palette'), localStorage.getItem('pta-style')]);
+    getComputedStyle(document.body).backgroundColor, localStorage.getItem('kuroko-palette'), localStorage.getItem('kuroko-style')]);
   const radius = () => page.evaluate(() => getComputedStyle(document.querySelector('#theme-choice button')).borderTopLeftRadius);
   check('the look starts as Paper and Stickers', JSON.stringify(await look()) === JSON.stringify([null, null, 'rgb(255, 246, 229)', null, null])
     && await page.getAttribute('#palette-choice [data-palette="paper"]', 'aria-pressed') === 'true'
@@ -827,11 +827,18 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.click('#style-choice [data-style="sticker"]');
   await page.click('#theme-choice [data-theme-choice="system"]');
   check('choosing the defaults again forgets the look', JSON.stringify(await look()) === JSON.stringify([null, null, 'rgb(255, 246, 229)', null, null]), JSON.stringify(await look()));
-  await page.evaluate(() => { localStorage.setItem('pta-palette', 'no-such-palette'); localStorage.setItem('pta-style', 'no-such-style'); });
+  await page.evaluate(() => { localStorage.setItem('kuroko-palette', 'no-such-palette'); localStorage.setItem('kuroko-style', 'no-such-style'); });
   await page.reload();
   await page.waitForTimeout(600);
   check('an unknown stored look falls back to the defaults', JSON.stringify((await look()).slice(0, 3)) === JSON.stringify([null, null, 'rgb(255, 246, 229)']), JSON.stringify(await look()));
-  await page.evaluate(() => { localStorage.removeItem('pta-palette'); localStorage.removeItem('pta-style'); });
+  await page.evaluate(() => { localStorage.removeItem('kuroko-palette'); localStorage.removeItem('kuroko-style'); });
+  // A look an earlier version saved under its former `pta-` names is kept and moved to the current names.
+  await page.evaluate(() => { localStorage.setItem('pta-palette', 'nord'); });
+  await page.reload();
+  await page.waitForTimeout(600);
+  const moved = await page.evaluate(() => [document.documentElement.dataset.palette ?? null, localStorage.getItem('kuroko-palette'), localStorage.getItem('pta-palette')]);
+  check('a look saved under the former name is kept and moved', JSON.stringify(moved) === JSON.stringify(['nord', 'nord', null]), JSON.stringify(moved));
+  await page.evaluate(() => { localStorage.removeItem('kuroko-palette'); });
   // The tab icon, the iOS home-screen icon and the manifest with every icon it names load under the portal's CSP.
   const icons = await page.evaluate(async () => {
     const manifest = await (await fetch(document.querySelector('link[rel=manifest]').href)).json();

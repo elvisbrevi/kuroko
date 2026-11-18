@@ -334,7 +334,9 @@ setInterval(() => { if (current && tab === 'overview') loadReadiness(); }, 30_00
 // ---------------------------------------------------------------- account sign-in and synchronization
 
 /** Set on this device when its user chose to work without an account; the sidebar still offers sign-in. */
-const SIGN_IN_SKIPPED_KEY = 'pta-sign-in-skipped';
+const SIGN_IN_SKIPPED_KEY = 'kuroko-sign-in-skipped';
+/** The same choice as an earlier version saved it. */
+const FORMER_SIGN_IN_SKIPPED_KEY = 'pta-sign-in-skipped';
 let signInOffered = false;
 
 /** Whether this window may add its computer to an account: the owner's own window on a computer
@@ -371,7 +373,7 @@ async function syncAccount({ adopt = false } = {}) {
 async function signIn(url, adopt) {
   if (!await machineLogin(url)) return;
   await syncAccount({ adopt });
-  try { localStorage.removeItem(SIGN_IN_SKIPPED_KEY); } catch { /* this page only */ }
+  try { localStorage.removeItem(SIGN_IN_SKIPPED_KEY); localStorage.removeItem(FORMER_SIGN_IN_SKIPPED_KEY); } catch { /* this page only */ }
   done(t("Signed in. Your account's settings and variables are on this computer."));
   showTab('overview');
 }
@@ -395,7 +397,9 @@ function maybeOfferSignIn() {
   if (!canSignIn() || readiness.mode !== 'standalone' || signInOffered) return;
   if (readiness.steps.find(step => step.id === 'coordinator')?.state === 'waiting') return;
   let skipped = false;
-  try { skipped = localStorage.getItem(SIGN_IN_SKIPPED_KEY) === '1'; } catch { /* offer it */ }
+  try {
+    skipped = localStorage.getItem(SIGN_IN_SKIPPED_KEY) === '1' || localStorage.getItem(FORMER_SIGN_IN_SKIPPED_KEY) === '1';
+  } catch { /* offer it */ }
   signInOffered = true;
   if (!skipped) openAccountLogin().catch(fail);
 }

@@ -21,7 +21,7 @@ const chat = { answer, used_sources: ['ado-activity', 'wiki'], references: [
   { id: 'wiki', label: 'Settlement retry runbook', url: 'https://dev.azure.com/contoso/Payments/_wiki/wikis/Payments.wiki/12' }], partial: false, warnings: [] };
 async function page(scheme, viewport, scale, mobile) {
   const context = await browser.newContext({ viewport, deviceScaleFactor: scale, colorScheme: scheme, locale: 'en-US', isMobile: mobile, hasTouch: mobile });
-  await context.addInitScript(chat => { try { localStorage.setItem('pta-language', 'en'); } catch {} window.__ptaChatAnswer = chat; }, chat);
+  await context.addInitScript(chat => { try { localStorage.setItem('kuroko-language', 'en'); } catch {} window.__ptaChatAnswer = chat; }, chat);
   const p = await context.newPage();
   await p.route('**/__fixture.js', async route => {
     const response = await route.fetch();

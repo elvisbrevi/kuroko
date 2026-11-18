@@ -1011,6 +1011,7 @@ mod tests {
             "GH_TOKEN",
             "AZURE_DEVOPS_EXT_PAT",
             "PTA_PROFILE_DIR",
+            "KUROKO_PROFILE_DIR",
             "systemroot_file",
             "ProgramData_FILE",
             "PROGRAMFILES_TOKEN",

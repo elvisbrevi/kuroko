@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Keeps the web portal's server on the newest crates.io release of personal-teams-assistant.
+"""Keeps the web portal's server on the newest crates.io release of Kuroko.
 
 A systemd user timer runs it every five minutes (scripts/systemd/, docs/delivery.md). Each run
-compares `pta --version` with the newest version in the crates.io index. When a newer one exists,
+compares `pta --version` with the newest version in the crates.io index: of `kuroko` once it is
+published (the product continues under that name; its package keeps the `pta` and
+`personal-teams-assistant` commands, so the portal's unit keeps working), otherwise of
+`personal-teams-assistant`. When a newer one exists,
 the portal service is active and nothing is in flight (an activity review, a task being written to
 Azure DevOps, a Teams message being answered or sent), it backs up the installed binaries, installs
 that version headless with `cargo install`, restarts the portal and waits until `pta --json status`
@@ -42,8 +45,11 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-CRATE = "personal-teams-assistant"
-BINARIES = ("personal-teams-assistant", "pta")
+# Newest first: the package the product continues as, then the one it was published as before.
+CRATES = ("kuroko", "personal-teams-assistant")
+# Every executable either package installs; the backup keeps the ones present, and a restore removes
+# the ones that were not there before (the successor's new names).
+BINARIES = ("personal-teams-assistant", "pta", "kuroko", "kuroko-host")
 # Cargo's record of installed packages, restored with the binaries so it matches them.
 TRACKING = (".crates.toml", ".crates2.json")
 USER_AGENT = "personal-teams-assistant-vps-update (github.com/elvisbrevi/personal-teams-assistant)"
@@ -121,13 +127,24 @@ def index_path(name):
     return f"{name[:2]}/{name[2:4]}/{name}"
 
 
-def latest_version():
-    """The newest stable, not yanked version in the sparse index (the one cargo reads)."""
-    request = urllib.request.Request(f"{INDEX}/{index_path(CRATE)}", headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        lines = response.read().decode().splitlines()
-    versions = [parse(entry["vers"]) for entry in map(json.loads, filter(None, lines)) if not entry.get("yanked")]
-    return max(filter(None, versions), default=None)
+def latest_release():
+    """The package and newest stable, not yanked version in the sparse index (the one cargo reads):
+    the first of CRATES the index lists with such a version."""
+    for crate in CRATES:
+        request = urllib.request.Request(f"{INDEX}/{index_path(crate)}", headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                lines = response.read().decode().splitlines()
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                continue
+            raise
+        versions = [parse(entry["vers"]) for entry in map(json.loads, filter(None, lines))
+                    if entry.get("name") == crate and not entry.get("yanked")]
+        newest = max(filter(None, versions), default=None)
+        if newest is not None:
+            return crate, newest
+    return CRATES[-1], None
 
 
 def run(args, timeout=120):
@@ -139,7 +156,7 @@ def installed_version():
         words = run([str(BIN / "pta"), "--version"], timeout=30).stdout.split()
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return parse(words[1]) if len(words) >= 2 and words[0] == "pta" else None
+    return parse(words[1]) if len(words) >= 2 and words[0] in ("pta", "kuroko") else None
 
 
 def service_active():
@@ -304,7 +321,8 @@ def backup():
     shutil.rmtree(BACKUP, ignore_errors=True)
     BACKUP.mkdir(mode=0o700)
     for name in BINARIES:
-        shutil.copy2(BIN / name, BACKUP / name)
+        if (BIN / name).is_file():
+            shutil.copy2(BIN / name, BACKUP / name)
     for name in TRACKING:
         if (CARGO_HOME / name).is_file():
             shutil.copy2(CARGO_HOME / name, BACKUP / name)
@@ -312,7 +330,11 @@ def backup():
 
 def restore():
     """Puts the backed-up files back, each with one rename; size and time are kept, so a host
-    started from them is not taken for an outdated one."""
+    started from them is not taken for an outdated one. An executable the backup does not hold was
+    added by the update (a successor's new name) and is removed."""
+    for name in BINARIES:
+        if not (BACKUP / name).is_file():
+            (BIN / name).unlink(missing_ok=True)
     for name in BINARIES + TRACKING:
         source = BACKUP / name
         if source.is_file():
@@ -322,9 +344,11 @@ def restore():
             os.replace(staged, destination)
 
 
-def install(version):
+def install(crate, version):
+    """`--force` also lets the successor take over the executables Cargo records for the package
+    it replaces (`pta`, `personal-teams-assistant`), which then drops that package's record."""
     environment = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=str(TARGET), CARGO_BUILD_JOBS=JOBS)
-    command = ["cargo", "install", CRATE, "--version", version, "--locked", "--no-default-features", "--force"]
+    command = ["cargo", "install", crate, "--version", version, "--locked", "--no-default-features", "--force"]
     with open(STATE / "install.log", "w", encoding="utf-8") as output:
         try:
             # From the state directory, so no rust-toolchain.toml nearby picks the toolchain.
@@ -381,7 +405,7 @@ def update(check=False, drill=False):
         log(f"`{BIN / 'pta'} --version` gave no version: install the package first")
         return 1
     try:
-        latest = latest_version()
+        crate, latest = latest_release()
     except (OSError, urllib.error.URLError, ValueError, KeyError) as error:
         log(f"crates.io index unavailable ({error}); will try again")
         return 0
@@ -419,9 +443,9 @@ def update(check=False, drill=False):
         return 0
 
     backup()
-    record(f"installing {target} (installed {show(installed)})")
+    record(f"installing {crate} {target} (installed {show(installed)})")
     started = time.monotonic()
-    if not install(target) or installed_version() != latest:
+    if not install(crate, target) or installed_version() != latest:
         restore()
         if drill:
             record(f"rollback drill: install of {target} failed; {show(installed)} kept, the portal was not restarted")

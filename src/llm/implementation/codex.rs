@@ -598,10 +598,7 @@ mod tests {
                     }
                     "thread/name/set" => {
                         assert_eq!(request["params"]["threadId"], THREAD);
-                        assert_eq!(
-                            request["params"]["name"],
-                            "Teams Assistant - new user story"
-                        );
+                        assert_eq!(request["params"]["name"], "Kuroko - new user story");
                         named = true;
                         json!({})
                     }
