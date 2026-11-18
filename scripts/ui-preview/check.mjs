@@ -727,11 +727,21 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.uncheck('#style-icon');
   check('the emoji field hides with the emoji', !await page.isVisible('#style-emoji') && !await page.isVisible('#style-preview-icon'));
   await page.check('#style-icon');
+  // Signed as Kuroko: the app's mark takes the emoji's place and the default text links «Kuroko».
+  await page.check('#style-kuroko');
+  const label = await page.inputValue('#style-label');
+  await page.fill('#style-label', '');
+  const signed = await page.evaluate(() => [!document.querySelector('#style-preview-mark').hidden, document.querySelector('#style-preview-icon').hidden,
+    document.querySelector('#style-icon-field').hidden, document.querySelector('#style-preview-label').textContent, document.querySelector('#style-preview-label .teams-link')?.textContent]);
+  check('signing as Kuroko shows the mark and links the name', JSON.stringify(signed) === JSON.stringify([true, true, true, 'Mensaje generado por Kuroko', 'Kuroko']), JSON.stringify(signed));
+  await page.fill('#style-label', label);
+  await page.uncheck('#style-kuroko');
+  check('without the signature the emoji comes back', await page.isVisible('#style-preview-icon') && !await page.isVisible('#style-preview-mark'));
   await page.click('#save');
   await page.waitForTimeout(300);
   check('the message style is saved', await page.evaluate(() => JSON.stringify(window.__ptaLastSave?.config?.message_style)) === JSON.stringify({
     enabled: true, label: 'Escrito por mi asistente', position: 'top', accent: '#13A10E', band: 'emphasis', label_color: 'good', icon: true,
-    emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium' }));
+    emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium', kuroko: false }));
   check('message style has no page errors', errors.length === 0, errors.join(' | '));
   await context.close();
 }
