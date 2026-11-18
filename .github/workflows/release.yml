@@ -30,6 +30,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.ci.outputs.publish }}
+      release: ${{ steps.release.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +50,21 @@ jobs:
                  echo "$CRATE $version is not on crates.io yet." ;;
             *) echo "::error::crates.io answered HTTP $code for $CRATE $version"; exit 1 ;;
           esac
+      # A version published by hand (the first one of a new crate, or the fallback in
+      # docs/delivery.md) still gets its tag, release and archives from this workflow.
+      - name: Is its GitHub release missing?
+        id: release
+        if: steps.version.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release v$VERSION exists."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "$CRATE $VERSION is on crates.io without its GitHub release: releasing it." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Wait for CI on this commit
         id: ci
         if: steps.version.outputs.published == 'false'
@@ -109,6 +125,7 @@ jobs:
   github-release:
     name: Tag and GitHub release
     needs: [check, publish]
+    if: ${{ !cancelled() && needs.check.result == 'success' && (needs.publish.result == 'success' || needs.check.outputs.release == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -129,6 +146,7 @@ jobs:
   binaries:
     name: Prebuilt binaries
     needs: [check, github-release]
+    if: ${{ !cancelled() && needs.github-release.result == 'success' }}
     permissions:
       contents: write
       id-token: write
