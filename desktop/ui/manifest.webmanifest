@@ -1,6 +1,6 @@
 {
-  "name": "Personal Teams Assistant",
-  "short_name": "Assistant",
+  "name": "Kuroko",
+  "short_name": "Kuroko",
   "description": "Answers your Microsoft Teams messages as you, only with the sources you authorize.",
   "start_url": "/",
   "scope": "/",

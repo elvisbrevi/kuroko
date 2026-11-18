@@ -654,7 +654,7 @@ async fn login(
     let Some(account) = entry else {
         return (
             StatusCode::FORBIDDEN,
-            asset("text/html; charset=utf-8", "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Personal Teams Assistant</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Account access unavailable</h1><p role=\"alert\">Your GitHub identity has no enabled local account. Contact the portal operator.</p><a href=\"/cdn-cgi/access/logout\">Sign out</a></main></body></html>"),
+            asset("text/html; charset=utf-8", "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Kuroko</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Account access unavailable</h1><p role=\"alert\">Your GitHub identity has no enabled local account. Contact the portal operator.</p><a href=\"/cdn-cgi/access/logout\">Sign out</a></main></body></html>"),
         )
             .into_response();
     };

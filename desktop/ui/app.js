@@ -139,7 +139,7 @@ $('#style-preset').addEventListener('change', () => {
   renderStylePreview();
   $('#style-preset').value = chosen;
 });
-['#style-label', '#style-position', '#style-accent', '#style-band', '#style-label-color', '#style-icon', '#style-emoji', '#style-stripe-width', '#style-band-height', '#style-text-size', '#style-label-size', '#llm-language']
+['#style-label', '#style-position', '#style-accent', '#style-band', '#style-label-color', '#style-icon', '#style-kuroko', '#style-emoji', '#style-stripe-width', '#style-band-height', '#style-text-size', '#style-label-size', '#llm-language']
   .forEach(id => $(id).addEventListener('input', renderStylePreview));
 // A suggested emoji fills the field as if typed, so it marks the section edited and redraws the preview.
 document.querySelectorAll('#style-emoji-choices button').forEach(button => {

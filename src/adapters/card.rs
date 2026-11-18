@@ -350,11 +350,20 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
     };
     let column = |item: Value| json!({"type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [item]});
     let mut columns = Vec::new();
-    if style.icon {
-        // Plain text: Teams does not draw the card `Icon` element in chat messages.
-        columns.push(column(text(style.emoji())));
+    let label = style.label(language);
+    if style.kuroko {
+        // The app's mark, inline: no request leaves the card, and it weighs about 1 KB.
+        let side = style.label_size.badge();
+        columns.push(column(json!({"type": "Image", "url": badge(),
+            "width": format!("{side}px"), "height": format!("{side}px"), "altText": "Kuroko"})));
+        columns.push(column(text(&kuroko_link(&label))));
+    } else {
+        if style.icon {
+            // Plain text: Teams does not draw the card `Icon` element in chat messages.
+            columns.push(column(text(style.emoji())));
+        }
+        columns.push(column(text(&label)));
     }
-    columns.push(column(text(&style.label(language))));
     let mut band = json!({"type": "Container", "id": BAND,
         "items": [{"type": "ColumnSet", "horizontalAlignment": "Right", "columns": columns}]});
     if style.band_height > 0 {
@@ -374,6 +383,29 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
     band["bleed"] = json!(true);
     band["backgroundImage"] = stripe.clone();
     band
+}
+
+/// The PNG of the app's mark before a signed band's text (rendered by
+/// `scripts/render-icons.mjs`), as a data URI.
+fn badge() -> String {
+    format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!("kuroko-badge.png"))
+    )
+}
+
+/// A signed band's text with its first «Kuroko» as a link to the project site; Markdown the
+/// label already carries keeps its meaning.
+fn kuroko_link(label: &str) -> String {
+    match label.find("Kuroko") {
+        Some(at) => format!(
+            "{}[Kuroko]({}){}",
+            &label[..at],
+            MessageStyle::KUROKO_URL,
+            &label[at + "Kuroko".len()..]
+        ),
+        None => label.to_owned(),
+    }
 }
 
 /// The answer's Markdown as card elements, with the blocks `teams::html` knows: every line of a
@@ -857,6 +889,73 @@ mod tests {
             .filter(|e| e["id"] != BAND)
             .map(|e| e["text"].as_str().unwrap_or_default().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_signed_band_shows_the_mark_and_links_kuroko() {
+        let signed = MessageStyle {
+            kuroko: true,
+            ..style()
+        };
+        let card = card("Hola", &signed, Language::Es);
+        let band = &card["body"][1];
+        assert_eq!(band["id"], BAND);
+        let columns = band["items"][0]["columns"].as_array().unwrap();
+        assert_eq!(columns.len(), 2);
+        let mark = &columns[0]["items"][0];
+        assert_eq!(mark["type"], "Image");
+        assert_eq!(mark["width"], "16px");
+        assert!(
+            mark["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert_eq!(
+            columns[1]["items"][0]["text"],
+            format!(
+                "Mensaje generado por [Kuroko]({})",
+                MessageStyle::KUROKO_URL
+            )
+        );
+        // The mark replaces the emoji, and the band is not part of the message's text.
+        assert!(!card.to_string().contains('🤖'));
+        let message = json!({"body": {"contentType": "html", "content": ""},
+            "attachments": [{"contentType": CONTENT_TYPE, "content": card.to_string()}]});
+        assert_eq!(message_text(&message).trim(), "Hola");
+        // The whole card stays light.
+        assert!(card.to_string().len() < 3_000);
+
+        // A label of the user's own keeps its words, and links «Kuroko» when it names it.
+        let named = MessageStyle {
+            label: "Escrito con Kuroko por Ana".into(),
+            label_size: TextSize::Large,
+            ..signed.clone()
+        };
+        let card = super::card("Hola", &named, Language::En);
+        let columns = card["body"][1]["items"][0]["columns"].as_array().unwrap();
+        assert_eq!(columns[0]["items"][0]["width"], "28px");
+        assert_eq!(
+            columns[1]["items"][0]["text"],
+            format!("Escrito con [Kuroko]({}) por Ana", MessageStyle::KUROKO_URL)
+        );
+        let plain = MessageStyle {
+            label: "Escrito por mi asistente".into(),
+            ..signed
+        };
+        let card = super::card("Hola", &plain, Language::En);
+        assert_eq!(
+            card["body"][1]["items"][0]["columns"][1]["items"][0]["text"],
+            "Escrito por mi asistente"
+        );
+        assert_eq!(
+            MessageStyle {
+                kuroko: true,
+                ..style()
+            }
+            .label(Language::En),
+            "Message generated by Kuroko"
+        );
     }
 
     #[test]

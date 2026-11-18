@@ -266,11 +266,14 @@ nav button, .status-row, .activity-row, .segmented button, .subnav [role=tab], .
 .hero.muted p { color: var(--muted); }
 .hero .actions { margin: 0; justify-content: flex-end; }
 .face { display: block; width: 92px; height: auto; overflow: visible; }
-.sclera { fill: var(--eye-white); stroke: var(--eye-ink); stroke-width: 3.2; }
-.pupil { fill: var(--eye-ink); }
-.glint { fill: var(--eye-white); }
-.lid, .mouth { fill: none; stroke: var(--eye-ink); stroke-width: 3.6; stroke-linecap: round; }
-.hero.muted .lid, .hero.muted .mouth { stroke: var(--text); }
+/* Kuroko: an ink hood outlined in the text color, so it stands out in light and dark themes, and
+   friendly eyes behind a mesh veil. */
+.hood { fill: var(--eye-ink); stroke: var(--text); stroke-width: 3; stroke-linejoin: round; }
+.veil { fill: #2c2840; }
+.mesh { fill: none; stroke: #ffffff; stroke-opacity: .13; stroke-width: .8; }
+.pupil { fill: var(--eye-white); }
+.lid, .mouth { fill: none; stroke: var(--eye-white); stroke-width: 2.6; stroke-linecap: round; }
+.mouth { stroke-opacity: .55; }
 .eyes-closed { display: none; }
 .hero.muted .eyes-open { display: none; }
 .hero.muted .eyes-closed { display: inline; }
@@ -333,11 +336,10 @@ nav button, .status-row, .activity-row, .segmented button, .subnav [role=tab], .
 .activity-row:first-child { border-top: 0; }
 .activity-row time { justify-self: end; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .activity-row span.excerpt { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* An empty list shows the assistant's eyes, waiting. */
+/* An empty list shows Kuroko's eyes behind the veil, waiting. */
 .empty { text-align: center; color: var(--muted); padding: 1.4rem 1rem; }
-.empty::before { content: ""; display: block; width: 58px; height: 30px; margin: 0 auto .7rem;
-  background: radial-gradient(circle at 16px 17px, var(--eye-ink) 0 4.5px, transparent 5px), radial-gradient(circle at 42px 17px, var(--eye-ink) 0 4.5px, transparent 5px),
-    radial-gradient(circle at 15px 15px, var(--eye-white) 0 11px, var(--ink) 11.5px 13.5px, transparent 14px), radial-gradient(circle at 43px 15px, var(--eye-white) 0 11px, var(--ink) 11.5px 13.5px, transparent 14px); }
+.empty::before { content: ""; display: block; width: 58px; height: 30px; margin: 0 auto .7rem; border-radius: 15px; box-shadow: 0 0 0 2.5px var(--text);
+  background: radial-gradient(circle at 20px 15px, var(--eye-white) 0 3.6px, transparent 4.1px), radial-gradient(circle at 38px 15px, var(--eye-white) 0 3.6px, transparent 4.1px), #2c2840; }
 .empty p { margin: .3rem 0; }
 
 /* Rows: credentials, repositories, GitHub */
@@ -959,6 +961,8 @@ body.directory-picker-open { overflow: hidden; }
 .teams-card.at-top { flex-direction: column-reverse; }
 .teams-card > p { margin: 0; padding: .8rem 1rem; font-size: .93rem; }
 .teams-band { display: flex; justify-content: flex-end; align-items: center; gap: .45rem; min-height: var(--band-height, auto); padding: .55rem 1rem; }
+.teams-band img { width: 1.25em; height: 1.25em; border-radius: 22%; }
+.teams-band .teams-link { color: var(--teams-accent-text); text-decoration: underline; }
 .emoji-choices { margin: .25rem 0 .75rem; }
 .emoji-choices button { min-width: 2.6rem; padding: .35rem .55rem; font-size: var(--fs-lg); line-height: 1; }
 .teams-card.band-accent .teams-band { background: var(--teams-accent); }

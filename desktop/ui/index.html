@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#fff6e5" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17151f" media="(prefers-color-scheme: dark)">
-  <meta name="apple-mobile-web-app-title" content="Assistant">
-  <title>Personal Teams Assistant</title>
+  <meta name="apple-mobile-web-app-title" content="Kuroko">
+  <title>Kuroko</title>
   <!-- The tab icon, the iOS home-screen icon and the PWA manifest (rendered from desktop/icons/app.png). -->
   <link rel="icon" href="favicon.png" type="image/png" sizes="64x64">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -97,7 +97,7 @@
     <aside class="sidebar">
       <div class="brand">
         <img class="logo" src="icon-192.png" alt="" width="42" height="42">
-        <div translate="no"><strong>Teams Assistant</strong><small id="version">Personal</small></div>
+        <div translate="no"><strong>Kuroko</strong><small id="version">Personal</small></div>
       </div>
       <!-- Daily work first, then what feeds the answers; Settings stays apart at the end. -->
       <nav aria-label="Sections">
@@ -139,15 +139,16 @@
           <h1>Home</h1>
           <p>The assistant's state and what is left for it to answer in Teams.</p>
         </div></header>
-        <!-- The assistant's face shows its state: awake while it runs, looking aside while it only observes, asleep when stopped. -->
+        <!-- Kuroko's face shows the assistant's state: awake while it runs, looking aside while it only observes, asleep when stopped. -->
         <div id="hero" class="panel hero muted">
-          <svg class="face" viewBox="0 0 96 64" aria-hidden="true">
-            <g class="eyes-open">
-              <circle class="sclera" cx="28" cy="28" r="17"/><circle class="sclera" cx="68" cy="28" r="17"/>
-              <g class="pupils"><circle class="pupil" cx="28" cy="29" r="7.5"/><circle class="pupil" cx="68" cy="29" r="7.5"/><circle class="glint" cx="31" cy="25.5" r="2.4"/><circle class="glint" cx="71" cy="25.5" r="2.4"/></g>
-            </g>
-            <g class="eyes-closed"><path class="lid" d="M12 30q16 12 32 0"/><path class="lid" d="M52 30q16 12 32 0"/></g>
-            <path class="mouth" d="M40 54q8 6 16 0"/>
+          <svg class="face" viewBox="0 0 96 80" aria-hidden="true">
+            <defs><pattern id="kuroko-mesh" width="4" height="4" patternUnits="userSpaceOnUse"><path d="M4 0H0V4" class="mesh"/></pattern></defs>
+            <path class="hood" d="M48 3C24 3 11 20 11 43v26q0 8 8 8h58q8 0 8-8V43C85 20 72 3 48 3Z"/>
+            <rect class="veil" x="25" y="23" width="46" height="44" rx="15"/>
+            <rect class="veil-mesh" x="25" y="23" width="46" height="44" rx="15" fill="url(#kuroko-mesh)"/>
+            <g class="eyes-open"><g class="pupils"><circle class="pupil" cx="38" cy="42" r="4.2"/><circle class="pupil" cx="58" cy="42" r="4.2"/></g></g>
+            <g class="eyes-closed"><path class="lid" d="M33 42q5 4 10 0"/><path class="lid" d="M53 42q5 4 10 0"/></g>
+            <path class="mouth" d="M43 55q5 3 10 0"/>
           </svg>
           <div class="hero-text"><h2 id="hero-title">Loading…</h2><p id="hero-detail"></p></div>
           <div class="actions">
@@ -302,6 +303,7 @@
                 <label>Band position<select id="style-position" class="cfg"><option value="bottom">Below the text</option><option value="top">Above the text</option></select></label>
                 <label>Color combination<select id="style-preset" class="cfg"><option value="teams">Teams purple</option><option value="blue">Blue</option><option value="green">Green</option><option value="amber">Amber</option><option value="red">Red</option><option value="gray">Gray</option><option value="custom">Custom</option></select></label>
               </div>
+              <label class="check"><input id="style-kuroko" class="cfg" type="checkbox"> Sign the band as Kuroko, with the app's icon and a link to its site</label>
               <details class="fold" id="style-custom">
                 <summary>Colors and sizes <small>Advanced</small></summary>
                 <div class="grid">
@@ -317,7 +319,7 @@
                   <label>Message text size<select id="style-text-size" class="cfg"><option value="small">Small</option><option value="default">Normal</option><option value="medium">Medium</option><option value="large">Large</option><option value="extralarge">Extra large</option></select></label>
                   <label>Band text size<select id="style-label-size" class="cfg"><option value="small">Small</option><option value="default">Normal</option><option value="medium">Medium</option><option value="large">Large</option><option value="extralarge">Extra large</option></select></label>
                 </div>
-                <label class="check"><input id="style-icon" class="cfg" type="checkbox"> Show an emoji before the band text</label>
+                <label class="check" id="style-icon-field"><input id="style-icon" class="cfg" type="checkbox"> Show an emoji before the band text</label>
                 <div id="style-emoji-field">
                   <div class="grid fill">
                     <label>Emoji <small>Type or paste any emoji, or choose one below.</small><input id="style-emoji" class="cfg" autocomplete="off" spellcheck="false" translate="no"></label>
@@ -328,7 +330,7 @@
               <p class="hint">Preview, in this app's theme. Teams shows the same card in its own light or dark theme.</p>
               <div id="style-preview" class="teams-card" aria-hidden="true">
                 <p>Here is how the assistant's messages will look in Teams.</p>
-                <div class="teams-band"><span id="style-preview-icon">🤖</span><span id="style-preview-label" translate="no"></span></div>
+                <div class="teams-band"><img id="style-preview-mark" src="favicon.png" alt="" hidden><span id="style-preview-icon">🤖</span><span id="style-preview-label" translate="no"></span></div>
               </div>
             </div>
           </div>

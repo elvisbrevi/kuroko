@@ -425,6 +425,7 @@ const UI_CATALOG = { es: {
   "Normal": "Normal",
   "Accent": "Acento",
   "Show an emoji before the band text": "Mostrar un emoji antes del texto de la banda",
+  "Sign the band as Kuroko, with the app's icon and a link to its site": "Firmar la banda como Kuroko, con el ícono de la app y un enlace a su sitio",
   "Emoji": "Emoji",
   "Type or paste any emoji, or choose one below.": "Escribe o pega cualquier emoji, o elige uno de abajo.",
   "Suggested emoji": "Emojis sugeridos",

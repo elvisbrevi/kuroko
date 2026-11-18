@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-const HELP: &str = "pta — Personal Teams Assistant administration
+const HELP: &str = "pta — Kuroko (Personal Teams Assistant) administration
 
 Usage: pta [--json] [--non-interactive] COMMAND [ARGUMENTS]
        pta help | pta --help | pta -h     shows this help
@@ -55,7 +55,7 @@ Configuration
   config set FIELD JSON    Changes a field; the value is JSON (true, \"text\", [...], {...}).
                            Teams message style (every message is a card): config set
                            message_style.label \"text\" (and .position, .accent, .band, .label_color,
-                           .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size).
+                           .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size, .kuroko).
                            Teams chats every computer of the account may read on request (follows the
                            account): config set teams_reading.all_chats true (and .personal_chat,
                            .chats [\"CHAT_ID\",...]). graph.discover_all_chats, graph.allowed_chats and
@@ -3126,7 +3126,7 @@ async fn retire_outdated_host(command: &str, action: &str, interactive: bool) ->
         return Ok(());
     }
     eprintln!(
-        "A new version of Personal Teams Assistant was installed: stopping the previous one (assistant and tunnel)..."
+        "A new version of Kuroko was installed: stopping the previous one (assistant and tunnel)..."
     );
     let was_running = control::retire_outdated_host().await?;
     eprintln!("Previous version stopped.");
