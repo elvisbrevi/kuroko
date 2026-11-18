@@ -1,7 +1,8 @@
 # Renaming the product to Kuroko
 
 Status: the owner approved this inventory and the revised order (§2) on 2026-11-18. **Phase 1, the
-bridge release `personal-teams-assistant` 0.17.0**, is in progress (§6).
+bridge release `personal-teams-assistant` 0.17.0**, is published (§6); **phase 2, `kuroko` 0.18.0**,
+is in progress (§7).
 
 The visible brand has been Kuroko since 0.16.0 (#321). This plan renames the crate, the binaries,
 the CLI, MCP, the skill, the environment variables, the service entries, the URLs and the text, so
@@ -324,3 +325,39 @@ Manual steps tied to this release:
   0.15.0 with 0.16.0 prepared.
 - The new `vps-update.py` is copied to `~/.local/bin/personal-teams-assistant-update` once 0.17.0
   is merged.
+
+### Delivery of 0.17.0
+
+On 2026-11-18, #323 was merged and 0.17.0 published. The VPS installed it with the new
+`vps-update.py` (the previous copy is kept in
+`~/.local/state/personal-teams-assistant-update/update-script.0.16.bak`), and EMERGYA installed it
+through its own updater. The Mac has it prepared and waits for a person to choose Always Allow.
+
+## 7. Phase 2: the crate `kuroko` (0.18.0)
+
+- **Package.** `kuroko`, repository `github.com/elvisbrevi/kuroko`. Executables: `kuroko-host`
+  (`src/main.rs`), `kuroko` (`src/bin/kuroko.rs`) and the aliases `personal-teams-assistant` and `pta`
+  (their own entry points under `src/bin/`). The library keeps the name `personal_teams_assistant`.
+- **Updater.** `OWN` is `kuroko`, `SUCCESSOR` is `None`, and `PREDECESSORS` names
+  `personal-teams-assistant`. Its Cargo records and `install.json` are this installation's, and they
+  are replaced by `kuroko`'s at the first update. The helper applies the move from 0.17.0. A rollback
+  restarts whichever host is installed (the old one after a rollback), and committing always rewrites
+  `install.json`'s package fields. The CLI treats a host started through the alias as this
+  installation's host.
+- **Release.** `binaries.yml` packs the four executables into `kuroko-<target>-v<version>.{tgz,zip}`.
+  `release.yml` and `ci.yml` check the version of `kuroko` on crates.io.
+- **Installers.** They install `kuroko` (four executables, `install.json` of `kuroko`). They upgrade an
+  installation of the previous layout in its root, with one PATH block or entry, and read `KUROKO_*`
+  before `PTA_*`.
+- **Rehearsal.** On 2026-11-18, `kuroko-rehearsal-tools/rehearse.sh` (outside the repository) ran a
+  debug archive installation of 0.17.0 against local doubles of the registry and the release. `ok`:
+  0.17.0 → 0.18.0 committed, with four executables, `install.json` of `kuroko` and the host on
+  0.18.0. `rollback`: a 0.18.0 host that cannot start is rolled back, leaving exactly the two old
+  executables, the old `install.json` and the 0.17.0 host running.
+- **Publication.** The first `kuroko` version is published by hand (crates.io's Trusted Publishing
+  needs an existing crate). After merging, `release.yml` stops at "Publish to crates.io", then
+  `cargo publish --locked` from `origin/main`, then Trusted Publishing for `kuroko`, then
+  `release.yml` again (it tags and attaches the archives).
+- **Deferred to 0.18.x:** service entry names (`kuroko-<id>.service`,
+  `cl.elvisbrevi.kuroko.host.<id>`, `Kuroko-<id>`), the CLI's text by invocation name and its
+  deprecation notices (phase 3).

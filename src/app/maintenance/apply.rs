@@ -278,15 +278,16 @@ pub(super) async fn request(
     // An entry of `pta service install` that starts the installed executable for this profile:
     // the helper stops and starts the host through its manager, which then keeps tracking it.
     let service = !env.manual && {
-        let (profile, exe) = (
-            host.state.settings.profile().to_path_buf(),
-            installation
-                .root
-                .join("bin")
-                .join(core::exe_name(core::OWN.host)),
-        );
+        let profile = host.state.settings.profile().to_path_buf();
+        // The entry may start the host or its former name, which this package keeps as an alias.
+        let hosts: Vec<PathBuf> = std::iter::once(core::OWN.host)
+            .chain(core::PREDECESSORS.iter().map(|p| p.host))
+            .map(|name| installation.root.join("bin").join(core::exe_name(name)))
+            .collect();
         tokio::task::spawn_blocking(move || {
-            super::super::service::manages(&profile, &exe).is_some()
+            hosts
+                .iter()
+                .any(|exe| super::super::service::manages(&profile, exe).is_some())
         })
         .await
         .unwrap_or(false)
@@ -378,6 +379,16 @@ pub(super) fn cancel(host: &Host, env: &Environment) -> Reply {
         }
         Err(_) => Reply::error("operation_failed", 1, "The choice could not be saved."),
     }
+}
+
+/// The host executable in `bin`: this package's, or after a rollback to a former package, that
+/// package's (this package's own host was removed with the rest of what the update added).
+fn installed_host(bin: &Path) -> PathBuf {
+    std::iter::once(core::OWN.host)
+        .chain(core::PREDECESSORS.iter().map(|p| p.host))
+        .map(|name| bin.join(core::exe_name(name)))
+        .find(|exe| exe.is_file())
+        .unwrap_or_else(|| bin.join(core::exe_name(core::OWN.host)))
 }
 
 /// Starts the helper from the prepared copy: the staged package's own host, which may be the
@@ -727,7 +738,7 @@ impl Platform for Local {
             .await
             .context("The application could not be started.")?;
         }
-        let exe = self.root.join("bin").join(core::exe_name(core::OWN.host));
+        let exe = installed_host(&self.root.join("bin"));
         let mut command = std::process::Command::new(exe);
         for flag in launch
             .iter()

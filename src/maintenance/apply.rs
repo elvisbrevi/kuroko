@@ -551,9 +551,10 @@ fn merge_records(root: &Path, staged: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rewrites the install scripts' record for the archive now installed: version, archive, digest
-/// and time, and for a successor package its name, executables and repository; every other field
-/// (target, ones a later script adds) is kept.
+/// Rewrites the install scripts' record for the archive now installed: version, archive, digest,
+/// time and the package's name, executables and repository (an installation of a former package
+/// becomes one of the staged package); every other field (target, ones a later script adds) is
+/// kept.
 fn archive_record(
     root: &Path,
     version: &str,
@@ -897,12 +898,8 @@ impl Apply {
     pub fn commit(&mut self) -> Result<()> {
         if let Some(archive) = self.journal.manifest.archive.clone() {
             self.at("record")?;
-            let package = self
-                .journal
-                .manifest
-                .package
-                .as_ref()
-                .and_then(|_| self.journal.manifest.staged_package());
+            // Always the staged package's own fields: the record may still name a former package.
+            let package = self.journal.manifest.staged_package();
             archive_record(
                 &self.journal.root,
                 &self.journal.to,

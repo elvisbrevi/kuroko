@@ -1,4 +1,4 @@
-# Prebuilt binaries for a published release, so `cargo binstall personal-teams-assistant` and the
+# Prebuilt binaries for a published release, so `cargo binstall kuroko` and the
 # one-command installers (scripts/install/install.sh and install.ps1, attached with their digests)
 # install in seconds instead of compiling. release.yml calls it once the crate and its GitHub
 # release exist; a pull request that changes this file or the installers builds every archive and
@@ -77,13 +77,17 @@ jobs:
         run: cargo build --release --locked --target "$TARGET"
       - name: Archive
         env:
-          NAME: personal-teams-assistant
+          NAME: kuroko
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           dir="$NAME-$TARGET-v$version"
           ext=; [[ "$TARGET" == *windows* ]] && ext=.exe
           mkdir -p dist "$dir"
-          cp "target/$TARGET/release/personal-teams-assistant$ext" "target/$TARGET/release/pta$ext" LICENSE README.md "$dir/"
+          # The host and the CLI, and their former names (personal-teams-assistant, pta) as aliases.
+          for bin in kuroko-host kuroko personal-teams-assistant pta; do
+            cp "target/$TARGET/release/$bin$ext" "$dir/"
+          done
+          cp LICENSE README.md "$dir/"
           if [[ "$TARGET" == *windows* ]]; then
             file="$dir.zip"
             7z a -tzip "dist/$file" "$dir" > /dev/null

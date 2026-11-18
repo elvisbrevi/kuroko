@@ -37,25 +37,18 @@ pub struct Package {
     pub repository: &'static str,
 }
 
-/// This package.
+/// This package. Its executables include the former package's names as aliases: service entries,
+/// scripts and MCP configurations written for them keep starting this build.
 pub const OWN: Package = Package {
-    name: "personal-teams-assistant",
-    host: "personal-teams-assistant",
-    cli: "pta",
-    bins: &["personal-teams-assistant", "pta"],
-    repository: env!("CARGO_PKG_REPOSITORY"),
-};
-
-/// The package the product continues as: once the registry lists it, an update installs it in
-/// place of this one, the same way this installation was installed (docs/rename-kuroko.md). Its
-/// binaries keep this package's names as aliases, so entries that start them keep working.
-pub const SUCCESSOR: Option<Package> = Some(Package {
     name: "kuroko",
     host: "kuroko-host",
     cli: "kuroko",
     bins: &["kuroko", "kuroko-host", "personal-teams-assistant", "pta"],
-    repository: "https://github.com/elvisbrevi/kuroko",
-});
+    repository: env!("CARGO_PKG_REPOSITORY"),
+};
+
+/// The package this product continues as under another name, once there is one.
+pub const SUCCESSOR: Option<Package> = None;
 
 /// Every package an installation of this product may be recorded under. Cargo's and the install
 /// scripts' records of any of them belong to this installation, so an update replaces them all.
@@ -65,7 +58,15 @@ pub const FAMILY: [&str; 2] = ["personal-teams-assistant", "kuroko"];
 pub const FAMILY_BINARIES: [&str; 4] = ["personal-teams-assistant", "pta", "kuroko", "kuroko-host"];
 
 /// The packages this one replaced under earlier names; their records are this installation's too.
-pub const PREDECESSORS: &[Package] = &[];
+/// An installation still recorded under one (`cargo install personal-teams-assistant`, or the
+/// install scripts before 0.18.0) is updated to this package.
+pub const PREDECESSORS: &[Package] = &[Package {
+    name: "personal-teams-assistant",
+    host: "personal-teams-assistant",
+    cli: "pta",
+    bins: &["personal-teams-assistant", "pta"],
+    repository: "https://github.com/elvisbrevi/personal-teams-assistant",
+}];
 
 /// The package called `name`: this one, its successor or a predecessor.
 pub fn package(name: &str) -> Option<Package> {
@@ -481,12 +482,12 @@ pub fn inspect(exe: &Path) -> std::result::Result<Installation, String> {
         });
     }
     let (records, prebuilt) = read_records(&root)?;
-    let (_, version, record) = own_record(records)?;
+    let (name, version, record) = own_record(records)?;
     let bins: BTreeSet<&str> = record.bins.iter().map(|b| bin_name(b)).collect();
-    if !(bins.contains(CRATE) && bins.contains(CLI)) {
+    let recorded = package(&name).ok_or("Cargo has no install record for this package.")?;
+    if !(bins.contains(recorded.host) && bins.contains(recorded.cli)) {
         return Err(
-            "The installed package does not contain both the application and the pta command."
-                .into(),
+            "The installed package does not contain both the application and its command.".into(),
         );
     }
     if record.profile.as_deref().is_some_and(|p| p != "release") {
@@ -1017,10 +1018,10 @@ pub async fn verify_pair_for(
     let cli = root.join("bin").join(exe_name(package.cli));
     let reported = probe(&cli, &["--version", "--json"], env).await?;
     let reported: serde_json::Value = serde_json::from_str(reported.trim())
-        .context("The staged pta does not report its version.")?;
+        .context("The staged command does not report its version.")?;
     ensure!(
         reported["data"]["cli_version"] == version.to_string(),
-        "The staged pta reports a different version."
+        "The staged command reports a different version."
     );
     let host = root.join("bin").join(exe_name(package.host));
     let reported = probe(&host, &["--version"], env).await?;

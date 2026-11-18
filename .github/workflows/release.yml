@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CRATE: personal-teams-assistant
+  CRATE: kuroko
 
 jobs:
   check:
@@ -40,7 +40,7 @@ jobs:
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # crates.io answers 403 without a User-Agent.
-          code=$(curl -sS -A "personal-teams-assistant-release (github.com/$GITHUB_REPOSITORY)" -o /dev/null -w '%{http_code}' \
+          code=$(curl -sS -A "kuroko-release (github.com/$GITHUB_REPOSITORY)" -o /dev/null -w '%{http_code}' \
             "https://crates.io/api/v1/crates/$CRATE/$version")
           case "$code" in
             200) echo "published=true" >> "$GITHUB_OUTPUT"
@@ -124,7 +124,7 @@ jobs:
             exit 0
           fi
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "Personal Teams Assistant $VERSION" --generate-notes
+            --title "Kuroko $VERSION" --generate-notes
 
   binaries:
     name: Prebuilt binaries

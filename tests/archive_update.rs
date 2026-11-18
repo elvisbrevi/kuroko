@@ -1,11 +1,11 @@
 //! An archive installation's update with the real executables of this build, on every operating
 //! system: a synthetic release (a local HTTP double, never GitHub) carries this build's own
-//! `personal-teams-assistant` and `pta` in the archive format of this computer's target (`.zip` on
+//! `kuroko`, `kuroko-host` and the aliases `personal-teams-assistant` and `pta` in the archive format of this computer's target (`.zip` on
 //! Windows, `.tgz` elsewhere), and the updater downloads, checks, unpacks and runs them to read
 //! their version, exactly as it would a published release. Nothing is installed.
 use personal_teams_assistant::hash::sha256_hex;
 use personal_teams_assistant::maintenance::{
-    self, CLI, CRATE, Version,
+    self, CLI, OWN, Version,
     release::{self, Source},
 };
 use std::{io::Write as _, path::Path};
@@ -30,8 +30,13 @@ fn exe(name: &str) -> String {
 fn archive(version: &Version) -> Vec<u8> {
     let dir = release::directory_name(TARGET, version);
     let files = [
-        (exe(CRATE), env!("CARGO_BIN_EXE_personal-teams-assistant")),
-        (exe(CLI), env!("CARGO_BIN_EXE_pta")),
+        (exe("kuroko-host"), env!("CARGO_BIN_EXE_kuroko-host")),
+        (exe("kuroko"), env!("CARGO_BIN_EXE_kuroko")),
+        (
+            exe("personal-teams-assistant"),
+            env!("CARGO_BIN_EXE_personal-teams-assistant"),
+        ),
+        (exe("pta"), env!("CARGO_BIN_EXE_pta")),
     ];
     if cfg!(windows) {
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -133,14 +138,14 @@ async fn this_builds_own_release_archive_stages_as_a_verified_pair() {
     assert_eq!(archive.name, name);
     assert_eq!(archive.size, bytes.len() as u64);
     assert_eq!(archive.sha256, sha256_hex(&bytes));
-    let mut wanted = vec![exe(CRATE), exe(CLI)];
+    let mut wanted: Vec<String> = OWN.bins.iter().map(|name| exe(name)).collect();
     wanted.sort();
     assert_eq!(entries(&partial.join("root/bin")), wanted);
     assert_eq!(entries(&partial), ["root"], "the download was removed");
     // The unpacked executables are byte for byte the ones of this build.
     assert_eq!(
         std::fs::read(partial.join("root/bin").join(exe(CLI))).unwrap(),
-        std::fs::read(env!("CARGO_BIN_EXE_pta")).unwrap()
+        std::fs::read(env!("CARGO_BIN_EXE_kuroko")).unwrap()
     );
 }
 

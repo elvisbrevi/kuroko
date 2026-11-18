@@ -107,12 +107,12 @@ assert.match(filter('pull_request', ['desktop/ui/app.js'], { summary: true }), /
 // other change to the manifest or the lock is both.
 const toml = readFileSync(new URL('../Cargo.toml', import.meta.url), 'utf8');
 const lock = readFileSync(new URL('../Cargo.lock', import.meta.url), 'utf8');
-const version = Bun.TOML.parse(toml).package.version;
-const ours = `name = "personal-teams-assistant"\nversion = "${version}"`;
+const { name, version } = Bun.TOML.parse(toml).package;
+const ours = `name = "${name}"\nversion = "${version}"`;
 assert(lock.includes(ours), 'Cargo.lock names this package and its version');
 const bumped = {
   'Cargo.toml': toml.replace(`\nversion = "${version}"`, '\nversion = "999.0.0"'),
-  'Cargo.lock': lock.replace(ours, 'name = "personal-teams-assistant"\nversion = "999.0.0"'),
+  'Cargo.lock': lock.replace(ours, `name = "${name}"\nversion = "999.0.0"`),
 };
 assert.notEqual(bumped['Cargo.toml'], toml);
 const old = { 'Cargo.toml': toml, 'Cargo.lock': lock };

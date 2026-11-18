@@ -1,9 +1,9 @@
 #!/bin/sh
-# Installs Personal Teams Assistant on macOS or Linux from this repository's prebuilt release
-# archive, without Rust or a compiler, for the current user only (no administrator rights).
+# Installs Kuroko on macOS or Linux from this repository's prebuilt release archive, without Rust
+# or a compiler, for the current user only (no administrator rights).
 #
 #   curl --proto '=https' --tlsv1.2 -fsSL \
-#     https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.sh \
+#     https://github.com/elvisbrevi/kuroko/releases/latest/download/install.sh \
 #     | sh -s -- --origin https://your-portal.example
 #
 # What it does, in order: detects the target; resolves the version (the repository's latest
@@ -12,22 +12,44 @@
 # the digest before anything is unpacked or run; verifies build provenance with `gh attestation
 # verify` when gh is installed and signed in; unpacks into a temporary directory inside the
 # installation root and moves it into place (a failure leaves the previous installation working);
-# writes the archive installation record; puts `pta` on the path of new shells; registers the host
-# to start at login (`pta service install`); and, with --origin, starts the browser sign-in
-# (`pta auth machine login`) so the approval page opens for "Trust this machine".
+# writes the archive installation record; puts `kuroko` on the path of new shells; registers the
+# host to start at login (`kuroko service install`); and, with --origin, starts the browser sign-in
+# (`kuroko auth machine login`) so the approval page opens for "Trust this machine".
+#
+# The archive holds the CLI `kuroko`, the host `kuroko-host` and, as aliases of the same programs,
+# their names before the rename (`pta`, `personal-teams-assistant`), so service entries, scripts
+# and MCP configurations written for those keep working.
 #
 # The command carries no secret: only the coordinator's public HTTPS origin. Running it again
-# repairs or upgrades the same installation; the profile (settings, credentials, Microsoft
-# session, machine identity) is never created, replaced or removed by this script.
+# repairs or upgrades the same installation, including one made before the rename in
+# ~/.local/share/personal-teams-assistant, which is upgraded where it is; the profile (settings,
+# credentials, Microsoft session, machine identity) is never created, replaced or removed by this
+# script.
 #
 # Every statement runs inside main, called on the last line, so a truncated download runs nothing.
 
-REPOSITORY="elvisbrevi/personal-teams-assistant"
-PACKAGE="personal-teams-assistant"
-CLI="pta"
+REPOSITORY="elvisbrevi/kuroko"
+PRODUCT="kuroko"
+# The package before 0.18.0: its default root, PATH blocks, fish file and Cargo or binstall
+# records belong to this product too, and its releases can still be installed with --version.
+LEGACY="personal-teams-assistant"
+# What the release being installed is published as; use_legacy_layout switches these for a
+# release before the rename.
+PACKAGE="$PRODUCT"
+CLI="kuroko"
+HOST="kuroko-host"
+BINS="kuroko kuroko-host personal-teams-assistant pta"
+PROVENANCE="$REPOSITORY"
+RECORD_REPOSITORY="https://github.com/$REPOSITORY"
+# The skill directory and the MCP server name registered with coding CLIs keep the former name
+# until a later release migrates the clients' configuration.
+INTEGRATION="$LEGACY"
 RECORD="install.json"
-BEGIN_MARK="# >>> personal-teams-assistant (install.sh) >>>"
-END_MARK="# <<< personal-teams-assistant (install.sh) <<<"
+RC_FILES=".profile .bash_profile .bash_login .bashrc .zprofile .zshrc"
+BEGIN_MARK="# >>> kuroko (install.sh) >>>"
+END_MARK="# <<< kuroko (install.sh) <<<"
+LEGACY_BEGIN_MARK="# >>> personal-teams-assistant (install.sh) >>>"
+LEGACY_END_MARK="# <<< personal-teams-assistant (install.sh) <<<"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'install.sh: %s\n' "$*" >&2; }
@@ -43,13 +65,14 @@ Usage: install.sh [options]
   --origin URL     Your coordinator portal's HTTPS origin: after installing, start the browser
                    sign-in so this computer can be trusted by your account.
   --version X.Y.Z  Install this release instead of the latest one.
-  --root DIR       Installation root (default: ~/.local/share/personal-teams-assistant).
-  --integrations   Also install the skill and register `pta mcp` with the coding CLIs found
+  --root DIR       Installation root (default: ~/.local/share/kuroko, or the installation made
+                   before the rename in ~/.local/share/personal-teams-assistant).
+  --integrations   Also install the skill and register `kuroko mcp` with the coding CLIs found
                    (Claude Code, Codex). Without it the commands are printed instead.
   --unattended-updates
                    Let this computer install newer releases by itself when nothing would be
                    interrupted (off unless you pass this; change it later with
-                   'pta update unattended on|off --confirmed' or the local page).
+                   'kuroko update unattended on|off --confirmed' or the local page).
   --no-service     Do not register the host to start at login.
   --no-browser     Print the approval link instead of opening the browser.
   --uninstall      Remove the service entry, the binaries and the PATH entry; keep the profile.
@@ -80,7 +103,24 @@ check_origin() {
 
 check_version() {
     printf '%s\n' "$1" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
-        fail "Use a release version such as 0.11.4."
+        fail "Use a release version such as 0.18.0."
+}
+
+# Releases before 0.18.0 were published as personal-teams-assistant, with two executables.
+before_rename() {
+    minor=${1#*.}
+    minor=${minor%%.*}
+    [ "${1%%.*}" -eq 0 ] && [ "$minor" -lt 18 ]
+}
+
+use_legacy_layout() {
+    PACKAGE=$LEGACY
+    CLI=pta
+    HOST=$LEGACY
+    BINS="$LEGACY pta"
+    # Built, attested and recorded under the repository's name at the time.
+    PROVENANCE="elvisbrevi/$LEGACY"
+    RECORD_REPOSITORY="https://github.com/elvisbrevi/$LEGACY"
 }
 
 detect_target() {
@@ -119,15 +159,15 @@ sha256_of() {
     fi
 }
 
-# One field of pta's compact JSON reply: a string or a literal (true, false, null, a number).
+# One field of the CLI's compact JSON reply: a string or a literal (true, false, null, a number).
 json_string() { sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1; }
 json_literal() { sed -n "s/.*\"$1\":\\([a-z0-9]*\\).*/\\1/p" | head -n 1; }
 
 # ---------------------------------------------------------------------------------------------
 # Downloads. A release asset is served by github.com with one redirect to its own asset storage;
 # only that redirect is followed, and only over HTTPS. The test source is a local directory that
-# only PTA_INSTALL_TEST=1 with --test-source enables (CI runs the script against the archive it
-# just built); the portal's command never sets either.
+# only KUROKO_INSTALL_TEST=1 (or PTA_INSTALL_TEST=1) with --test-source enables (CI runs the script
+# against the archive it just built); the portal's command never sets either.
 
 curl_https() { curl --proto '=https' --tlsv1.2 --silent --show-error "$@"; }
 
@@ -170,75 +210,102 @@ latest_version() {
 # ---------------------------------------------------------------------------------------------
 # What is already on this computer.
 
+# The product's packages Cargo records in $1, space-separated in found_packages; false when none.
 cargo_record() {
-    for records in "$1/.crates2.json" "$1/.crates.toml"; do
-        if [ -f "$records" ] && grep -q "\"$PACKAGE " "$records"; then
-            return 0
-        fi
+    found_packages=
+    for name in "$LEGACY" "$PRODUCT"; do
+        for records in "$1/.crates2.json" "$1/.crates.toml"; do
+            if [ -f "$records" ] && grep -q "\"$name " "$records"; then
+                found_packages="${found_packages:+$found_packages }$name"
+                break
+            fi
+        done
     done
-    return 1
+    [ -n "$found_packages" ]
 }
 
-# A Cargo (or cargo binstall) installation of this package would be a second copy: two hosts for
-# one profile, updated two ways. Refuse and say how to switch.
+# A Cargo (or cargo binstall) installation of this product, under either package name, would be a
+# second copy: two hosts for one profile, updated two ways. Refuse and say how to switch.
 refuse_cargo_copy() {
     found=
+    packages=
     cargo_home=${CARGO_HOME:-$HOME/.cargo}
     if cargo_record "$cargo_home"; then
         found=$cargo_home
+        packages=$found_packages
     fi
-    if on_path=$(command -v "$CLI" 2>/dev/null) && [ "$on_path" != "$BIN/$CLI" ] &&
-        [ "$(resolve "$on_path")" != "$BIN/$CLI" ]; then
+    for name in kuroko pta; do
+        on_path=$(command -v "$name" 2>/dev/null) || continue
+        [ "$on_path" != "$BIN/$name" ] && [ "$(resolve "$on_path")" != "$BIN/$name" ] || continue
         other=$(dirname "$(dirname "$on_path")")
         if cargo_record "$other"; then
             found=$other
+            packages=$found_packages
         else
-            warn "Another $CLI is on your PATH at $on_path; the one installed here may be shadowed by it."
+            warn "Another $name is on your PATH at $on_path; the one installed here may be shadowed by it."
         fi
-    fi
+    done
     [ -z "$found" ] && return 0
+    # The commands of the package installed there; kuroko takes over the former package's
+    # executables only when forced.
+    case " $packages " in
+        *" $PRODUCT "*) cli=kuroko ;;
+        *) cli=pta ;;
+    esac
+    case " $packages " in
+        *" $LEGACY "*) stay="cargo install $PRODUCT --locked --force" ;;
+        *) stay="cargo install $PRODUCT --locked" ;;
+    esac
+    uninstall=$(for name in $packages; do printf '    cargo uninstall %s\n' "$name"; done)
     cat >&2 <<EOF
-install.sh: $PACKAGE is already installed with Cargo in $found.
+install.sh: $(printf '%s' "$packages" | sed 's/ / and /') is already installed with Cargo in $found.
 Installing a second copy next to it would give one profile two hosts. To switch to this
 installation, which needs no Rust toolchain, run:
 
-    pta service uninstall --confirmed
-    pta app quit
-    cargo uninstall $PACKAGE
+    $cli service uninstall --confirmed
+    $cli app quit
+$uninstall
 
 and then this command again. Your profile, credentials and Microsoft session are kept.
-To stay with Cargo instead, update with: cargo install $PACKAGE --locked
+To stay with Cargo instead, update with: $stay
 EOF
     exit 1
 }
 
 # `cargo uninstall` leaves binstall's own record (crates-v1.json, one JSON object per line) naming
-# the package. After a successful install, with no Cargo installation left, drop only this
-# package's lines when the file is exactly that format, writing it atomically; otherwise say so.
+# the package. After a successful install, with no Cargo installation left, drop only the lines of
+# this product's packages when the file is exactly that format, writing it atomically; otherwise
+# say so.
 clean_stale_binstall_record() {
     cargo_home=${CARGO_HOME:-$HOME/.cargo}
     file="$cargo_home/binstall/crates-v1.json"
     [ -f "$file" ] || return 0
-    grep -q "\"name\":\"$PACKAGE\"" "$file" || return 0
+    names=
+    for name in "$LEGACY" "$PRODUCT"; do
+        if grep -q "\"name\":\"$name\"" "$file"; then
+            names="${names:+$names and }$name"
+        fi
+    done
+    [ -n "$names" ] || return 0
     cargo_record "$cargo_home" && return 0
     # JSON lines: every non-empty line is one object starting with its name.
     if grep -v '^[[:space:]]*$' "$file" | grep -qv '^{"name":".*}$'; then
-        warn "binstall's record $file still names $PACKAGE, which is no longer installed with Cargo; delete that entry by hand, or it will make cargo binstall believe the package is installed."
+        warn "binstall's record $file still names $names, which is no longer installed with Cargo; delete that entry by hand, or it will make cargo binstall believe the package is installed."
         return 0
     fi
-    temp="$file.pta-tmp.$$"
+    temp="$file.kuroko-tmp.$$"
     status=0
-    grep -v "^{\"name\":\"$PACKAGE\"" "$file" >"$temp" || status=$?
+    grep -v -e "^{\"name\":\"$LEGACY\"" -e "^{\"name\":\"$PRODUCT\"" "$file" >"$temp" || status=$?
     # grep exits 1 when no line is left (an empty record is valid); more is a real error.
     if [ "$status" -gt 1 ]; then
         rm -f "$temp"
         return 0
     fi
     if mv "$temp" "$file"; then
-        say "Removed the stale cargo binstall entry for $PACKAGE from $file."
+        say "Removed the stale cargo binstall entry for $names from $file."
     else
         rm -f "$temp"
-        warn "The stale cargo binstall entry for $PACKAGE in $file could not be removed; delete that line by hand."
+        warn "The stale cargo binstall entry for $names in $file could not be removed; delete that line by hand."
     fi
 }
 
@@ -255,8 +322,8 @@ resolve() {
 }
 
 profile_dir() {
-    if [ -n "${PTA_PROFILE_DIR:-}" ]; then
-        printf '%s\n' "$PTA_PROFILE_DIR"
+    if [ -n "${KUROKO_PROFILE_DIR:-${PTA_PROFILE_DIR:-}}" ]; then
+        printf '%s\n' "${KUROKO_PROFILE_DIR:-$PTA_PROFILE_DIR}"
     elif [ "$(uname -s)" = Darwin ]; then
         printf '%s\n' "$HOME/Library/Application Support/dev.personalteams.assistant"
     else
@@ -264,12 +331,45 @@ profile_dir() {
     fi
 }
 
+# This product's archive record in the root $1, under either package name.
+product_record() {
+    [ -f "$1/$RECORD" ] && grep -q '"kind": "archive"' "$1/$RECORD" &&
+        grep -Eq "\"package\": \"($LEGACY|$PRODUCT)\"" "$1/$RECORD"
+}
+
+# An installation made before the rename is upgraded, or removed, where it is.
+default_root() {
+    if product_record "$HOME/.local/share/$LEGACY"; then
+        printf '%s\n' "$HOME/.local/share/$LEGACY"
+    else
+        printf '%s\n' "$HOME/.local/share/$PRODUCT"
+    fi
+}
+
 # ---------------------------------------------------------------------------------------------
 # The host.
 
-run_pta() { "$BIN/$CLI" "$@" </dev/null; }
+# The first of these executables in the bin directory. The names of the release being installed
+# come first, then either layout's, so an installation from before the rename is stopped and
+# removed with its own.
+# The first of the given executables in $BIN. Its loop variable is its own: sh has no local
+# variables, and callers keep values such as the service entry's name in `name`.
+present() {
+    for present_candidate in "$@"; do
+        if [ -x "$BIN/$present_candidate" ]; then
+            printf '%s\n' "$BIN/$present_candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
-host_running() { run_pta --json status 2>/dev/null | grep -q '"host_running":true'; }
+run_cli() {
+    exe=$(present "$CLI" kuroko pta) || return 1
+    "$exe" "$@" </dev/null
+}
+
+host_running() { run_cli --json status 2>/dev/null | grep -q '"host_running":true'; }
 
 wait_host() {
     tries=0
@@ -286,18 +386,19 @@ wait_host() {
 }
 
 quit_host() {
-    if [ -x "$BIN/$CLI" ] && host_running; then
+    if present "$CLI" kuroko pta >/dev/null && host_running; then
         say "Stopping the running host (the assistant's last state is kept)..."
-        run_pta --json app quit >/dev/null 2>&1 || true
+        run_cli --json app quit >/dev/null 2>&1 || true
         wait_host down || warn "The host did not stop within a minute."
     fi
 }
 
-# A host started from this shell, in the user's own session (one that pta starts for an isolated
-# profile cannot register the user's login entry).
+# A host started from this shell, in the user's own session (one that the CLI starts for an
+# isolated profile cannot register the user's login entry).
 start_host() {
     host_running && return 0
-    nohup "$BIN/$PACKAGE" --host >/dev/null 2>&1 </dev/null &
+    host=$(present "$HOST" kuroko-host "$LEGACY") || return 1
+    nohup "$host" --host >/dev/null 2>&1 </dev/null &
     wait_host up
 }
 
@@ -316,10 +417,10 @@ install_service() {
         warn "The host did not start; run '$CLI status' to see why. It was not registered to start at login."
         return 1
     }
-    reply=$(run_pta --json service install --confirmed 2>&1) || {
+    reply=$(run_cli --json service install --confirmed 2>&1) || {
         message=$(printf '%s' "$reply" | json_string message)
         warn "The host was not registered to start at login: ${message:-$reply}"
-        warn "It runs now; start it later with '$PACKAGE --host', or fix the cause and run this command again."
+        warn "It runs now; start it later with '$HOST --host', or fix the cause and run this command again."
         return 1
     }
     name=$(printf '%s' "$reply" | json_string name)
@@ -343,7 +444,7 @@ unattended_updates() {
         warn "The host did not start, so unattended updates were not turned on. Later: $CLI update unattended on --confirmed"
         return 1
     }
-    reply=$(run_pta --json update unattended on --confirmed 2>&1) || {
+    reply=$(run_cli --json update unattended on --confirmed 2>&1) || {
         message=$(printf '%s' "$reply" | json_string message)
         warn "Unattended updates were not turned on: ${message:-$reply}"
         return 1
@@ -353,27 +454,33 @@ unattended_updates() {
 
 # ---------------------------------------------------------------------------------------------
 # PATH for new shells: a link in a per-user bin directory already on PATH, or a marked block in
-# the shell's own startup files that is replaced, never duplicated, on every run.
+# the shell's own startup files that is replaced, never duplicated, on every run. A block or fish
+# file written before the rename is replaced too, so there is only ever one.
 
 # The line is written literally: $PATH expands in the shell that reads it.
 # shellcheck disable=SC2016
 path_line() { printf 'case ":$PATH:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac\n' "$BIN" "$BIN"; }
 
+# remove_block FILE BEGIN END
 remove_block() {
-    [ -f "$1" ] && grep -qxF "$BEGIN_MARK" "$1" || return 0
-    kept=$(mktemp "${TMPDIR:-/tmp}/pta-rc.XXXXXX")
-    awk -v b="$BEGIN_MARK" -v e="$END_MARK" '$0 == b {skip = 1; next} $0 == e {skip = 0; next} !skip' "$1" >"$kept"
+    [ -f "$1" ] && grep -qxF "$2" "$1" || return 0
+    kept=$(mktemp "${TMPDIR:-/tmp}/kuroko-rc.XXXXXX")
+    awk -v b="$2" -v e="$3" '$0 == b {skip = 1; next} $0 == e {skip = 0; next} !skip' "$1" >"$kept"
     # Written in place, so a startup file that is a link (a dotfiles checkout) stays a link.
     cat "$kept" >"$1"
     rm -f "$kept"
 }
 
+remove_legacy_block() { remove_block "$1" "$LEGACY_BEGIN_MARK" "$LEGACY_END_MARK"; }
+
 put_block() {
     line=$(path_line)
-    if [ -f "$1" ] && grep -qxF "$BEGIN_MARK" "$1" && grep -qxF "$line" "$1"; then
+    if [ -f "$1" ] && grep -qxF "$BEGIN_MARK" "$1" && grep -qxF "$line" "$1" &&
+        ! grep -qxF "$LEGACY_BEGIN_MARK" "$1"; then
         return 0
     fi
-    remove_block "$1"
+    remove_legacy_block "$1"
+    remove_block "$1" "$BEGIN_MARK" "$END_MARK"
     if [ -s "$1" ] && [ "$(tail -c 1 "$1" | wc -l)" -eq 0 ]; then
         printf '\n' >>"$1"
     fi
@@ -382,7 +489,7 @@ put_block() {
 }
 
 startup_files() {
-    for file in .profile .bash_profile .bash_login .bashrc .zprofile .zshrc; do
+    for file in $RC_FILES; do
         [ -f "$HOME/$file" ] && printf '%s\n' "$HOME/$file"
     done
     # The user's own shell reads one of these even when none exists yet.
@@ -393,7 +500,15 @@ startup_files() {
     esac
 }
 
-fish_file() { printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/$PACKAGE.fish"; }
+fish_file() { printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/$1.fish"; }
+
+# remove_fish NAME BEGIN: the fish file NAME.fish, only when this script wrote it.
+remove_fish() {
+    fish=$(fish_file "$1")
+    if [ -f "$fish" ] && grep -qxF "$2" "$fish"; then
+        rm -f "$fish"
+    fi
+}
 
 link_dir_on_path() {
     dir="$HOME/.local/bin"
@@ -410,10 +525,24 @@ setup_path() {
     if dir=$(link_dir_on_path); then
         ln -sf "$BIN/$CLI" "$dir/$CLI"
         say "Linked $dir/$CLI, already on your PATH."
+        # A link to this installation's other CLI name (`pta`, made before the rename) is kept
+        # while the installation has that executable; none is created.
+        for name in kuroko pta; do
+            [ "$name" != "$CLI" ] && [ -L "$dir/$name" ] || continue
+            case "$(resolve "$dir/$name")" in "$BIN"/*) ;; *) continue ;; esac
+            if [ -x "$BIN/$name" ]; then
+                ln -sf "$BIN/$name" "$dir/$name"
+            else
+                rm -f "$dir/$name"
+            fi
+        done
+        # The link replaces a block written before the rename.
+        for file in $RC_FILES; do remove_legacy_block "$HOME/$file"; done
     else
         startup_files | sort -u | while read -r file; do put_block "$file"; done
     fi
-    fish=$(fish_file)
+    remove_fish "$LEGACY" "$LEGACY_BEGIN_MARK"
+    fish=$(fish_file "$PRODUCT")
     if [ -d "$(dirname "$(dirname "$fish")")" ]; then
         mkdir -p "$(dirname "$fish")"
         # shellcheck disable=SC2016
@@ -422,43 +551,45 @@ setup_path() {
 }
 
 remove_path() {
-    link="$HOME/.local/bin/$CLI"
-    if [ -L "$link" ] && [ "$(resolve "$link")" = "$BIN/$CLI" ]; then
-        rm -f "$link"
-    fi
-    for file in .profile .bash_profile .bash_login .bashrc .zprofile .zshrc; do
-        remove_block "$HOME/$file"
+    for name in kuroko pta; do
+        link="$HOME/.local/bin/$name"
+        if [ -L "$link" ] && [ "$(resolve "$link")" = "$BIN/$name" ]; then
+            rm -f "$link"
+        fi
     done
-    fish=$(fish_file)
-    if [ -f "$fish" ] && grep -qxF "$BEGIN_MARK" "$fish"; then
-        rm -f "$fish"
-    fi
+    for file in $RC_FILES; do
+        remove_block "$HOME/$file" "$BEGIN_MARK" "$END_MARK"
+        remove_legacy_block "$HOME/$file"
+    done
+    remove_fish "$PRODUCT" "$BEGIN_MARK"
+    remove_fish "$LEGACY" "$LEGACY_BEGIN_MARK"
 }
 
 # ---------------------------------------------------------------------------------------------
-# Coding CLIs: the skill and `pta mcp`, with consent; the exact commands otherwise.
+# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both keep
+# the name they had before the rename (INTEGRATION).
 
 register_mcp() {
     if [ "$1" = claude ]; then
-        claude mcp add --scope user "$PACKAGE" -- "$2" mcp >/dev/null 2>&1 </dev/null
+        claude mcp add --scope user "$INTEGRATION" -- "$2" mcp >/dev/null 2>&1 </dev/null
     else
-        codex mcp add "$PACKAGE" -- "$2" mcp >/dev/null 2>&1 </dev/null
+        codex mcp add "$INTEGRATION" -- "$2" mcp >/dev/null 2>&1 </dev/null
     fi
 }
 
 integrations() {
-    config=$(run_pta --json mcp config 2>/dev/null) || config=
+    config=$(run_cli --json mcp config 2>/dev/null) || config=
     command=$(printf '%s' "$config" | json_string command)
     [ -n "$command" ] || command="$BIN/$CLI"
     found=
     for tool in claude codex; do
         command -v "$tool" >/dev/null 2>&1 || continue
         found=yes
-        skill="$HOME/.$tool/skills/$PACKAGE"
+        skill="$HOME/.$tool/skills/$INTEGRATION"
         if [ "$tool" = claude ]; then
-            register="claude mcp add --scope user $PACKAGE -- '$command' mcp"
+            register="claude mcp add --scope user $INTEGRATION -- '$command' mcp"
         else
-            register="codex mcp add $PACKAGE -- '$command' mcp"
+            register="codex mcp add $INTEGRATION -- '$command' mcp"
         fi
         if [ "$INTEGRATIONS" != yes ]; then
             say "  $tool: $CLI skill install $skill"
@@ -467,15 +598,15 @@ integrations() {
         fi
         if [ -e "$skill" ]; then
             say "$tool: the skill is already at $skill (updates refresh it while unmodified)."
-        elif mkdir -p "$(dirname "$skill")" && run_pta skill install "$skill" >/dev/null; then
+        elif mkdir -p "$(dirname "$skill")" && run_cli skill install "$skill" >/dev/null; then
             say "$tool: installed the skill at $skill."
         else
             warn "$tool: the skill could not be installed at $skill."
         fi
-        if "$tool" mcp get "$PACKAGE" >/dev/null 2>&1 </dev/null; then
-            say "$tool: $PACKAGE is already registered as an MCP server."
+        if "$tool" mcp get "$INTEGRATION" >/dev/null 2>&1 </dev/null; then
+            say "$tool: $INTEGRATION is already registered as an MCP server."
         elif register_mcp "$tool" "$command"; then
-            say "$tool: registered '$command mcp' as the MCP server $PACKAGE."
+            say "$tool: registered '$command mcp' as the MCP server $INTEGRATION."
         else
             warn "$tool: registering the MCP server failed; run: $register"
         fi
@@ -513,7 +644,7 @@ join_account() {
         fi
         return 0
     fi
-    reply=$(run_pta --json auth machine login "$ORIGIN" --no-browser 2>&1) || true
+    reply=$(run_cli --json auth machine login "$ORIGIN" --no-browser 2>&1) || true
     url=$(printf '%s' "$reply" | json_string approval_url)
     code=$(printf '%s' "$reply" | json_string code)
     case "$url" in
@@ -530,7 +661,7 @@ join_account() {
     say "Check that the page shows the code $code, then choose Trust this machine."
     open_url "$url" || say "Open that link on any device where you are signed in to the portal."
     say "Waiting for the approval (up to ten minutes)..."
-    finished=$(run_pta --json auth machine finish --wait 2>&1) || true
+    finished=$(run_cli --json auth machine finish --wait 2>&1) || true
     if printf '%s' "$finished" | grep -q '"connected":true'; then
         say "Connected to $ORIGIN. Choose this computer's allowed directories in the portal (Settings > Machines) before running work on it."
     else
@@ -542,6 +673,14 @@ join_account() {
 # ---------------------------------------------------------------------------------------------
 # Install and uninstall.
 
+bins_json() {
+    separator=
+    for name in $BINS; do
+        printf '%s"%s"' "$separator" "$name"
+        separator=', '
+    done
+}
+
 write_record() {
     cat >"$1" <<EOF
 {
@@ -550,8 +689,8 @@ write_record() {
   "package": "$PACKAGE",
   "version": "$VERSION",
   "target": "$TARGET",
-  "bins": ["$PACKAGE", "$CLI"],
-  "repository": "https://github.com/$REPOSITORY",
+  "bins": [$(bins_json)],
+  "repository": "$RECORD_REPOSITORY",
   "archive": "$ARCHIVE",
   "sha256": "$DIGEST",
   "installed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -560,11 +699,12 @@ EOF
 }
 
 do_install() {
-    if [ -n "$TEST_SOURCE" ] && [ -n "${PTA_INSTALL_TEST_TARGET:-}" ]; then
+    test_target=${KUROKO_INSTALL_TEST_TARGET:-${PTA_INSTALL_TEST_TARGET:-}}
+    if [ -n "$TEST_SOURCE" ] && [ -n "$test_target" ]; then
         # The Intel macOS archive is tested on an Apple-silicon runner, under Rosetta.
-        TARGET=$PTA_INSTALL_TEST_TARGET
+        TARGET=$test_target
     else
-        TARGET=$(detect_target) || fail "There is no prebuilt archive for $(uname -s) $(uname -m). Install with Cargo instead: cargo install $PACKAGE --locked (needs the Rust toolchain from https://rustup.rs)."
+        TARGET=$(detect_target) || fail "There is no prebuilt archive for $(uname -s) $(uname -m). Install with Cargo instead: cargo install $PRODUCT --locked (needs the Rust toolchain from https://rustup.rs)."
     fi
     command -v curl >/dev/null 2>&1 || [ -n "$TEST_SOURCE" ] || fail "curl is needed to download the release."
     command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack the release."
@@ -577,6 +717,9 @@ do_install() {
         fi
     fi
     check_version "$VERSION"
+    if before_rename "$VERSION"; then
+        use_legacy_layout
+    fi
     ARCHIVE="$PACKAGE-$TARGET-v$VERSION.tgz"
     say "Installing $PACKAGE $VERSION for $TARGET into $ROOT."
 
@@ -597,7 +740,7 @@ do_install() {
     if [ -n "$TEST_SOURCE" ]; then
         say "Build provenance not checked (test source)."
     elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        gh attestation verify "$STAGE/$ARCHIVE" --repo "$REPOSITORY" >/dev/null 2>&1 ||
+        gh attestation verify "$STAGE/$ARCHIVE" --repo "$PROVENANCE" >/dev/null 2>&1 ||
             fail "GitHub could not verify the archive's build provenance. Nothing was changed. Run 'gh attestation verify' on the archive to see why."
         say "Build provenance verified with gh attestation verify."
     else
@@ -606,7 +749,7 @@ do_install() {
 
     mkdir "$STAGE/unpacked" "$STAGE/bin"
     tar -xzf "$STAGE/$ARCHIVE" -C "$STAGE/unpacked" || fail "The archive could not be unpacked. Nothing was changed."
-    for name in "$PACKAGE" "$CLI"; do
+    for name in $BINS; do
         file="$STAGE/unpacked/$PACKAGE-$TARGET-v$VERSION/$name"
         [ -f "$file" ] && [ ! -L "$file" ] || fail "The archive does not contain $name. Nothing was changed."
         cp "$file" "$STAGE/bin/$name"
@@ -614,7 +757,7 @@ do_install() {
     done
     reported=$("$STAGE/bin/$CLI" --version --json </dev/null 2>/dev/null) || reported=
     printf '%s' "$reported" | grep -q "\"cli_version\":\"$VERSION\"" ||
-        fail "The unpacked pta does not run on this computer or reports another version. Nothing was changed."
+        fail "The unpacked $CLI does not run on this computer or reports another version. Nothing was changed."
 
     if [ -f "$(profile_dir)/config.toml" ] || [ -d "$(profile_dir)" ]; then
         say "Using the existing profile at $(profile_dir); it is kept as it is."
@@ -654,9 +797,9 @@ do_uninstall() {
     if ! grep -q '"kind": "archive"' "$ROOT/$RECORD" 2>/dev/null; then
         fail "No installation by this script was found in $ROOT."
     fi
-    if [ -x "$BIN/$CLI" ]; then
+    if present "$CLI" kuroko pta >/dev/null; then
         if start_host; then
-            run_pta --json service uninstall --confirmed >/dev/null 2>&1 ||
+            run_cli --json service uninstall --confirmed >/dev/null 2>&1 ||
                 warn "The login entry could not be removed; remove it with '$CLI service uninstall --confirmed'."
         fi
         quit_host
@@ -664,15 +807,15 @@ do_uninstall() {
     remove_path
     rm -rf "${ROOT:?}/bin" "${ROOT:?}/$RECORD"
     rmdir "$ROOT" 2>/dev/null || true
-    say "Removed $PACKAGE from $ROOT. The profile at $(profile_dir) was kept."
-    say "A skill copy or MCP registration made for a coding CLI stays; remove it there (for example 'claude mcp remove $PACKAGE')."
+    say "Removed Kuroko from $ROOT. The profile at $(profile_dir) was kept."
+    say "A skill copy or MCP registration made for a coding CLI stays; remove it there (for example 'claude mcp remove $INTEGRATION')."
 }
 
 main() {
     set -eu
     ORIGIN=
     VERSION=
-    ROOT=${PTA_INSTALL_ROOT:-}
+    ROOT=${KUROKO_INSTALL_ROOT:-${PTA_INSTALL_ROOT:-}}
     INTEGRATIONS=no
     UNATTENDED=no
     NO_SERVICE=no
@@ -703,14 +846,14 @@ main() {
         fail "Run this without sudo: it installs for the current user only and needs no administrator rights."
     fi
     if [ -n "$TEST_SOURCE" ]; then
-        [ "${PTA_INSTALL_TEST:-}" = 1 ] || fail "--test-source is only for the installer's own tests."
+        [ "${KUROKO_INSTALL_TEST:-${PTA_INSTALL_TEST:-}}" = 1 ] || fail "--test-source is only for the installer's own tests."
         [ -d "$TEST_SOURCE" ] || fail "The test source must be a local directory."
         TEST_SOURCE=$(cd "$TEST_SOURCE" && pwd)
         warn "TEST MODE: installing from $TEST_SOURCE instead of the release."
     fi
     [ -z "$ORIGIN" ] || ORIGIN=$(check_origin "$ORIGIN")
     [ -z "$VERSION" ] || check_version "$VERSION"
-    [ -n "$ROOT" ] || ROOT="$HOME/.local/share/$PACKAGE"
+    [ -n "$ROOT" ] || ROOT=$(default_root)
     case "$ROOT" in /*) ;; *) ROOT="$(pwd)/$ROOT" ;; esac
     ROOT=${ROOT%/}
     BIN="$ROOT/bin"

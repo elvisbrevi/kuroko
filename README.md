@@ -4,10 +4,10 @@
 
 <p align="center"><em>Personal Teams Assistant</em> · You on stage. Kuroko handles the rest.</p>
 
-> **Moving to `kuroko`.** From 0.18.0 the product is published as the crate [`kuroko`](https://crates.io/crates/kuroko), with the `kuroko` command; 0.17.0 is the last release of `personal-teams-assistant`. Installed copies move to it with their own updater, keeping the profile, the credentials and the Microsoft session; `pta` and `personal-teams-assistant` stay as aliases. To move a copy by hand, run `cargo install kuroko --locked --force` (`--force` lets it take over the two old command names). See [the rename plan](docs/rename-kuroko.md).
+> **Formerly `personal-teams-assistant`.** From 0.18.0 the product is the crate `kuroko`, with the commands `kuroko` and `kuroko-host`; `pta` and `personal-teams-assistant` stay as aliases of them. Copies of 0.17.0 move to it with their own updater, keeping the profile, the credentials and the Microsoft session. To move an older copy by hand, run `cargo install kuroko --locked --force` (`--force` lets it take over the two old command names). See [the rename plan](docs/rename-kuroko.md).
 
 <p align="center"><strong>Answers in Teams as you, and only with what you authorize.</strong><br>
-<a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/personal-teams-assistant">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a></p>
+<a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/kuroko">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a></p>
 
 <p align="center">
   <picture>
@@ -43,7 +43,7 @@ Activities can save the user's existing Azure tasks on a daily or interval sched
 
 ## Installation
 
-One package, `personal-teams-assistant`, installs everything: the host `personal-teams-assistant` with its web interface, the `pta` CLI and the agent skill built into `pta`. It is the same build on macOS, Windows and Linux, with no window, tray or GTK/WebKit packages: launching `personal-teams-assistant` starts the host and opens its interface in the system browser.
+One package, `kuroko`, installs everything: the host `kuroko-host` with its web interface, the `kuroko` CLI and the agent skill built into it (`personal-teams-assistant` and `pta` are the same programs under their former names). It is the same build on macOS, Windows and Linux, with no window, tray or GTK/WebKit packages: launching `kuroko-host` starts the host and opens its interface in the system browser.
 
 ### One command, no Rust
 
@@ -51,32 +51,31 @@ To add a computer to your account, copy the command from your portal (Settings �
 
 ```sh
 # macOS and Linux
-curl --proto '=https' --tlsv1.2 -fsSL https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.sh | sh -s -- --origin https://your-portal.example
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/elvisbrevi/kuroko/releases/latest/download/install.sh | sh -s -- --origin https://your-portal.example
 ```
 
 ```powershell
 # Windows (PowerShell, no administrator rights)
-Invoke-RestMethod -UseBasicParsing https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.ps1 -OutFile "$env:TEMP\pta-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\pta-install.ps1" -Origin https://your-portal.example
+Invoke-RestMethod -UseBasicParsing https://github.com/elvisbrevi/kuroko/releases/latest/download/install.ps1 -OutFile "$env:TEMP\kuroko-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\kuroko-install.ps1" -Origin https://your-portal.example
 ```
 
-The script downloads the release's prebuilt archive for this computer, checks it against its published SHA-256 (and its build provenance when the GitHub CLI is signed in) before running anything, installs both binaries for your user (`~/.local/share/personal-teams-assistant/bin`, or `%LOCALAPPDATA%\Programs\personal-teams-assistant\bin`), puts `pta` on the path of new terminals, starts the host at login (`pta service install`) and opens your portal's sign-in page, where you check the code and choose **Trust this machine**. The command holds no secret; trust grants no directories, Teams responsibility or assistant start. An existing profile is kept as it is, and running the command again repairs or upgrades the same installation. Such an installation also updates from the application (`pta update`, Settings › Advanced › Updates), which downloads the newer release's archive for that computer and checks its SHA-256; add `--unattended-updates` (`-UnattendedUpdates`), or later `pta update unattended on --confirmed`, to let that computer install new releases by itself when nothing would be interrupted (off by default, per computer, never synchronized). Without `--origin` it only installs. Add `--integrations` (`-Integrations`) to also install the skill and register `pta mcp` with Claude Code or Codex; otherwise it prints those commands. `--uninstall` (`-Uninstall`) removes the service, the binaries and the path entry and keeps the profile. If the computer already has a Cargo installation, the script stops and says how to switch. Details in the [architecture](docs/architecture.md#one-command-installation).
+The script downloads the release's prebuilt archive for this computer, checks it against its published SHA-256 (and its build provenance when the GitHub CLI is signed in) before running anything, installs the binaries for your user (`~/.local/share/kuroko/bin`, or `%LOCALAPPDATA%\Programs\kuroko\bin`; an earlier installation in `personal-teams-assistant` is upgraded where it is), puts `kuroko` on the path of new terminals, starts the host at login (`pta service install`) and opens your portal's sign-in page, where you check the code and choose **Trust this machine**. The command holds no secret; trust grants no directories, Teams responsibility or assistant start. An existing profile is kept as it is, and running the command again repairs or upgrades the same installation. Such an installation also updates from the application (`pta update`, Settings › Advanced › Updates), which downloads the newer release's archive for that computer and checks its SHA-256; add `--unattended-updates` (`-UnattendedUpdates`), or later `pta update unattended on --confirmed`, to let that computer install new releases by itself when nothing would be interrupted (off by default, per computer, never synchronized). Without `--origin` it only installs. Add `--integrations` (`-Integrations`) to also install the skill and register `pta mcp` with Claude Code or Codex; otherwise it prints those commands. `--uninstall` (`-Uninstall`) removes the service, the binaries and the path entry and keeps the profile. If the computer already has a Cargo installation, the script stops and says how to switch. Details in the [architecture](docs/architecture.md#one-command-installation).
 
 ### With Cargo
 
 ```sh
-cargo binstall personal-teams-assistant           # prebuilt on macOS, Windows and Linux
-cargo install personal-teams-assistant --locked   # from crates.io, compiled here
+cargo binstall kuroko                             # prebuilt on macOS, Windows and Linux
+cargo install kuroko --locked                     # from crates.io, compiled here
 cargo install --path . --locked                   # from this checkout
 ```
 
-[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) downloads the archive attached to the GitHub release instead of compiling, which takes seconds instead of minutes. Each archive has a `.sha256` and GitHub build provenance (`gh attestation verify FILE --repo elvisbrevi/personal-teams-assistant`). The binaries are not signed by Apple: one downloaded with a browser needs `xattr -d com.apple.quarantine` on macOS. The in-app update compiles from crates.io for an installation made with `cargo install`, runs `cargo binstall` again for one made with it, and downloads the release archive for one made with the install command.
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) downloads the archive attached to the GitHub release instead of compiling, which takes seconds instead of minutes. Each archive has a `.sha256` and GitHub build provenance (`gh attestation verify FILE --repo elvisbrevi/kuroko`). The binaries are not signed by Apple: one downloaded with a browser needs `xattr -d com.apple.quarantine` on macOS. The in-app update compiles from crates.io for an installation made with `cargo install`, runs `cargo binstall` again for one made with it, and downloads the release archive for one made with the install command.
 
-If you had the old `personal-teams-desktop` package (0.4.0 or earlier), uninstall it first: both install `pta` and Cargo does not overwrite another package's binary. Your profile, credentials and account are kept.
+If an older package of this product is installed with Cargo (`personal-teams-assistant`, or `personal-teams-desktop` 0.4.0 and earlier), it owns `pta` and Cargo does not overwrite another package's binary: replace it with `--force`, or uninstall it first. Your profile, credentials and account are kept.
 
 ```sh
-cargo uninstall personal-teams-desktop
-cargo install personal-teams-assistant --locked
-pta status
+cargo install kuroko --locked --force
+kuroko status
 ```
 
 Requirements: Rust (version pinned in `rust-toolchain.toml`, with a C compiler and linker to compile), Git and `~/.cargo/bin` in `PATH`. To receive Teams messages you also need a stable HTTPS URL that reaches the local port (e.g. `cloudflared` with a token) and the computer on.
@@ -84,7 +83,7 @@ Requirements: Rust (version pinned in `rust-toolchain.toml`, with a C compiler a
 On a server, install it the same way, run the host in the foreground and operate it with `pta` or the portal:
 
 ```sh
-personal-teams-assistant --start    # foreground; `--start` starts the assistant; fits a systemd service
+kuroko-host --start    # foreground; `--start` starts the assistant; fits a systemd service
 ```
 
 Its credentials are stored with `pta credentials set` in private profile files or come from `NAME`/`NAME_FILE` variables. The Microsoft login is completed from any device with `pta auth microsoft finish --redirect 'URL'`. Details in the [architecture](docs/architecture.md#headless-host). Never keep two instances of the same account active.
@@ -236,8 +235,8 @@ verified GitHub identities.
 The host, CLI, Microsoft session and existing profiles are preserved.
 
 ```sh
-cargo install personal-teams-assistant --locked
-pta status
+cargo install kuroko --locked --force
+kuroko status
 ```
 
 Cargo runs nothing after installing, so the previous version keeps running until the new one is first used. The first `pta` command (any; `pta status` will do) or launching `personal-teams-assistant` detects that the installed binary changed, stops the previous host (assistant and tunnel) and, if the assistant was running, asks on the terminal whether to keep it running with the new version. Without an interactive terminal (`--non-interactive`, `--json`, systemd) it keeps the previous state.
@@ -247,7 +246,7 @@ From 0.6.1 on, a profile saved by the app no longer has the `[jev]` section that
 ## Quick use
 
 ```sh
-personal-teams-assistant          # starts the host and opens the GUI in the browser (or pta app open)
+kuroko-host                       # starts the host and opens the GUI in the browser (or pta app open)
 pta help                          # every command, with its description
 pta status                        # running? host, assistant, mode, Teams and models
 pta start                         # starts the assistant
