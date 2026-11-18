@@ -576,7 +576,6 @@ pub async fn stage_for(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::maintenance::CLI;
     use std::io::Cursor;
 
     /// What an archive entry is.
@@ -775,7 +774,7 @@ pub(crate) mod tests {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let mode = fs::metadata(bin.join(exe_name(CLI)))
+                let mode = fs::metadata(bin.join(exe_name(OWN.cli)))
                     .unwrap()
                     .permissions()
                     .mode();

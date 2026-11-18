@@ -159,7 +159,19 @@ if [ "$service" = yes ]; then
     name=$(printf '%s' "$status" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
     check "the login service is installed ($name)" sh -c 'printf "%s" "$0" | grep -q "\"installed\":true"' "$status"
     check "  and starts this installation" sh -c 'printf "%s" "$0" | grep -q "\"current\":true"' "$status"
-    check "  and runs the host now" sh -c 'printf "%s" "$0" | grep -q "\"running\":true"' "$status"
+    if printf '%s' "$status" | grep -q '"running":true'; then
+        pass "  and runs the host now"
+    else
+        bad "  and runs the host now"
+        # What the installer said and what the manager knows, to see why the hand-over failed.
+        printf '%s\n' "$status"
+        cat "$work/out"
+        case "$(uname -s)" in
+            Darwin) launchctl print "gui/$(id -u)/$name" 2>&1 | head -n 40 || true ;;
+            *) systemctl --user status "$name" --no-pager 2>&1 | head -n 40 || true
+               journalctl --user -u "$name" --no-pager -n 40 2>&1 || true ;;
+        esac
+    fi
 fi
 
 echo "# Again: repair or upgrade in place"
