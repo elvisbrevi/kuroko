@@ -1,14 +1,14 @@
 [package]
-name = "personal-teams-assistant"
-version = "0.17.0"
+name = "kuroko"
+version = "0.18.0"
 edition = "2024"
 rust-version = "1.95"
 build = "build.rs"
-default-run = "personal-teams-assistant"
-description = "Kuroko, the personal Microsoft Teams knowledge assistant: a host with a web interface, the `pta` CLI and an MCP server. Continues as the `kuroko` crate from 0.18.0."
+default-run = "kuroko-host"
+description = "Kuroko, the personal Microsoft Teams knowledge assistant: a host with a web interface, the `kuroko` CLI and an MCP server (formerly personal-teams-assistant)"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/elvisbrevi/personal-teams-assistant"
+repository = "https://github.com/elvisbrevi/kuroko"
 # Anchored to the package root: an unanchored "README.md" also matches files in ignored
 # local data (e.g. cloned knowledge repositories under data/).
 include = [
@@ -24,7 +24,7 @@ include = [
     "/desktop/skills/**",
 ]
 
-# `cargo binstall personal-teams-assistant` downloads the archive binaries.yml attaches to the GitHub
+# `cargo binstall kuroko` downloads the archive binaries.yml attaches to the GitHub
 # release (macOS, Windows and Linux; one build, no features) instead of compiling; when a release has
 # no archive for the target, it compiles like `cargo install`. Third-party builds are not used.
 [package.metadata.binstall]
@@ -36,9 +36,24 @@ disabled-strategies = ["quick-install"]
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-fmt = "zip"
 
+# The library keeps the name it was published with; nothing outside this package uses it.
+[lib]
+name = "personal_teams_assistant"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kuroko-host"
+path = "src/main.rs"
+
+[[bin]]
+name = "kuroko"
+path = "src/bin/kuroko.rs"
+
+# The names the package was published with before (`personal-teams-assistant`), kept as aliases:
+# service entries, scripts and MCP configurations written for them keep starting the same build.
 [[bin]]
 name = "personal-teams-assistant"
-path = "src/main.rs"
+path = "src/bin/personal-teams-assistant.rs"
 
 [[bin]]
 name = "pta"

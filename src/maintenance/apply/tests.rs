@@ -1,16 +1,30 @@
 //! Replacement, undo, recovery and work checks on real files in temporary directories, with
 //! synthetic executables (plain bytes: nothing here runs a program) and injected failures.
 use super::*;
-use crate::maintenance::{CLI, CRATE};
+use crate::maintenance::{CLI, OWN, PREDECESSORS};
 use serde_json::json;
 
-const OLD_HOST: &[u8] = b"previous host executable";
-const OLD_CLI: &[u8] = b"previous pta executable";
-const NEW_HOST: &[u8] = b"new host executable, a little longer";
-const NEW_CLI: &[u8] = b"new pta executable, also longer";
+const HOST: &str = OWN.host;
 
-fn crates_io(version: &str) -> String {
-    format!("{CRATE} {version} (registry+https://github.com/rust-lang/crates.io-index)")
+/// What the installed executable `name` holds before the update.
+fn old(name: &str) -> Vec<u8> {
+    format!("previous {name} executable").into_bytes()
+}
+
+/// What the staged executable `name` holds: longer than the previous one.
+fn new(name: &str) -> Vec<u8> {
+    format!("new {name} executable, a little longer").into_bytes()
+}
+
+fn crates_io(package: &str, version: &str) -> String {
+    format!("{package} {version} (registry+https://github.com/rust-lang/crates.io-index)")
+}
+
+fn predecessor() -> Package {
+    let [predecessor] = PREDECESSORS else {
+        panic!("this package replaced exactly one predecessor")
+    };
+    *predecessor
 }
 
 struct Fixture {
@@ -20,10 +34,18 @@ struct Fixture {
     staged: PathBuf,
     profile: PathBuf,
     data: PathBuf,
+    /// The package installed before the update; this package is the one staged.
+    installed: Package,
 }
 
 impl Fixture {
+    /// This package installed at 0.9.13, with 0.9.14 staged.
     fn new() -> Self {
+        Self::of(OWN)
+    }
+
+    /// `installed` (this package or a predecessor) at 0.9.13, with this package's 0.9.14 staged.
+    fn of(installed: Package) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("install");
         let staged = tmp.path().join("stage/root");
@@ -38,34 +60,40 @@ impl Fixture {
         ] {
             fs::create_dir_all(dir).unwrap();
         }
-        fs::write(root.join("bin").join(exe_name(CRATE)), OLD_HOST).unwrap();
-        fs::write(root.join("bin").join(exe_name(CLI)), OLD_CLI).unwrap();
-        fs::write(staged.join("bin").join(exe_name(CRATE)), NEW_HOST).unwrap();
-        fs::write(staged.join("bin").join(exe_name(CLI)), NEW_CLI).unwrap();
-        let record = json!({"bins":["personal-teams-assistant","pta"],"features":[],
-            "all_features":false,"no_default_features":true,"profile":"release"});
+        for name in installed.bins {
+            fs::write(root.join("bin").join(exe_name(name)), old(name)).unwrap();
+        }
+        for name in OWN.bins {
+            fs::write(staged.join("bin").join(exe_name(name)), new(name)).unwrap();
+        }
+        let record = |bins: &[&str]| {
+            json!({"bins":bins,"features":[],"all_features":false,"no_default_features":true,
+                "profile":"release"})
+        };
+        let live = crates_io(installed.name, "0.9.13");
         fs::write(
             root.join(".crates2.json"),
-            json!({"installs":{crates_io("0.9.13"): record, "other 1.0.0 (registry+x)": {"bins":["other"]}}})
+            json!({"installs":{live.clone(): record(installed.bins), "other 1.0.0 (registry+x)": {"bins":["other"]}}})
                 .to_string(),
         )
         .unwrap();
         fs::write(
             root.join(".crates.toml"),
-            format!("[v1]\n\"{}\" = [\"personal-teams-assistant\", \"pta\"]\n\"other 1.0.0 (registry+x)\" = [\"other\"]\n", crates_io("0.9.13")),
+            format!(
+                "[v1]\n\"{live}\" = {}\n\"other 1.0.0 (registry+x)\" = [\"other\"]\n",
+                json!(installed.bins)
+            ),
         )
         .unwrap();
+        let next = crates_io(OWN.name, "0.9.14");
         fs::write(
             staged.join(".crates2.json"),
-            json!({"installs":{crates_io("0.9.14"): record}}).to_string(),
+            json!({"installs":{next.clone(): record(OWN.bins)}}).to_string(),
         )
         .unwrap();
         fs::write(
             staged.join(".crates.toml"),
-            format!(
-                "[v1]\n\"{}\" = [\"personal-teams-assistant\", \"pta\"]\n",
-                crates_io("0.9.14")
-            ),
+            format!("[v1]\n\"{next}\" = {}\n", json!(OWN.bins)),
         )
         .unwrap();
         fs::write(
@@ -80,6 +108,7 @@ impl Fixture {
             staged,
             profile,
             data,
+            installed,
         }
     }
 
@@ -91,7 +120,8 @@ impl Fixture {
     }
 
     fn manifest(&self) -> Manifest {
-        let binaries = [CRATE, CLI]
+        let binaries = OWN
+            .bins
             .iter()
             .map(|n| {
                 (
@@ -142,19 +172,40 @@ impl Fixture {
         fs::read(self.root.join("bin").join(exe_name(name))).unwrap()
     }
 
+    /// Exactly the executables and records that were installed before the update.
     fn assert_previous(&self) {
-        assert_eq!(self.bin(CRATE), OLD_HOST);
-        assert_eq!(self.bin(CLI), OLD_CLI);
+        self.assert_previous_pair();
+        let live = crates_io(self.installed.name, "0.9.13");
         let records = fs::read_to_string(self.root.join(".crates2.json")).unwrap();
         assert!(
-            records.contains("0.9.13") && !records.contains("0.9.14"),
+            records.contains(&live) && !records.contains("0.9.14"),
             "{records}"
         );
         let toml = fs::read_to_string(self.root.join(".crates.toml")).unwrap();
-        assert!(
-            toml.contains("0.9.13") && !toml.contains("0.9.14"),
-            "{toml}"
-        );
+        assert!(toml.contains(&live) && !toml.contains("0.9.14"), "{toml}");
+    }
+
+    /// Exactly the previously installed executables, and none this update added.
+    fn assert_previous_pair(&self) {
+        for name in self.installed.bins {
+            assert_eq!(self.bin(name), old(name), "{name}");
+        }
+        for name in OWN
+            .bins
+            .iter()
+            .filter(|n| !self.installed.bins.contains(*n))
+        {
+            assert!(
+                !self.root.join("bin").join(exe_name(name)).exists(),
+                "{name} was added"
+            );
+        }
+    }
+
+    fn assert_new(&self) {
+        for name in OWN.bins {
+            assert_eq!(self.bin(name), new(name), "{name}");
+        }
     }
 
     fn leftovers(&self) -> Vec<String> {
@@ -178,8 +229,7 @@ fn a_matched_pair_replaces_both_executables_and_cargos_records() {
     let mut apply = f.apply();
     apply.back_up().unwrap();
     apply.replace().unwrap();
-    assert_eq!(f.bin(CRATE), NEW_HOST);
-    assert_eq!(f.bin(CLI), NEW_CLI);
+    f.assert_new();
     assert!(apply.installed_is_new());
     assert!(!apply.installed_is_previous());
     let records: serde_json::Value =
@@ -196,25 +246,23 @@ fn a_matched_pair_replaces_both_executables_and_cargos_records() {
         toml.contains("0.9.14") && !toml.contains("0.9.13") && toml.contains("other 1.0.0"),
         "{toml}"
     );
-    // The previous pair is kept until the new one is found healthy.
-    assert_eq!(f.leftovers().len(), 2, "{:?}", f.leftovers());
+    // The previous executables are kept until the new ones are found healthy.
+    assert_eq!(f.leftovers().len(), OWN.bins.len(), "{:?}", f.leftovers());
     apply.commit().unwrap();
     assert!(f.leftovers().is_empty(), "{:?}", f.leftovers());
     assert_eq!(read(&f.maintenance).unwrap().phase, Phase::Committed);
 }
 
 #[test]
-fn a_failure_at_any_point_restores_both_previous_executables_and_records() {
-    for point in [
-        "backup",
-        "copy:personal-teams-assistant",
-        "retire:personal-teams-assistant",
-        "install:personal-teams-assistant",
-        "copy:pta",
-        "retire:pta",
-        "install:pta",
-        "records",
-    ] {
+fn a_failure_at_any_point_restores_every_previous_executable_and_the_records() {
+    let points =
+        std::iter::once("backup".to_owned())
+            .chain(OWN.bins.iter().flat_map(|name| {
+                ["copy", "retire", "install"].map(|step| format!("{step}:{name}"))
+            }))
+            .chain(["records".to_owned()]);
+    for point in points {
+        let point = point.as_str();
         let f = Fixture::new();
         let target = point.to_owned();
         let mut apply = f.apply().with_hook(move |at| {
@@ -260,8 +308,8 @@ fn a_crash_midway_is_undone_by_recovery_once_its_driver_is_gone() {
     apply.back_up().unwrap();
     assert!(apply.replace().is_err());
     // Half replaced: the host is new, pta is missing from its name.
-    assert_eq!(f.bin(CRATE), NEW_HOST);
-    assert!(!f.root.join("bin").join(exe_name(CLI)).exists());
+    assert_eq!(f.bin(HOST), new(HOST));
+    assert!(!f.root.join("bin").join(exe_name("pta")).exists());
     // A fresh hand-over is not an interrupted update.
     assert_eq!(recover(&f.maintenance, now()).unwrap(), Recovery::Active);
     f.assert_previous_pending();
@@ -283,8 +331,8 @@ fn a_crash_midway_is_undone_by_recovery_once_its_driver_is_gone() {
 impl Fixture {
     fn assert_previous_pending(&self) {
         assert_eq!(
-            self.bin(CRATE),
-            NEW_HOST,
+            self.bin(HOST),
+            new(HOST),
             "recovery must wait for the grace period"
         );
     }
@@ -373,7 +421,7 @@ fn retrying_stops_after_a_bounded_number_of_attempts() {
 fn windows_running_and_locked_executables() {
     use std::os::windows::fs::OpenOptionsExt;
     let f = Fixture::new();
-    let host = f.root.join("bin").join(exe_name(CRATE));
+    let host = f.root.join("bin").join(exe_name(HOST));
     // As a running image: readable, deletable-by-rename.
     let running = fs::OpenOptions::new()
         .read(true)
@@ -558,7 +606,7 @@ fn only_the_latest_safety_copy_is_kept() {
 fn an_update_without_room_for_its_safety_copy_is_refused_before_anything_changes() {
     let f = Fixture::new();
     let mut manifest = f.manifest();
-    manifest.binaries.get_mut(CRATE).unwrap().size = 1 << 60;
+    manifest.binaries.get_mut(HOST).unwrap().size = 1 << 60;
     let error = preflight(&f.maintenance, &f.root, &manifest, &f.profiles())
         .unwrap_err()
         .to_string();
@@ -595,7 +643,7 @@ fn leftovers_are_swept_only_when_no_update_is_running() {
         "no longer newer"
     );
     assert!(f.maintenance.join("staged/0.9.15").exists(), "still newer");
-    assert_eq!(f.bin(CRATE), NEW_HOST);
+    assert_eq!(f.bin(HOST), new(HOST));
 }
 
 #[test]
@@ -687,10 +735,10 @@ fn archive_fixture() -> (Fixture, String) {
         fs::remove_file(f.staged.join(name)).unwrap();
     }
     let record = serde_json::to_string_pretty(&json!({
-        "schema": 1, "kind": "archive", "package": CRATE, "version": "0.9.13",
-        "target": "x86_64-unknown-linux-gnu", "bins": [CRATE, CLI],
-        "repository": "https://github.com/elvisbrevi/personal-teams-assistant",
-        "archive": "personal-teams-assistant-x86_64-unknown-linux-gnu-v0.9.13.tgz",
+        "schema": 1, "kind": "archive", "package": OWN.name, "version": "0.9.13",
+        "target": "x86_64-unknown-linux-gnu", "bins": OWN.bins,
+        "repository": "https://github.com/elvisbrevi/kuroko",
+        "archive": "kuroko-x86_64-unknown-linux-gnu-v0.9.13.tgz",
         "sha256": "1".repeat(64), "installed_at": "2026-11-01T00:00:00Z",
     }))
     .unwrap();
@@ -702,7 +750,7 @@ fn archive_apply(f: &Fixture) -> Apply {
     let mut journal = f.journal();
     journal.manifest.target = Some("x86_64-unknown-linux-gnu".into());
     journal.manifest.archive = Some(ArchiveFile {
-        name: "personal-teams-assistant-x86_64-unknown-linux-gnu-v0.9.14.tgz".into(),
+        name: "kuroko-x86_64-unknown-linux-gnu-v0.9.14.tgz".into(),
         sha256: "2".repeat(64),
         size: 42,
     });
@@ -716,7 +764,7 @@ fn an_archive_installations_record_names_the_new_release_only_once_committed() {
     let mut apply = archive_apply(&f);
     apply.back_up().unwrap();
     apply.replace().unwrap();
-    assert_eq!(f.bin(CRATE), NEW_HOST);
+    f.assert_new();
     // Replaced, restarted and being verified: the record still names what was installed.
     assert_eq!(fs::read_to_string(&record).unwrap(), before);
     apply.commit().unwrap();
@@ -725,17 +773,16 @@ fn an_archive_installations_record_names_the_new_release_only_once_committed() {
     assert_eq!(after["version"], "0.9.14");
     assert_eq!(
         after["archive"],
-        "personal-teams-assistant-x86_64-unknown-linux-gnu-v0.9.14.tgz"
+        "kuroko-x86_64-unknown-linux-gnu-v0.9.14.tgz"
     );
     assert_eq!(after["sha256"], "2".repeat(64));
     assert_ne!(after["installed_at"], "2026-11-01T00:00:00Z");
     // Everything else the scripts wrote is kept, and the scripts still recognize the record.
     assert_eq!(after["kind"], "archive");
+    assert_eq!(after["package"], OWN.name);
+    assert_eq!(after["bins"], json!(OWN.bins));
     assert_eq!(after["target"], "x86_64-unknown-linux-gnu");
-    assert_eq!(
-        after["repository"],
-        "https://github.com/elvisbrevi/personal-teams-assistant"
-    );
+    assert_eq!(after["repository"], "https://github.com/elvisbrevi/kuroko");
     assert!(
         fs::read_to_string(&record)
             .unwrap()
@@ -759,8 +806,7 @@ fn a_rollback_or_a_failed_record_write_restores_the_archive_record() {
     apply.replace().unwrap();
     apply.roll_back().unwrap();
     assert_eq!(fs::read_to_string(&record).unwrap(), before);
-    assert_eq!(f.bin(CRATE), OLD_HOST);
-    assert_eq!(f.bin(CLI), OLD_CLI);
+    f.assert_previous_pair();
 
     // The record cannot be written at commit: nothing is committed, and the rollback restores it.
     let (f, before) = archive_fixture();
@@ -805,13 +851,6 @@ fn a_rollback_or_a_failed_record_write_restores_the_archive_record() {
     f.assert_previous_pair();
 }
 
-impl Fixture {
-    fn assert_previous_pair(&self) {
-        assert_eq!(self.bin(CRATE), OLD_HOST);
-        assert_eq!(self.bin(CLI), OLD_CLI);
-    }
-}
-
 /// On Windows a running executable can be renamed but one held without sharing cannot: an archive
 /// installation's update then fails cleanly and leaves both executables and its record intact.
 #[cfg(windows)]
@@ -823,7 +862,7 @@ fn windows_locked_executable_of_an_archive_installation() {
     let running = fs::OpenOptions::new()
         .read(true)
         .share_mode(1 | 4)
-        .open(f.root.join("bin").join(exe_name(CRATE)))
+        .open(f.root.join("bin").join(exe_name(HOST)))
         .unwrap();
     let mut apply = archive_apply(&f);
     apply.back_up().unwrap();
@@ -847,84 +886,34 @@ fn windows_locked_executable_of_an_archive_installation() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The successor package (docs/rename-kuroko.md): the product continues under another crate name
-// whose package keeps this one's executables as aliases and adds its own.
-
-const SUCCESSOR: &[&str] = &["kuroko", "kuroko-host", "personal-teams-assistant", "pta"];
-
-fn successor_contents(name: &str) -> Vec<u8> {
-    format!("successor {name} executable").into_bytes()
-}
-
-/// The fixture with the successor staged: its four executables and its own Cargo records.
-fn successor_fixture() -> Fixture {
-    let f = Fixture::new();
-    for name in SUCCESSOR {
-        fs::write(
-            f.staged.join("bin").join(exe_name(name)),
-            successor_contents(name),
-        )
-        .unwrap();
-    }
-    let key = "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)";
-    let record = json!({"bins":SUCCESSOR,"features":[],"all_features":false,
-        "no_default_features":true,"profile":"release"});
-    fs::write(
-        f.staged.join(".crates2.json"),
-        json!({"installs":{key: record}}).to_string(),
-    )
-    .unwrap();
-    fs::write(
-        f.staged.join(".crates.toml"),
-        format!("[v1]\n\"{key}\" = {}\n", json!(SUCCESSOR)),
-    )
-    .unwrap();
-    f
-}
-
-fn successor_apply(f: &Fixture) -> Apply {
-    let mut journal = f.journal();
-    journal.to = "0.18.0".into();
-    journal.manifest.version = "0.18.0".into();
-    journal.manifest.package = Some("kuroko".into());
-    journal.manifest.binaries = SUCCESSOR
-        .iter()
-        .map(|n| {
-            (
-                (*n).to_owned(),
-                digest(&f.staged.join("bin").join(exe_name(n))).unwrap(),
-            )
-        })
-        .collect();
-    Apply::new(&f.maintenance, journal).without_pause()
-}
+// From the predecessor package (docs/rename-kuroko.md): an installation of the former crate, with
+// its two executables, is replaced by this package, which keeps them as aliases and adds its own.
 
 #[test]
-fn the_successor_replaces_this_package_its_executables_and_its_records() {
-    let f = successor_fixture();
-    let mut apply = successor_apply(&f);
+fn this_package_replaces_the_predecessors_executables_and_records() {
+    let f = Fixture::of(predecessor());
+    let mut apply = f.apply();
+    assert_eq!(apply.journal.manifest.package, None);
     apply.back_up().unwrap();
     // Only what was installed has a previous version to come back to.
     assert_eq!(
         apply.journal.previous.keys().collect::<Vec<_>>(),
-        [CRATE, CLI]
+        predecessor().bins
     );
     apply.replace().unwrap();
-    for name in SUCCESSOR {
-        assert_eq!(f.bin(name), successor_contents(name), "{name}");
-    }
+    f.assert_new();
     assert!(apply.installed_is_new());
     assert!(!apply.installed_is_previous());
     let records = fs::read_to_string(f.root.join(".crates2.json")).unwrap();
     assert!(
-        records.contains("kuroko 0.18.0")
+        records.contains("kuroko 0.9.14")
             && !records.contains("personal-teams-assistant 0.9.13")
             && records.contains("other 1.0.0"),
         "{records}"
     );
     let toml = fs::read_to_string(f.root.join(".crates.toml")).unwrap();
     assert!(
-        toml.contains("kuroko 0.18.0")
+        toml.contains("kuroko 0.9.14")
             && !toml.contains("personal-teams-assistant 0.9.13")
             && toml.contains("other 1.0.0"),
         "{toml}"
@@ -934,21 +923,20 @@ fn the_successor_replaces_this_package_its_executables_and_its_records() {
 }
 
 #[test]
-fn a_successor_that_fails_anywhere_leaves_exactly_the_previous_package() {
-    for point in [
-        "backup",
-        "copy:kuroko",
-        "install:kuroko",
-        "copy:kuroko-host",
-        "install:kuroko-host",
-        "retire:personal-teams-assistant",
-        "install:pta",
-        "records",
-        "",
-    ] {
-        let f = successor_fixture();
+fn replacing_the_predecessor_that_fails_anywhere_leaves_exactly_the_previous_package() {
+    let points =
+        std::iter::once("backup".to_owned())
+            .chain(OWN.bins.iter().flat_map(|name| {
+                ["copy", "retire", "install"].map(|step| format!("{step}:{name}"))
+            }))
+            .chain(["records".to_owned(), String::new()]);
+    for point in points {
+        let point = point.as_str();
+        // Only an installed executable is retired; there is no such point for an added one.
+        let reached = !point.starts_with("retire:kuroko");
+        let f = Fixture::of(predecessor());
         let target = point.to_owned();
-        let mut apply = successor_apply(&f).with_hook(move |at| {
+        let mut apply = f.apply().with_hook(move |at| {
             if at == target {
                 Err(io::Error::other("injected"))
             } else {
@@ -956,19 +944,18 @@ fn a_successor_that_fails_anywhere_leaves_exactly_the_previous_package() {
             }
         });
         let result = apply.back_up().and_then(|()| apply.replace());
-        assert_eq!(result.is_err(), !point.is_empty(), "{point}");
+        assert_eq!(result.is_err(), reached && !point.is_empty(), "{point}");
         let mut undo = Apply::new(&f.maintenance, read(&f.maintenance).unwrap()).without_pause();
         if point != "backup" {
             undo.roll_back().unwrap();
             assert!(undo.installed_is_previous(), "{point}");
         }
         f.assert_previous();
-        for name in ["kuroko", "kuroko-host"] {
-            assert!(
-                !f.root.join("bin").join(exe_name(name)).exists(),
-                "{point}: {name}"
-            );
-        }
+        assert!(
+            f.leftovers().iter().all(|n| n.ends_with(".failed")),
+            "{point}: {:?}",
+            f.leftovers()
+        );
         // Running it again changes nothing.
         let mut again = Apply::new(&f.maintenance, read(&f.maintenance).unwrap()).without_pause();
         again.roll_back().unwrap();
@@ -976,48 +963,66 @@ fn a_successor_that_fails_anywhere_leaves_exactly_the_previous_package() {
     }
 }
 
+/// An archive installation of the predecessor: its install scripts' record instead of Cargo's.
+fn predecessor_archive_fixture() -> (Fixture, String) {
+    let f = Fixture::of(predecessor());
+    for name in [".crates2.json", ".crates.toml"] {
+        fs::remove_file(f.root.join(name)).unwrap();
+        fs::remove_file(f.staged.join(name)).unwrap();
+    }
+    let record = serde_json::to_string_pretty(&json!({
+        "schema": 1, "kind": "archive", "package": "personal-teams-assistant",
+        "version": "0.9.13", "target": "x86_64-unknown-linux-gnu", "bins": predecessor().bins,
+        "repository": "https://github.com/elvisbrevi/personal-teams-assistant",
+        "archive": "personal-teams-assistant-x86_64-unknown-linux-gnu-v0.9.13.tgz",
+        "sha256": "1".repeat(64), "installed_at": "2026-11-01T00:00:00Z",
+    }))
+    .unwrap();
+    fs::write(f.root.join(super::super::ARCHIVE_RECORD), &record).unwrap();
+    (f, record)
+}
+
 #[test]
-fn an_archive_installation_record_names_the_successor_once_committed() {
-    let (f, before) = archive_fixture();
-    let f = {
-        // The archive fixture's staging with the successor's executables.
-        for name in SUCCESSOR {
-            fs::write(
-                f.staged.join("bin").join(exe_name(name)),
-                successor_contents(name),
-            )
-            .unwrap();
-        }
-        f
-    };
-    let mut apply = successor_apply(&f);
-    apply.journal.manifest.target = Some("x86_64-unknown-linux-gnu".into());
-    apply.journal.manifest.archive = Some(ArchiveFile {
-        name: "kuroko-x86_64-unknown-linux-gnu-v0.18.0.tgz".into(),
-        sha256: "2".repeat(64),
-        size: 42,
-    });
+fn an_archive_installation_of_the_predecessor_is_recorded_as_this_package_once_committed() {
+    let (f, before) = predecessor_archive_fixture();
+    let record = f.root.join(super::super::ARCHIVE_RECORD);
+    let exe = f.root.join("bin").join(exe_name("pta"));
+    assert_eq!(
+        crate::maintenance::archive(&exe).unwrap().unwrap().version,
+        crate::maintenance::Version(0, 9, 13)
+    );
+    let mut apply = archive_apply(&f);
     apply.back_up().unwrap();
     apply.replace().unwrap();
-    let record = f.root.join(super::super::ARCHIVE_RECORD);
+    f.assert_new();
+    // Replaced, restarted and being verified: the record still names what was installed.
     assert_eq!(fs::read_to_string(&record).unwrap(), before);
     apply.commit().unwrap();
     let written: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&record).unwrap()).unwrap();
-    assert_eq!(written["package"], "kuroko");
-    assert_eq!(written["version"], "0.18.0");
-    assert_eq!(written["bins"], json!(SUCCESSOR));
-    assert_eq!(
-        written["repository"],
-        "https://github.com/elvisbrevi/kuroko"
-    );
+    assert_eq!(written["package"], OWN.name);
+    assert_eq!(written["version"], "0.9.14");
+    assert_eq!(written["bins"], json!(OWN.bins));
+    assert_eq!(written["repository"], OWN.repository);
     assert_eq!(
         written["archive"],
-        "kuroko-x86_64-unknown-linux-gnu-v0.18.0.tgz"
+        "kuroko-x86_64-unknown-linux-gnu-v0.9.14.tgz"
     );
     assert_eq!(written["target"], "x86_64-unknown-linux-gnu");
-    // The record now describes an installation this version recognizes and updates.
-    let exe = f.root.join("bin").join(exe_name(CLI));
-    let archive = crate::maintenance::archive(&exe).unwrap().unwrap();
-    assert_eq!(archive.version, crate::maintenance::Version(0, 18, 0));
+    // The record now describes an installation of this package, which this version updates.
+    for name in OWN.bins {
+        let exe = f.root.join("bin").join(exe_name(name));
+        let archive = crate::maintenance::archive(&exe).unwrap().unwrap();
+        assert_eq!(archive.version, crate::maintenance::Version(0, 9, 14));
+    }
+
+    // Rolled back instead: the predecessor's record comes back byte for byte.
+    let (f, before) = predecessor_archive_fixture();
+    let record = f.root.join(super::super::ARCHIVE_RECORD);
+    let mut apply = archive_apply(&f);
+    apply.back_up().unwrap();
+    apply.replace().unwrap();
+    apply.roll_back().unwrap();
+    assert_eq!(fs::read_to_string(&record).unwrap(), before);
+    f.assert_previous_pair();
 }

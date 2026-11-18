@@ -72,7 +72,7 @@ jobs:
               data = tomllib.loads(text)
               packages = data.get("package", [])
               for package in packages if isinstance(packages, list) else [packages]:
-                  if sys.argv[1] == "Cargo.toml" or package.get("name") == "personal-teams-assistant":
+                  if sys.argv[1] == "Cargo.toml" or package.get("name") == "kuroko":
                       package.pop("version", None)
               return data
           if not os.environ["OLD"].strip() or not os.environ["NEW"].strip():
@@ -87,8 +87,8 @@ jobs:
           # every publication by its 20 minutes.
           if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
             version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-            code=$(curl -sS -A "personal-teams-assistant-ci (github.com/$GITHUB_REPOSITORY)" -o /dev/null -w '%{http_code}' \
-              "https://crates.io/api/v1/crates/personal-teams-assistant/$version" || echo 000)
+            code=$(curl -sS -A "kuroko-ci (github.com/$GITHUB_REPOSITORY)" -o /dev/null -w '%{http_code}' \
+              "https://crates.io/api/v1/crates/kuroko/$version" || echo 000)
             [ "$code" = 200 ] || verdict true true true true false "version $version is not on crates.io (HTTP $code), so it will be released"
           fi
           # Any other push to main was already checked on every platform it needed by its pull request.

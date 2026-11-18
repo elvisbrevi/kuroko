@@ -1485,6 +1485,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "kuroko"
+version = "0.18.0"
+dependencies = [
+ "aes-gcm-siv",
+ "anyhow",
+ "async-trait",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "chrono-tz",
+ "flate2",
+ "fs2",
+ "futures-util",
+ "jsonwebtoken",
+ "keyring",
+ "rand 0.9.5",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "scraper",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "subtle",
+ "tar",
+ "tempfile",
+ "tiberius",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+ "zip",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1785,49 +1828,6 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
-
-[[package]]
-name = "personal-teams-assistant"
-version = "0.17.0"
-dependencies = [
- "aes-gcm-siv",
- "anyhow",
- "async-trait",
- "aws-lc-rs",
- "axum",
- "base64 0.23.1",
- "chrono",
- "chrono-tz",
- "flate2",
- "fs2",
- "futures-util",
- "jsonwebtoken",
- "keyring",
- "rand 0.9.5",
- "regex",
- "reqwest",
- "rusqlite",
- "scraper",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "subtle",
- "tar",
- "tempfile",
- "tiberius",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "toml",
- "tower",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "wiremock",
- "zip",
-]
 
 [[package]]
 name = "phf"

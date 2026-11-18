@@ -236,8 +236,11 @@ fn fingerprint(path: &Path) -> Option<String> {
 }
 /// Host binary installed by this package, and the one installed beside `pta` by the former
 /// `personal-teams-desktop` package (0.4.0 and earlier).
-const HOST_BINARY: &str = "personal-teams-assistant";
+const HOST_BINARY: &str = crate::maintenance::OWN.host;
 const LEGACY_HOST_BINARY: &str = "personal-teams-desktop";
+/// The host's former name, which this package still installs as an alias of the same build: service
+/// entries and units written before 0.18.0 start the host through it.
+const HOST_ALIAS: &str = "personal-teams-assistant";
 /// A running host started from `installed` before that file was replaced (a new install),
 /// the former package's host installed beside it, or a host whose executable was
 /// uninstalled. A host started from another path (e.g. a development build) is never
@@ -258,6 +261,14 @@ fn outdated_at(dir: &Path, installed: &Path) -> Result<bool> {
         && installed.file_stem().and_then(|n| n.to_str()) == Some(HOST_BINARY)
     {
         return Ok(true);
+    }
+    // A host started through the alias beside the installed host: outdated once the alias (which
+    // every install replaces with the host) is no longer the file it started from.
+    if same_directory
+        && running.file_stem().and_then(|n| n.to_str()) == Some(HOST_ALIAS)
+        && installed.file_stem().and_then(|n| n.to_str()) == Some(HOST_BINARY)
+    {
+        return Ok(endpoint.binary != fingerprint(&running));
     }
     if fs::canonicalize(&running)? != fs::canonicalize(installed)? {
         return Ok(false);
@@ -329,17 +340,15 @@ pub async fn retire_outdated_host() -> Result<bool> {
 pub fn installed_host() -> Result<PathBuf> {
     host_executable()
 }
-/// `cargo install` places `pta` beside `personal-teams-assistant`; the host also registers
-/// its path.
+/// `cargo install` places the CLI beside `kuroko-host` (beside `personal-teams-assistant` before
+/// 0.18.0, a name it still installs); the host also registers its path.
 fn host_executable() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
-    let sibling = exe.with_file_name(if cfg!(windows) {
-        format!("{HOST_BINARY}.exe")
-    } else {
-        HOST_BINARY.to_owned()
-    });
-    if sibling.is_file() {
-        return Ok(sibling);
+    for name in [HOST_BINARY, HOST_ALIAS] {
+        let sibling = exe.with_file_name(crate::maintenance::exe_name(name));
+        if sibling.is_file() {
+            return Ok(sibling);
+        }
     }
     let registered = profile_dir()?.join("host-path.txt");
     if let Ok(path) = fs::read_to_string(registered) {

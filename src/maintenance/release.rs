@@ -647,22 +647,29 @@ pub(crate) mod tests {
         writer.finish().unwrap().into_inner()
     }
 
-    const DIR: &str = "personal-teams-assistant-x86_64-unknown-linux-gnu-v0.9.14";
+    const DIR: &str = "kuroko-x86_64-unknown-linux-gnu-v0.9.14";
 
+    /// What an executable of the release archive holds: its own name, the host's `host`.
+    fn body(name: &str) -> Vec<u8> {
+        if name == OWN.host {
+            b"host".to_vec()
+        } else {
+            name.as_bytes().to_vec()
+        }
+    }
+
+    /// The release archive's directory: every executable of this package, a licence and a readme.
     fn pair(prefix: &str) -> Vec<(String, Kind)> {
-        vec![
-            (format!("{prefix}/"), Kind::Dir),
-            (
-                format!("{prefix}/{}", exe_name(CRATE)),
-                Kind::File(b"host".to_vec()),
-            ),
-            (
-                format!("{prefix}/{}", exe_name(CLI)),
-                Kind::File(b"cli".to_vec()),
-            ),
-            (format!("{prefix}/LICENSE"), Kind::File(b"MIT".to_vec())),
-            (format!("{prefix}/README.md"), Kind::File(b"read".to_vec())),
-        ]
+        let mut entries = vec![(format!("{prefix}/"), Kind::Dir)];
+        for name in OWN.bins {
+            entries.push((
+                format!("{prefix}/{}", exe_name(name)),
+                Kind::File(body(name)),
+            ));
+        }
+        entries.push((format!("{prefix}/LICENSE"), Kind::File(b"MIT".to_vec())));
+        entries.push((format!("{prefix}/README.md"), Kind::File(b"read".to_vec())));
+        entries
     }
 
     fn unpacked(bytes: &[u8], zip: bool) -> (tempfile::TempDir, Result<()>) {
@@ -693,10 +700,7 @@ pub(crate) mod tests {
     #[test]
     fn the_address_is_derived_from_the_package_repository_version_and_target() {
         let source = Source::official().unwrap();
-        assert_eq!(
-            source.base,
-            "https://github.com/elvisbrevi/personal-teams-assistant"
-        );
+        assert_eq!(source.base, "https://github.com/elvisbrevi/kuroko");
         assert!(source.https_only);
         assert_eq!(source.hosts, REDIRECT_HOSTS);
         let version = Version(0, 11, 6);
@@ -705,15 +709,19 @@ pub(crate) mod tests {
                 &version,
                 &archive_name("x86_64-unknown-linux-gnu", &version)
             ),
-            "https://github.com/elvisbrevi/personal-teams-assistant/releases/download/v0.11.6/personal-teams-assistant-x86_64-unknown-linux-gnu-v0.11.6.tgz"
+            "https://github.com/elvisbrevi/kuroko/releases/download/v0.11.6/kuroko-x86_64-unknown-linux-gnu-v0.11.6.tgz"
         );
         assert_eq!(
             archive_name("x86_64-pc-windows-msvc", &version),
-            "personal-teams-assistant-x86_64-pc-windows-msvc-v0.11.6.zip"
+            "kuroko-x86_64-pc-windows-msvc-v0.11.6.zip"
         );
         assert_eq!(
             archive_name("aarch64-apple-darwin", &version),
-            "personal-teams-assistant-aarch64-apple-darwin-v0.11.6.tgz"
+            "kuroko-aarch64-apple-darwin-v0.11.6.tgz"
+        );
+        assert_eq!(
+            directory_name("aarch64-apple-darwin", &version),
+            "kuroko-aarch64-apple-darwin-v0.11.6"
         );
     }
 
@@ -742,7 +750,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn only_the_two_executables_are_taken_from_a_release_archive() {
+    fn only_the_packages_executables_are_taken_from_a_release_archive() {
         for zip in [false, true] {
             let entries = pair(DIR);
             let bytes = if zip {
@@ -758,10 +766,12 @@ pub(crate) mod tests {
                 .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
                 .collect();
             names.sort();
-            let mut wanted = vec![exe_name(CRATE), exe_name(CLI)];
+            let mut wanted: Vec<String> = OWN.bins.iter().map(|name| exe_name(name)).collect();
             wanted.sort();
             assert_eq!(names, wanted, "zip: {zip}");
-            assert_eq!(fs::read(bin.join(exe_name(CRATE))).unwrap(), b"host");
+            for name in OWN.bins {
+                assert_eq!(fs::read(bin.join(exe_name(name))).unwrap(), body(name));
+            }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -783,7 +793,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_path_escape_a_link_or_a_missing_executable_refuses_the_whole_archive() {
-        let host = exe_name(CRATE);
+        let host = exe_name(OWN.host);
         let escapes: Vec<(String, &str)> = vec![
             (format!("/{DIR}/{host}"), "absolute"),
             (format!("{DIR}/../{host}"), "climbs out"),
@@ -825,13 +835,11 @@ pub(crate) mod tests {
                 "zip: {zip}"
             );
             // An executable that is itself a link is refused, not followed.
-            let entries = vec![
-                (
-                    format!("{DIR}/{}", exe_name(CLI)),
-                    Kind::File(b"cli".to_vec()),
-                ),
-                (format!("{DIR}/{host}"), Kind::Symlink("/bin/sh")),
-            ];
+            let mut entries: Vec<(String, Kind)> = pair(DIR)
+                .into_iter()
+                .filter(|(name, _)| !name.ends_with(&format!("/{host}")))
+                .collect();
+            entries.push((format!("{DIR}/{host}"), Kind::Symlink("/bin/sh")));
             let bytes = if zip {
                 super::tests::zip(&refs(&entries))
             } else {
@@ -840,7 +848,7 @@ pub(crate) mod tests {
             let (dir, result) = unpacked(&bytes, zip);
             assert!(result.is_err(), "zip: {zip}");
             assert!(!dir.path().join("root/bin").join(&host).exists());
-            // Only one of the two executables.
+            // Only one of the executables.
             let entries = vec![(format!("{DIR}/{host}"), Kind::File(b"host".to_vec()))];
             let bytes = if zip {
                 super::tests::zip(&refs(&entries))
@@ -923,52 +931,45 @@ mod hash_pins {
     }
 }
 
-/// The successor package (docs/rename-kuroko.md): its releases live in its own repository under the
-/// same owner, its archive holds its four executables, and the old repository's address keeps
-/// working after the rename through GitHub's redirect.
+/// The rename (docs/rename-kuroko.md): this package names no successor, so its releases come from
+/// its own repository; its archive holds its executables with the former package's names as
+/// aliases; and the old repository's address keeps working after the rename through GitHub's
+/// redirect.
 #[cfg(test)]
-mod successor {
+mod rename {
     use super::tests::{Kind, tgz, zip};
     use super::*;
-    use crate::maintenance::SUCCESSOR;
+    use crate::maintenance::{PREDECESSORS, SUCCESSOR};
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
-    fn successor() -> Package {
-        SUCCESSOR.expect("this package names its successor")
-    }
-
     #[test]
-    fn the_successor_is_fetched_from_its_own_repository_under_the_same_owner() {
+    fn this_package_is_fetched_from_its_own_repository() {
+        assert_eq!(SUCCESSOR, None);
         let official = Source::official().unwrap();
-        assert_eq!(
-            official.for_package(successor()).base,
-            "https://github.com/elvisbrevi/kuroko"
-        );
+        assert_eq!(official.base, "https://github.com/elvisbrevi/kuroko");
         assert_eq!(official.for_package(OWN), official);
         let double = Source {
             base: "http://127.0.0.1:9/owner/repo".into(),
             hosts: vec!["127.0.0.1".into()],
             https_only: false,
         };
-        let moved = double.for_package(successor());
-        assert_eq!(moved.base, "http://127.0.0.1:9/owner/kuroko");
-        assert_eq!((moved.hosts, moved.https_only), (double.hosts, false));
+        assert_eq!(double.for_package(OWN), double);
         let version = Version(0, 18, 0);
         assert_eq!(
-            archive_name_for(successor(), "x86_64-pc-windows-msvc", &version),
-            "kuroko-x86_64-pc-windows-msvc-v0.18.0.zip"
+            archive_name_for(OWN, "x86_64-pc-windows-msvc", &version),
+            archive_name("x86_64-pc-windows-msvc", &version)
         );
         assert_eq!(
-            directory_name_for(successor(), "aarch64-apple-darwin", &version),
+            directory_name_for(OWN, "aarch64-apple-darwin", &version),
             "kuroko-aarch64-apple-darwin-v0.18.0"
         );
     }
 
     #[test]
-    fn every_executable_of_the_successor_is_unpacked_and_none_may_be_missing() {
+    fn every_executable_and_alias_is_unpacked_and_none_may_be_missing() {
         let dir_name = "kuroko-x86_64-unknown-linux-gnu-v0.18.0";
         for packed in [false, true] {
-            let mut entries: Vec<(String, Kind)> = successor()
+            let mut entries: Vec<(String, Kind)> = OWN
                 .bins
                 .iter()
                 .map(|n| {
@@ -998,25 +999,32 @@ mod successor {
             let archive = dir.path().join("archive");
             fs::write(&archive, build(&entries)).unwrap();
             let bin = dir.path().join("bin");
-            unpack_for(successor(), &archive, packed, dir_name, &bin).unwrap();
-            for name in successor().bins {
+            unpack(&archive, packed, dir_name, &bin).unwrap();
+            for name in OWN.bins {
                 assert_eq!(fs::read(bin.join(exe_name(name))).unwrap(), name.as_bytes());
             }
             assert!(!bin.join("README.md").exists());
-            // Without one of the aliases the archive is not the successor's.
-            entries.retain(|(n, _)| !n.ends_with(&format!("/{}", exe_name("pta"))));
-            let dir = tempfile::tempdir().unwrap();
-            let archive = dir.path().join("archive");
-            fs::write(&archive, build(&entries)).unwrap();
-            let error = unpack_for(
-                successor(),
-                &archive,
-                packed,
-                dir_name,
-                &dir.path().join("bin"),
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains("every executable"), "{error}");
+            // Without one of the predecessor's names, which this package keeps as aliases, the
+            // archive is not this package's.
+            for alias in PREDECESSORS.iter().flat_map(|p| p.bins) {
+                let entries: Vec<(String, Kind)> = entries
+                    .iter()
+                    .filter(|(n, _)| !n.ends_with(&format!("/{}", exe_name(alias))))
+                    .map(|(n, k)| match k {
+                        Kind::File(b) => (n.clone(), Kind::File(b.clone())),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                let dir = tempfile::tempdir().unwrap();
+                let archive = dir.path().join("archive");
+                fs::write(&archive, build(&entries)).unwrap();
+                let error =
+                    unpack(&archive, packed, dir_name, &dir.path().join("bin")).unwrap_err();
+                assert!(
+                    error.to_string().contains("every executable"),
+                    "{alias}: {error}"
+                );
+            }
         }
     }
 

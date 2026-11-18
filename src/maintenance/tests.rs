@@ -40,6 +40,7 @@ fn versions_are_stable_numbers_ordered_by_part() {
 
 #[test]
 fn sparse_index_paths_follow_cargos_layout() {
+    assert_eq!(index_path(CRATE), "ku/ro/kuroko");
     assert_eq!(
         index_path("personal-teams-assistant"),
         "pe/rs/personal-teams-assistant"
@@ -120,10 +121,15 @@ fn crates_io(version: &str) -> String {
     format!("{CRATE} {version} (registry+https://github.com/rust-lang/crates.io-index)")
 }
 
+/// Every executable this package installs, as Windows names them.
+fn windows_bins() -> Vec<String> {
+    OWN.bins.iter().map(|name| format!("{name}.exe")).collect()
+}
+
 fn full_record() -> serde_json::Value {
     json!({
         "version_req": null,
-        "bins": ["personal-teams-assistant", "pta"],
+        "bins": OWN.bins,
         "features": [],
         "all_features": false,
         "no_default_features": true,
@@ -166,10 +172,11 @@ fn write_prebuilt(root: &Path, version: &str, bins: &[&str]) {
 #[test]
 fn an_installation_from_a_prebuilt_archive_is_recognized_and_fetched_again() {
     let dir = tempfile::tempdir().unwrap();
+    let bins = windows_bins();
     write_prebuilt(
         dir.path(),
         "0.10.55",
-        &["personal-teams-assistant.exe", "pta.exe"],
+        &bins.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     let installation = inspect(&dir.path().join("bin").join(exe_name(CLI))).unwrap();
     assert!(installation.prebuilt);
@@ -203,13 +210,13 @@ fn an_installation_from_a_prebuilt_archive_is_recognized_and_fetched_again() {
 #[test]
 fn a_bare_first_format_record_is_not_taken_for_a_prebuilt_installation() {
     let dir = tempfile::tempdir().unwrap();
-    write_prebuilt(dir.path(), "0.10.55", &["personal-teams-assistant", "pta"]);
+    write_prebuilt(dir.path(), "0.10.55", OWN.bins);
     std::fs::remove_dir_all(dir.path().join("binstall")).unwrap();
     let reason = |dir: &Path| inspect(&dir.join("bin").join(exe_name(CLI))).unwrap_err();
     assert!(reason(dir.path()).contains("no Cargo install record"));
-    // Without the pair, or from another source, it is refused as Cargo's own record is.
-    write_prebuilt(dir.path(), "0.10.55", &["pta"]);
-    assert!(reason(dir.path()).contains("both the application and the pta command"));
+    // Without the application, or from another source, it is refused as Cargo's own record is.
+    write_prebuilt(dir.path(), "0.10.55", &[CLI]);
+    assert!(reason(dir.path()).contains("both the application and its command"));
 }
 
 #[test]
@@ -219,9 +226,9 @@ fn the_feature_and_target_choices_are_kept() {
     record["no_default_features"] = json!(false);
     record["features"] = json!(["gui"]);
     record["target"] = json!("aarch64-apple-darwin");
-    record["bins"] = json!(["personal-teams-assistant.exe", "pta.exe"]);
+    record["bins"] = json!(windows_bins());
     write_records(dir.path(), &crates_io("0.9.13"), record);
-    let installation = inspect(&dir.path().join("bin").join("pta")).unwrap();
+    let installation = inspect(&dir.path().join("bin").join(CLI)).unwrap();
     assert_eq!(installation.features, ["gui"]);
     assert_eq!(installation.target.as_deref(), Some("aarch64-apple-darwin"));
     let args: Vec<String> = install_args(
@@ -372,7 +379,7 @@ fn unsupported_installations_say_why() {
     // A custom feature, a missing binary, a debug profile and a hostile target.
     for edit in [
         |r: &mut serde_json::Value| r["features"] = json!(["something-else"]),
-        |r: &mut serde_json::Value| r["bins"] = json!(["pta"]),
+        |r: &mut serde_json::Value| r["bins"] = json!([CLI]),
         |r: &mut serde_json::Value| r["profile"] = json!("dev"),
         |r: &mut serde_json::Value| r["target"] = json!("x; rm -rf /"),
     ] {
@@ -475,15 +482,18 @@ mod processes {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    /// A pair of programs that report `version`, with Cargo's record for them.
+    /// This package's executables, reporting `version`, with Cargo's record for them: the CLI
+    /// prints its JSON, the host and the aliases print the package and version.
     pub fn staged(root: &Path, version: &str, features: serde_json::Value, no_default: bool) {
+        for name in OWN.bins.iter().filter(|name| **name != OWN.cli) {
+            script(
+                &root.join("bin").join(name),
+                &format!("echo '{CRATE} {version}'"),
+            );
+        }
         script(
-            &root.join("bin").join(CLI),
+            &root.join("bin").join(OWN.cli),
             &format!("echo '{{\"ok\":true,\"data\":{{\"cli_version\":\"{version}\"}}}}'"),
-        );
-        script(
-            &root.join("bin").join(CRATE),
-            &format!("echo '{CRATE} {version}'"),
         );
         let mut record = full_record();
         record["features"] = features;
@@ -512,7 +522,7 @@ async fn a_pair_fetched_as_a_prebuilt_archive_is_verified_from_its_own_record() 
     processes::staged(dir.path(), "0.10.57", json!([]), false);
     // `cargo binstall` leaves no second-format record in the root it installs into.
     std::fs::remove_file(dir.path().join(".crates2.json")).unwrap();
-    write_prebuilt(dir.path(), "0.10.57", &[CRATE, CLI]);
+    write_prebuilt(dir.path(), "0.10.57", OWN.bins);
     let wanted = Installation {
         no_default_features: false,
         prebuilt: true,
@@ -539,7 +549,7 @@ async fn a_matched_pair_is_verified_and_recorded() {
         .unwrap();
     assert_eq!(manifest.version, "0.9.14");
     assert_eq!(manifest.staged_at, 77);
-    assert_eq!(manifest.binaries.len(), 2);
+    assert_eq!(manifest.binaries.len(), OWN.bins.len());
     assert!(
         manifest
             .binaries
@@ -579,14 +589,14 @@ async fn a_mismatched_or_incomplete_pair_is_refused() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("pta")
+            .contains("staged command")
     );
 
     // The application reports a different version.
     let host = tempfile::tempdir().unwrap();
     processes::staged(host.path(), "0.9.14", json!([]), true);
     processes::script(
-        &host.path().join("bin").join(CRATE),
+        &host.path().join("bin").join(OWN.host),
         &format!("echo '{CRATE} 0.9.13'"),
     );
     assert!(
@@ -597,11 +607,13 @@ async fn a_mismatched_or_incomplete_pair_is_refused() {
             .contains("application")
     );
 
-    // One of the two executables is missing.
-    let missing = tempfile::tempdir().unwrap();
-    processes::staged(missing.path(), "0.9.14", json!([]), true);
-    std::fs::remove_file(missing.path().join("bin").join(CRATE)).unwrap();
-    assert!(check(missing.path(), "0.9.14").await.is_err());
+    // One of the executables is missing: the application, or an alias.
+    for name in [OWN.host, "pta"] {
+        let missing = tempfile::tempdir().unwrap();
+        processes::staged(missing.path(), "0.9.14", json!([]), true);
+        std::fs::remove_file(missing.path().join("bin").join(name)).unwrap();
+        assert!(check(missing.path(), "0.9.14").await.is_err(), "{name}");
+    }
 
     // A different feature choice than the installed one.
     let features = tempfile::tempdir().unwrap();
@@ -726,7 +738,7 @@ fn write_archive(root: &Path, version: &str, bins: &[&str]) {
     let record = serde_json::json!({
         "schema": 1, "kind": "archive", "package": CRATE, "version": version,
         "target": "x86_64-unknown-linux-gnu", "bins": bins,
-        "repository": "https://github.com/example/personal-teams-assistant",
+        "repository": "https://github.com/example/kuroko",
         "archive": format!("{CRATE}-x86_64-unknown-linux-gnu-v{version}.tgz"),
         "sha256": "0".repeat(64), "installed_at": "2026-11-06T12:00:00Z",
     });
@@ -740,7 +752,7 @@ fn write_archive(root: &Path, version: &str, bins: &[&str]) {
 #[test]
 fn an_archive_installation_is_recognized_and_updated_from_its_release_archive() {
     let dir = tempfile::tempdir().unwrap();
-    write_archive(dir.path(), "0.11.4", &["personal-teams-assistant", "pta"]);
+    write_archive(dir.path(), "0.11.4", OWN.bins);
     let exe = dir.path().join("bin").join(exe_name(CLI));
     let archive = archive(&exe).unwrap().unwrap();
     assert_eq!(archive.version, v("0.11.4"));
@@ -758,10 +770,11 @@ fn an_archive_installation_is_recognized_and_updated_from_its_release_archive() 
     assert!(installation.features.is_empty());
 
     // Windows names keep working.
+    let bins = windows_bins();
     write_archive(
         dir.path(),
         "0.11.4",
-        &["personal-teams-assistant.exe", "pta.exe"],
+        &bins.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     assert!(archive_ok(&exe));
     // Anything else in the record is refused, never guessed.
@@ -771,7 +784,12 @@ fn an_archive_installation_is_recognized_and_updated_from_its_release_archive() 
         ("schema", serde_json::json!(2)),
         ("version", serde_json::json!("0.11.4-beta.1")),
         ("target", serde_json::json!("x86_64 linux; rm")),
-        ("bins", serde_json::json!(["pta"])),
+        ("bins", serde_json::json!([CLI])),
+        // The predecessor's executables under this package's name.
+        (
+            "bins",
+            serde_json::json!(["personal-teams-assistant", "pta"]),
+        ),
     ] {
         let path = dir.path().join(ARCHIVE_RECORD);
         let mut record: serde_json::Value =
@@ -798,7 +816,7 @@ fn cargos_own_record_wins_over_an_archive_record_and_no_record_is_no_archive() {
     let dir = tempfile::tempdir().unwrap();
     let exe = dir.path().join("bin").join(exe_name(CLI));
     assert!(archive(&exe).is_none());
-    write_archive(dir.path(), "0.11.4", &["personal-teams-assistant", "pta"]);
+    write_archive(dir.path(), "0.11.4", OWN.bins);
     write_records(dir.path(), &crates_io("0.11.2"), full_record());
     assert!(archive(&exe).is_none());
     assert_eq!(inspect(&exe).unwrap().version, v("0.11.2"));
@@ -807,68 +825,74 @@ fn cargos_own_record_wins_over_an_archive_record_and_no_record_is_no_archive() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The successor package (docs/rename-kuroko.md).
+// The predecessor package (docs/rename-kuroko.md): installations still recorded under the former
+// crate name are this product's and are updated to this package.
 
-fn successor() -> Package {
-    SUCCESSOR.expect("this package names its successor")
+fn predecessor() -> Package {
+    let [predecessor] = PREDECESSORS else {
+        panic!("this package replaced exactly one predecessor")
+    };
+    *predecessor
 }
 
 #[test]
-fn the_successor_keeps_this_packages_executables_as_aliases() {
-    let next = successor();
+fn this_package_keeps_its_predecessors_executables_as_aliases_and_names_no_successor() {
     assert_eq!(
-        (next.name, next.host, next.cli),
+        (OWN.name, OWN.host, OWN.cli),
         ("kuroko", "kuroko-host", "kuroko")
     );
-    for name in OWN.bins {
-        assert!(next.bins.contains(name), "{name}");
+    assert_eq!((CRATE, CLI), (OWN.name, OWN.cli));
+    assert_eq!(SUCCESSOR, None);
+    let before = predecessor();
+    assert_eq!(
+        (before.name, before.host, before.cli),
+        (
+            "personal-teams-assistant",
+            "personal-teams-assistant",
+            "pta"
+        )
+    );
+    for name in before.bins {
+        assert!(OWN.bins.contains(name), "{name}");
     }
-    for name in OWN.bins.iter().chain(next.bins) {
+    for name in OWN.bins.iter().chain(before.bins) {
         assert!(FAMILY_BINARIES.contains(name), "{name}");
     }
-    assert!(FAMILY.contains(&OWN.name) && FAMILY.contains(&next.name));
-    assert_eq!(package("kuroko"), Some(next));
+    assert!(FAMILY.contains(&OWN.name) && FAMILY.contains(&before.name));
     assert_eq!(package(CRATE), Some(OWN));
+    assert_eq!(package("personal-teams-assistant"), Some(before));
     assert_eq!(package("other"), None);
-    assert_eq!(index_path(next.name), "ku/ro/kuroko");
 }
 
 #[test]
-fn the_successors_index_answer_is_read_for_the_successor_only() {
+fn the_registry_answer_is_read_for_this_package_only() {
     let body = [
-        line("kuroko", "0.18.0", false),
-        line("kuroko", "0.18.1", true),
+        line(CRATE, "0.18.0", false),
+        line(CRATE, "0.18.1", true),
         line("personal-teams-assistant", "0.99.0", false),
     ]
     .join("\n");
-    let release = newest_stable_of(&body, successor()).unwrap().unwrap();
-    assert_eq!(
-        (release.version, release.package),
-        (v("0.18.0"), successor())
-    );
-    // This package's own answer never yields the successor.
-    let own = newest_stable(&[line(CRATE, "0.17.0", false)].join("\n"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(own.package, OWN);
-    assert!(newest_stable_of(&line(CRATE, "0.17.0", false), successor()).is_err());
+    let release = newest_stable(&body).unwrap().unwrap();
+    assert_eq!((release.version, release.package), (v("0.18.0"), OWN));
+    // An answer about the predecessor alone does not describe this package.
+    assert!(newest_stable(&line("personal-teams-assistant", "0.17.0", false)).is_err());
 }
 
 #[test]
-fn a_successor_is_installed_the_way_this_package_was() {
-    let installation = Installation {
-        root: PathBuf::from("/installed"),
-        version: v("0.17.0"),
-        features: Vec::new(),
-        all_features: false,
-        no_default_features: true,
-        target: None,
-        prebuilt: false,
-        archive: false,
-    };
+fn an_installation_recorded_under_the_predecessors_name_is_rebuilt_as_this_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut record = full_record();
+    record["bins"] = json!(predecessor().bins);
+    write_records(
+        dir.path(),
+        "personal-teams-assistant 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
+        record,
+    );
+    let installation = inspect(&dir.path().join("bin").join(exe_name("pta"))).unwrap();
+    assert_eq!(installation.version, v("0.17.0"));
+    assert!(installation.no_default_features && !installation.prebuilt);
     let args = |installation: &Installation| {
-        install_args_for(
-            successor(),
+        install_args(
             installation,
             &v("0.18.0"),
             Path::new("/stage"),
@@ -881,87 +905,84 @@ fn a_successor_is_installed_the_way_this_package_was() {
     let built = args(&installation);
     assert_eq!(built[..4], ["install", "kuroko", "--version", "0.18.0"]);
     assert!(built.contains(&"--no-default-features".to_owned()));
+    // From a prebuilt archive, this package's archive is fetched the same way.
     let fetched = args(&Installation {
         prebuilt: true,
         ..installation
     });
     assert_eq!(fetched[..4], ["binstall", "kuroko", "--version", "=0.18.0"]);
+    // The predecessor's name without its application is refused, as this package's is.
+    let dir = tempfile::tempdir().unwrap();
+    let mut record = full_record();
+    record["bins"] = json!(["pta"]);
+    write_records(
+        dir.path(),
+        "personal-teams-assistant 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
+        record,
+    );
+    assert!(
+        inspect(&dir.path().join("bin").join(exe_name("pta")))
+            .unwrap_err()
+            .contains("both the application and its command")
+    );
 }
 
 #[test]
-fn an_installation_recorded_under_the_successors_name_is_still_recognized() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut record = full_record();
-    record["bins"] = json!(successor().bins);
-    write_records(
-        dir.path(),
-        "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
-        record,
-    );
-    let found = inspect(&dir.path().join("bin").join(CLI)).unwrap();
-    assert_eq!(found.version, v("0.18.0"));
-    // An archive record of the successor, as the update leaves it.
+fn an_archive_record_of_the_predecessor_is_still_recognized() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("bin")).unwrap();
     let archive_record = |bins: &[&str]| {
         json!({
-            "schema": 1, "kind": "archive", "package": "kuroko", "version": "0.18.0",
-            "target": "x86_64-unknown-linux-gnu", "bins": bins,
+            "schema": 1, "kind": "archive", "package": "personal-teams-assistant",
+            "version": "0.17.0", "target": "x86_64-unknown-linux-gnu", "bins": bins,
         })
         .to_string()
     };
     std::fs::write(
         dir.path().join(ARCHIVE_RECORD),
-        archive_record(successor().bins),
+        archive_record(predecessor().bins),
     )
     .unwrap();
-    let exe = dir.path().join("bin").join(CLI);
-    assert_eq!(archive(&exe).unwrap().unwrap().version, v("0.18.0"));
-    // The successor's name with this package's executables only is not a valid record.
+    let exe = dir.path().join("bin").join(exe_name("pta"));
+    assert_eq!(archive(&exe).unwrap().unwrap().version, v("0.17.0"));
+    let installation = inspect(&exe).unwrap();
+    assert!(installation.archive);
+    assert_eq!(installation.version, v("0.17.0"));
+    // The predecessor's name with this package's executables is not a record either wrote.
     std::fs::write(dir.path().join(ARCHIVE_RECORD), archive_record(OWN.bins)).unwrap();
     assert!(archive(&exe).unwrap().is_err());
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_staged_successor_is_verified_with_all_its_executables() {
+async fn this_package_is_staged_with_all_its_executables_and_names_no_package() {
     let dir = tempfile::tempdir().unwrap();
-    let version = "0.18.0";
-    processes::script(
-        &dir.path().join("bin").join("kuroko"),
-        &format!("echo '{{\"ok\":true,\"data\":{{\"cli_version\":\"{version}\"}}}}'"),
-    );
-    for name in ["kuroko-host", "personal-teams-assistant", "pta"] {
-        processes::script(
-            &dir.path().join("bin").join(name),
-            &format!("echo 'kuroko {version}'"),
-        );
-    }
-    let mut record = full_record();
-    record["bins"] = json!(successor().bins);
-    write_records(
-        dir.path(),
-        "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
-        record,
-    );
+    processes::staged(dir.path(), "0.18.0", json!([]), true);
     let wanted = processes::wanted();
-    let manifest = verify_for(successor(), dir.path(), &v(version), &wanted, &[], 5)
+    let manifest = verify(dir.path(), &v("0.18.0"), &wanted, &[], 5)
         .await
         .unwrap();
-    assert_eq!(manifest.package.as_deref(), Some("kuroko"));
-    assert_eq!(manifest.staged_package(), Some(successor()));
-    assert_eq!(manifest.binaries.len(), 4);
-    // The same root is not this package, and this package's manifests name no package.
+    assert_eq!(manifest.package, None);
+    assert_eq!(manifest.staged_package(), Some(OWN));
+    assert_eq!(
+        manifest
+            .binaries
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        OWN.bins
+    );
+    assert_eq!(other_package(OWN), None);
+    // The same root is not the predecessor's package.
     assert!(
-        verify(dir.path(), &v(version), &wanted, &[], 5)
+        verify_for(predecessor(), dir.path(), &v("0.18.0"), &wanted, &[], 5)
             .await
             .is_err()
     );
-    assert_eq!(other_package(OWN), None);
-    // A successor without one of its aliases is refused.
+    // Without one of the aliases it is refused.
     std::fs::remove_file(dir.path().join("bin").join("pta")).unwrap();
     assert!(
-        verify_for(successor(), dir.path(), &v(version), &wanted, &[], 5)
+        verify(dir.path(), &v("0.18.0"), &wanted, &[], 5)
             .await
             .is_err()
     );

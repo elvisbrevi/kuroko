@@ -5,6 +5,9 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {
-        println!("cargo:rustc-link-arg-bin=personal-teams-assistant=/STACK:8388608");
+        // The host and its former name, kept as an alias.
+        for host in ["kuroko-host", "personal-teams-assistant"] {
+            println!("cargo:rustc-link-arg-bin={host}=/STACK:8388608");
+        }
     }
 }

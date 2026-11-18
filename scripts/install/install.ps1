@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-Installs Personal Teams Assistant on Windows from this repository's prebuilt release archive,
-for the current user only: no administrator rights, no WSL, no Rust.
+Installs Kuroko on Windows from this repository's prebuilt release archive, for the current user
+only: no administrator rights, no WSL, no Rust.
 
 .DESCRIPTION
 The command the portal shows (Settings > Machines > Connect this computer):
 
-  Invoke-RestMethod -UseBasicParsing https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.ps1 -OutFile "$env:TEMP\pta-install.ps1"
-  powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\pta-install.ps1" -Origin https://your-portal.example
+  Invoke-RestMethod -UseBasicParsing https://github.com/elvisbrevi/kuroko/releases/latest/download/install.ps1 -OutFile "$env:TEMP\kuroko-install.ps1"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\kuroko-install.ps1" -Origin https://your-portal.example
 
 In order: detects the target; resolves the version (the repository's latest release unless
 -Version is given); downloads that release's archive and its .sha256 over HTTPS from the release,
@@ -16,25 +16,34 @@ anything is unpacked or run; verifies build provenance with `gh attestation veri
 installed and signed in; unpacks into a temporary directory inside the installation root and moves
 it into place (a failure leaves the previous installation working); writes the archive
 installation record; adds the bin directory to the user PATH through the registry (never setx);
-registers the host to start at login (`pta service install`, a scheduled task, no console window);
-and, with -Origin, starts the browser sign-in so the approval page opens for "Trust this machine".
+registers the host to start at login (`kuroko service install`, a scheduled task, no console
+window); and, with -Origin, starts the browser sign-in so the approval page opens for "Trust this
+machine".
+
+The archive holds the CLI `kuroko.exe`, the host `kuroko-host.exe` and, as aliases of the same
+programs, their names before the rename (`pta.exe`, `personal-teams-assistant.exe`), so scheduled
+tasks, scripts and MCP configurations written for those keep working.
 
 The command carries no secret: only the coordinator's public HTTPS origin. Running it again
-repairs or upgrades the same installation; the profile (settings, credentials, Microsoft session,
-machine identity) is never created, replaced or removed by this script.
+repairs or upgrades the same installation, including one made before the rename in
+%LOCALAPPDATA%\Programs\personal-teams-assistant, which is upgraded where it is; the profile
+(settings, credentials, Microsoft session, machine identity) is never created, replaced or removed
+by this script.
 
 .PARAMETER Origin
 Your coordinator portal's HTTPS origin: after installing, start the browser sign-in.
 .PARAMETER Version
 Install this release instead of the latest one.
 .PARAMETER Root
-Installation root (default: %LOCALAPPDATA%\Programs\personal-teams-assistant).
+Installation root (default: %LOCALAPPDATA%\Programs\kuroko, or the installation made before the
+rename in %LOCALAPPDATA%\Programs\personal-teams-assistant).
 .PARAMETER Integrations
-Also install the skill and register `pta mcp` with the coding CLIs found; otherwise the commands
+Also install the skill and register `kuroko mcp` with the coding CLIs found; otherwise the commands
 are printed.
 .PARAMETER UnattendedUpdates
 Let this computer install newer releases by itself when nothing would be interrupted (off unless
-you pass this; change it later with `pta update unattended on|off --confirmed` or the local page).
+you pass this; change it later with `kuroko update unattended on|off --confirmed` or the local
+page).
 .PARAMETER NoService
 Do not register the host to start at login.
 .PARAMETER NoBrowser
@@ -42,7 +51,8 @@ Print the approval link instead of opening the browser.
 .PARAMETER Uninstall
 Remove the service entry, the binaries and the PATH entry; keep the profile.
 .PARAMETER TestSource
-Only for the installer's own tests, with PTA_INSTALL_TEST=1: a local directory instead of the release.
+Only for the installer's own tests, with KUROKO_INSTALL_TEST=1 (or PTA_INSTALL_TEST=1): a local
+directory instead of the release.
 #>
 [CmdletBinding()]
 param(
@@ -66,15 +76,35 @@ $SkipBrowser = $NoBrowser.IsPresent
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Repository = 'elvisbrevi/personal-teams-assistant'
-$Package = 'personal-teams-assistant'
-$Cli = 'pta'
+$Repository = 'elvisbrevi/kuroko'
+$Product = 'kuroko'
+# The package before 0.18.0: its default root, PATH entry and Cargo or binstall records belong to
+# this product too, and its releases can still be installed with -Version.
+$Legacy = 'personal-teams-assistant'
+# What the release being installed is published as; Use-LegacyLayout switches these for a release
+# before the rename.
+$Package = $Product
+$Cli = 'kuroko'
+$HostBin = 'kuroko-host'
+$Bins = @('kuroko', 'kuroko-host', 'personal-teams-assistant', 'pta')
+$Provenance = $Repository
+$RecordRepository = "https://github.com/$Repository"
+# The skill directory and the MCP server name registered with coding CLIs keep the former name
+# until a later release migrates the clients' configuration.
+$Integration = $Legacy
 $Record = 'install.json'
 $Target = 'x86_64-pc-windows-msvc'
 
 function Say([string] $Text) { Write-Host $Text }
 function Warn([string] $Text) { Write-Warning $Text }
 function Fail([string] $Text) { throw "install.ps1: $Text" }
+
+# A variable of this product: KUROKO_<NAME>, or the former PTA_<NAME> when that is not set.
+function Get-EnvValue([string] $Name) {
+    $value = [Environment]::GetEnvironmentVariable("KUROKO_$Name")
+    if (-not $value) { $value = [Environment]::GetEnvironmentVariable("PTA_$Name") }
+    return $value
+}
 
 # ---------------------------------------------------------------------------------------------
 # Inputs.
@@ -95,8 +125,21 @@ function Test-Origin([string] $Value) {
 
 function Test-Version([string] $Value) {
     if ($Value -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-        Fail 'Use a release version such as 0.11.4.'
+        Fail 'Use a release version such as 0.18.0.'
     }
+}
+
+# Releases before 0.18.0 were published as personal-teams-assistant, with two executables.
+function Test-BeforeRename([string] $Value) { return ([version] $Value) -lt ([version] '0.18.0') }
+
+function Use-LegacyLayout {
+    $script:Package = $Legacy
+    $script:Cli = 'pta'
+    $script:HostBin = $Legacy
+    $script:Bins = @($Legacy, 'pta')
+    # Built, attested and recorded under the repository's name at the time.
+    $script:Provenance = "elvisbrevi/$Legacy"
+    $script:RecordRepository = "https://github.com/elvisbrevi/$Legacy"
 }
 
 function Get-Architecture {
@@ -108,7 +151,8 @@ function Get-Architecture {
 # ---------------------------------------------------------------------------------------------
 # Downloads. A release asset is served by github.com with one redirect to its own asset storage;
 # only that redirect is followed, and only over HTTPS. The test source is a local directory that
-# only PTA_INSTALL_TEST=1 with -TestSource enables; the portal's command never sets either.
+# only KUROKO_INSTALL_TEST=1 (or PTA_INSTALL_TEST=1) with -TestSource enables; the portal's command
+# never sets either.
 
 $AssetHosts = @('objects.githubusercontent.com', 'release-assets.githubusercontent.com', 'github-releases.githubusercontent.com')
 
@@ -116,7 +160,7 @@ function Get-Redirect([string] $Url) {
     $request = [System.Net.HttpWebRequest]::Create($Url)
     $request.AllowAutoRedirect = $false
     $request.Method = 'GET'
-    $request.UserAgent = "$Package-installer"
+    $request.UserAgent = "$Product-installer"
     try {
         $response = $request.GetResponse()
     } catch [System.Net.WebException] {
@@ -147,7 +191,7 @@ function Get-Asset([string] $Name, [string] $Destination) {
     }
     $client = New-Object System.Net.WebClient
     try {
-        $client.Headers['User-Agent'] = "$Package-installer"
+        $client.Headers['User-Agent'] = "$Product-installer"
         $client.DownloadFile($uri, $Destination)
     } catch {
         return $false
@@ -169,81 +213,121 @@ function Get-LatestVersion {
 # ---------------------------------------------------------------------------------------------
 # What is already on this computer.
 
-function Test-CargoRecord([string] $Dir) {
-    foreach ($name in '.crates2.json', '.crates.toml') {
-        $file = Join-Path $Dir $name
-        if ((Test-Path -LiteralPath $file -PathType Leaf) -and
-            (Select-String -LiteralPath $file -SimpleMatch "`"$Package " -Quiet)) { return $true }
+# The product's packages Cargo records in $Dir, under either name.
+function Get-CargoPackages([string] $Dir) {
+    $found = @()
+    foreach ($candidate in $Legacy, $Product) {
+        foreach ($name in '.crates2.json', '.crates.toml') {
+            $file = Join-Path $Dir $name
+            if ((Test-Path -LiteralPath $file -PathType Leaf) -and
+                (Select-String -LiteralPath $file -SimpleMatch "`"$candidate " -Quiet)) {
+                $found += $candidate
+                break
+            }
+        }
     }
-    return $false
+    return $found
 }
 
-# A Cargo installation of this package would be a second copy: two hosts for one profile, updated
-# two ways. Refuse and say how to switch.
+# A Cargo installation of this product, under either package name, would be a second copy: two
+# hosts for one profile, updated two ways. Refuse and say how to switch.
 function Assert-NoCargoCopy {
     $found = $null
+    $packages = @()
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
-    if (Test-CargoRecord $cargoHome) { $found = $cargoHome }
-    $onPath = Get-Command "$Cli.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($onPath -and ($onPath.Source -ne (Join-Path $Bin "$Cli.exe"))) {
+    $recorded = @(Get-CargoPackages $cargoHome)
+    if ($recorded.Count -gt 0) { $found = $cargoHome; $packages = $recorded }
+    foreach ($name in 'kuroko', 'pta') {
+        $onPath = Get-Command "$name.exe" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $onPath -or ($onPath.Source -eq (Join-Path $Bin "$name.exe"))) { continue }
         $other = Split-Path (Split-Path $onPath.Source -Parent) -Parent
-        if (Test-CargoRecord $other) { $found = $other }
-        else { Warn "Another $Cli is on your PATH at $($onPath.Source); the one installed here may be shadowed by it." }
+        $recorded = @(Get-CargoPackages $other)
+        if ($recorded.Count -gt 0) { $found = $other; $packages = $recorded }
+        else { Warn "Another $name is on your PATH at $($onPath.Source); the one installed here may be shadowed by it." }
     }
     if (-not $found) { return }
+    # The commands of the package installed there; kuroko takes over the former package's
+    # executables only when forced.
+    $theirCli = if ($packages -contains $Product) { 'kuroko' } else { 'pta' }
+    $stay = if ($packages -contains $Legacy) { "cargo install $Product --locked --force" } else { "cargo install $Product --locked" }
+    $uninstallLines = ($packages | ForEach-Object { "    cargo uninstall $_" }) -join "`n"
     Fail @"
-$Package is already installed with Cargo in $found.
+$($packages -join ' and ') is already installed with Cargo in $found.
 Installing a second copy next to it would give one profile two hosts. To switch to this
 installation, which needs no Rust toolchain, run:
 
-    pta service uninstall --confirmed
-    pta app quit
-    cargo uninstall $Package
+    $theirCli service uninstall --confirmed
+    $theirCli app quit
+$uninstallLines
 
 and then this command again. Your profile, credentials and Microsoft session are kept.
-To stay with Cargo instead, update with: cargo install $Package --locked
+To stay with Cargo instead, update with: $stay
 "@
 }
 
 # `cargo uninstall` leaves binstall's own record (crates-v1.json, one JSON object per line) naming
-# the package. After a successful install, with no Cargo installation left, drop only this
-# package's lines when the file is exactly that format, writing it atomically; otherwise say so.
+# the package. After a successful install, with no Cargo installation left, drop only the lines of
+# this product's packages when the file is exactly that format, writing it atomically; otherwise
+# say so.
 function Clear-StaleBinstallRecord {
     $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE '.cargo' }
     $file = Join-Path $cargoHome 'binstall\crates-v1.json'
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return }
     $utf8 = New-Object System.Text.UTF8Encoding $false
     $text = [System.IO.File]::ReadAllText($file, $utf8)
-    $prefix = "{`"name`":`"$Package`""
-    if (-not $text.Contains($prefix)) { return }
-    if (Test-CargoRecord $cargoHome) { return }
+    $legacyPrefix = "{`"name`":`"$Legacy`""
+    $productPrefix = "{`"name`":`"$Product`""
+    $names = @()
+    if ($text.Contains($legacyPrefix)) { $names += $Legacy }
+    if ($text.Contains($productPrefix)) { $names += $Product }
+    if ($names.Count -eq 0) { return }
+    $named = $names -join ' and '
+    if (@(Get-CargoPackages $cargoHome).Count -gt 0) { return }
     $lines = $text -split "`n"
     foreach ($line in $lines) {
         $bare = $line.TrimEnd("`r")
         if ($bare.Trim() -and -not ($bare.StartsWith('{"name":"') -and $bare.EndsWith('}'))) {
-            Warn "binstall's record $file still names $Package, which is no longer installed with Cargo; delete its line by hand."
+            Warn "binstall's record $file still names $named, which is no longer installed with Cargo; delete its line by hand."
             return
         }
     }
-    $kept = @($lines | Where-Object { -not $_.StartsWith($prefix) })
-    $temp = "$file.pta-tmp"
+    $kept = @($lines | Where-Object { -not ($_.StartsWith($legacyPrefix) -or $_.StartsWith($productPrefix)) })
+    $temp = "$file.kuroko-tmp"
     try {
         [System.IO.File]::WriteAllText($temp, ($kept -join "`n"), $utf8)
         Move-Item -LiteralPath $temp -Destination $file -Force
-        Say "Removed the stale cargo binstall entry for $Package from $file."
+        Say "Removed the stale cargo binstall entry for $named from $file."
     } catch {
         Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-        Warn "The stale cargo binstall entry for $Package in $file could not be removed; delete that line by hand."
+        Warn "The stale cargo binstall entry for $named in $file could not be removed; delete that line by hand."
     }
 }
 
 function Get-ProfileDir {
-    if ($env:PTA_PROFILE_DIR) { return $env:PTA_PROFILE_DIR }
+    $dir = Get-EnvValue 'PROFILE_DIR'
+    if ($dir) { return $dir }
     return Join-Path $env:APPDATA 'dev.personalteams.assistant'
 }
 
+# This product's archive record in the root $Dir, under either package name.
+function Test-ProductRecord([string] $Dir) {
+    $file = Join-Path $Dir $Record
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+    try { $data = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json } catch { return $false }
+    return [bool] ($data.kind -eq 'archive' -and (@($Legacy, $Product) -contains $data.package))
+}
+
+function Get-LegacyRoot { return Join-Path $env:LOCALAPPDATA "Programs\$Legacy" }
+function Get-ProductRoot { return Join-Path $env:LOCALAPPDATA "Programs\$Product" }
+
+# An installation made before the rename is upgraded, or removed, where it is.
+function Get-DefaultRoot {
+    if (Test-ProductRecord (Get-LegacyRoot)) { return Get-LegacyRoot }
+    return Get-ProductRoot
+}
+
 # ---------------------------------------------------------------------------------------------
-# The host. Every pta call reads no input, and its JSON reply is parsed, never executed.
+# The host. Every CLI call reads no input, and its JSON reply is parsed, never executed.
 
 # Windows PowerShell 5.1 turns a native program's standard error into a terminating error under
 # 'Stop'; native calls run with 'Continue' and are judged by their exit code.
@@ -259,22 +343,36 @@ function Test-GhSignedIn {
     return (Invoke-Native gh auth status).Code -eq 0
 }
 
-function Invoke-Pta {
+# The first of these executables in the bin directory. The names of the release being installed
+# come first, then either layout's, so an installation from before the rename is stopped and
+# removed with its own.
+function Get-Present {
+    foreach ($name in $args) {
+        $exe = Join-Path $Bin "$name.exe"
+        if (Test-Path -LiteralPath $exe -PathType Leaf) { return $exe }
+    }
+    return $null
+}
+
+function Get-CliPath { return Get-Present $Cli 'kuroko' 'pta' }
+
+function Invoke-Cli {
     $ErrorActionPreference = 'Continue'
-    $exe = Join-Path $Bin "$Cli.exe"
+    $exe = Get-CliPath
+    if (-not $exe) { return [pscustomobject] @{ Code = 1; Text = '' } }
     # Standard output only: a JSON reply is one line there, and notices go to standard error.
     $output = '' | & $exe @args 2>$null | Out-String
     return [pscustomobject] @{ Code = $LASTEXITCODE; Text = $output.Trim() }
 }
 
-function Get-PtaReply {
-    $result = Invoke-Pta '--json' @args
+function Get-CliReply {
+    $result = Invoke-Cli '--json' @args
     try { return $result.Text | ConvertFrom-Json } catch { return $null }
 }
 
 function Test-HostRunning {
-    if (-not (Test-Path -LiteralPath (Join-Path $Bin "$Cli.exe"))) { return $false }
-    $reply = Get-PtaReply 'status'
+    if (-not (Get-CliPath)) { return $false }
+    $reply = Get-CliReply 'status'
     return [bool] ($reply -and $reply.data -and $reply.data.host_running)
 }
 
@@ -286,27 +384,29 @@ function Wait-Host([bool] $Running) {
     return $false
 }
 
-function Stop-PtaHost {
+function Stop-AppHost {
     if (Test-HostRunning) {
         Say "Stopping the running host (the assistant's last state is kept)..."
-        Invoke-Pta '--json' 'app' 'quit' | Out-Null
+        Invoke-Cli '--json' 'app' 'quit' | Out-Null
         if (-not (Wait-Host $false)) { Warn 'The host did not stop within a minute.' }
     }
 }
 
 # A host started from this session as the user (a GUI-subsystem program: no console window).
-function Start-PtaHost {
+function Start-AppHost {
     if (Test-HostRunning) { return $true }
-    Start-Process -FilePath (Join-Path $Bin "$Package.exe") -ArgumentList '--host' -WindowStyle Hidden | Out-Null
+    $exe = Get-Present $HostBin 'kuroko-host' $Legacy
+    if (-not $exe) { return $false }
+    Start-Process -FilePath $exe -ArgumentList '--host' -WindowStyle Hidden | Out-Null
     return (Wait-Host $true)
 }
 
-function Install-PtaService {
-    if (-not (Start-PtaHost)) {
+function Install-HostService {
+    if (-not (Start-AppHost)) {
         Warn "The host did not start; run '$Cli status' to see why. It was not registered to start at login."
         return
     }
-    $reply = Get-PtaReply 'service' 'install' '--confirmed'
+    $reply = Get-CliReply 'service' 'install' '--confirmed'
     if (-not $reply -or -not $reply.ok) {
         $message = if ($reply) { $reply.message } else { 'no answer' }
         Warn "The host was not registered to start at login: $message"
@@ -314,13 +414,13 @@ function Install-PtaService {
     }
     $name = $reply.data.name
     # Hand the host over to the Task Scheduler, so it runs now as it will after a login.
-    Stop-PtaHost
+    Stop-AppHost
     $started = Invoke-Native schtasks.exe /Run /TN $name
     if ($started.Code -eq 0 -and (Wait-Host $true)) {
         Say "The host runs as a login task ($name)."
     } else {
         Warn 'The Task Scheduler did not start the host now; it starts at your next login.'
-        Start-PtaHost | Out-Null
+        Start-AppHost | Out-Null
     }
 }
 
@@ -330,11 +430,11 @@ function Enable-UnattendedUpdates {
         Say "Unattended updates are off. To let this computer install new releases by itself: $Cli update unattended on --confirmed"
         return
     }
-    if (-not (Start-PtaHost)) {
+    if (-not (Start-AppHost)) {
         Warn "The host did not start, so unattended updates were not turned on. Later: $Cli update unattended on --confirmed"
         return
     }
-    $reply = Get-PtaReply 'update' 'unattended' 'on' '--confirmed'
+    $reply = Get-CliReply 'update' 'unattended' 'on' '--confirmed'
     if (-not $reply -or -not $reply.ok) {
         $message = if ($reply) { $reply.message } else { 'no answer' }
         Warn "Unattended updates were not turned on: $message"
@@ -344,7 +444,9 @@ function Enable-UnattendedUpdates {
 }
 
 # ---------------------------------------------------------------------------------------------
-# PATH for new shells: the user PATH in the registry, keeping its type and every other entry.
+# PATH for new shells: the user PATH in the registry, keeping its type and every other entry. It
+# holds one entry for this product, the current root's bin directory: the default roots' entries
+# (before and after the rename) are replaced by it.
 
 function Get-UserPath {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
@@ -366,50 +468,68 @@ function Set-UserPath([string] $Value) {
         $key.Close()
     }
     # Tell running programs (Explorer, new terminals) that the environment changed.
-    if (-not ('PtaInstall.Environment' -as [type])) {
-        Add-Type -Namespace PtaInstall -Name Environment -MemberDefinition @'
+    if (-not ('KurokoInstall.Environment' -as [type])) {
+        Add-Type -Namespace KurokoInstall -Name Environment -MemberDefinition @'
 [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
 public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
 '@
     }
     $result = [UIntPtr]::Zero
-    [PtaInstall.Environment]::SendMessageTimeout([IntPtr] 0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref] $result) | Out-Null
+    [KurokoInstall.Environment]::SendMessageTimeout([IntPtr] 0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref] $result) | Out-Null
 }
 
 function Test-OurEntry([string] $Entry) { return $Entry.TrimEnd('\') -ieq $Bin }
 
+# The bin directory of a default root other than this installation's.
+function Test-OtherDefaultEntry([string] $Entry) {
+    $trimmed = $Entry.TrimEnd('\')
+    foreach ($defaultRoot in (Get-LegacyRoot), (Get-ProductRoot)) {
+        $defaultBin = Join-Path $defaultRoot 'bin'
+        if ($defaultBin -ine $Bin -and $trimmed -ieq $defaultBin) { return $true }
+    }
+    return $false
+}
+
 # The value is kept as it is, empty entries and separators included: adding prepends one entry and
-# removing takes out only that entry, so an install and an uninstall leave it byte for byte.
+# removing takes out only this product's entries, so an install and an uninstall leave it byte for
+# byte.
 function Add-UserPath {
     $current = Get-UserPath
-    if (@($current -split ';' | Where-Object { Test-OurEntry $_ }).Count -gt 0) {
+    $kept = @($current -split ';' | Where-Object { -not (Test-OtherDefaultEntry $_) })
+    $value = $kept -join ';'
+    if (@($kept | Where-Object { Test-OurEntry $_ }).Count -gt 0) {
         Say "$Bin is already on your user PATH."
     } else {
-        Set-UserPath $(if ($current) { "$Bin;$current" } else { $Bin })
+        $value = if ($value) { "$Bin;$value" } else { $Bin }
         Say "Added $Bin to your user PATH (new terminals see it)."
     }
+    if ($value -ne $current) { Set-UserPath $value }
     if (-not (($env:Path -split ';') | Where-Object { Test-OurEntry $_ })) { $env:Path = "$Bin;$env:Path" }
 }
 
+# This installation's entry, and a default root's entry whose bin directory no longer exists.
 function Remove-UserPath {
     $current = Get-UserPath
     $parts = @($current -split ';')
-    $kept = @($parts | Where-Object { -not (Test-OurEntry $_) })
+    $kept = @($parts | Where-Object {
+            -not ((Test-OurEntry $_) -or ((Test-OtherDefaultEntry $_) -and -not (Test-Path -LiteralPath $_)))
+        })
     if ($kept.Count -ne $parts.Count) { Set-UserPath ($kept -join ';') }
 }
 
 # ---------------------------------------------------------------------------------------------
-# Coding CLIs: the skill and `pta mcp`, with consent; the exact commands otherwise.
+# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both keep
+# the name they had before the rename ($Integration).
 
 function Register-Integrations {
-    $config = Get-PtaReply 'mcp' 'config'
+    $config = Get-CliReply 'mcp' 'config'
     $command = if ($config -and $config.data -and $config.data.command) { $config.data.command } else { Join-Path $Bin "$Cli.exe" }
     $found = $false
     foreach ($tool in 'claude', 'codex') {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { continue }
         $found = $true
-        $skill = Join-Path $env:USERPROFILE ".$tool\skills\$Package"
-        $mcp = if ($tool -eq 'claude') { @('mcp', 'add', '--scope', 'user', $Package, '--', $command, 'mcp') } else { @('mcp', 'add', $Package, '--', $command, 'mcp') }
+        $skill = Join-Path $env:USERPROFILE ".$tool\skills\$Integration"
+        $mcp = if ($tool -eq 'claude') { @('mcp', 'add', '--scope', 'user', $Integration, '--', $command, 'mcp') } else { @('mcp', 'add', $Integration, '--', $command, 'mcp') }
         if (-not $WantIntegrations) {
             Say "  ${tool}: $Cli skill install `"$skill`""
             $shown = foreach ($word in $mcp) { if ($word -match '\s') { '"' + $word + '"' } else { $word } }
@@ -420,13 +540,13 @@ function Register-Integrations {
             Say "${tool}: the skill is already at $skill (updates refresh it while unmodified)."
         } else {
             New-Item -ItemType Directory -Force -Path (Split-Path $skill -Parent) | Out-Null
-            $installed = Invoke-Pta 'skill' 'install' $skill
+            $installed = Invoke-Cli 'skill' 'install' $skill
             if ($installed.Code -eq 0) { Say "${tool}: installed the skill at $skill." } else { Warn "${tool}: the skill could not be installed at $skill." }
         }
-        if ((Invoke-Native $tool mcp get $Package).Code -eq 0) {
-            Say "${tool}: $Package is already registered as an MCP server."
+        if ((Invoke-Native $tool mcp get $Integration).Code -eq 0) {
+            Say "${tool}: $Integration is already registered as an MCP server."
         } else {
-            if ((Invoke-Native $tool @mcp).Code -eq 0) { Say "${tool}: registered '$command mcp' as the MCP server $Package." } else { Warn "${tool}: registering the MCP server failed." }
+            if ((Invoke-Native $tool @mcp).Code -eq 0) { Say "${tool}: registered '$command mcp' as the MCP server $Integration." } else { Warn "${tool}: registering the MCP server failed." }
         }
     }
     if (-not $found) {
@@ -440,14 +560,14 @@ function Register-Integrations {
 # Joining the account.
 
 function Join-Account {
-    $settings = Get-PtaReply 'tools' 'call' 'machine_settings'
+    $settings = Get-CliReply 'tools' 'call' 'machine_settings'
     $current = if ($settings -and $settings.data -and $settings.data.coordinator) { ([string] $settings.data.coordinator).TrimEnd('/') } else { '' }
     if ($current) {
         if ($current -eq $Origin) { Say "This computer is already connected to $Origin; its machine identity is kept." }
         else { Warn "This computer is connected to $current. Disconnect it there first ('$Cli tools call machine_disconnect'), then run this command again." }
         return
     }
-    $reply = Get-PtaReply 'auth' 'machine' 'login' $Origin '--no-browser'
+    $reply = Get-CliReply 'auth' 'machine' 'login' $Origin '--no-browser'
     $url = if ($reply -and $reply.data) { [string] $reply.data.approval_url } else { '' }
     if (-not $url.StartsWith("$Origin/login?enroll=")) {
         $message = if ($reply) { $reply.message } else { 'no answer' }
@@ -461,7 +581,7 @@ function Join-Account {
     if ($SkipBrowser) { Say 'Open that link on any device where you are signed in to the portal.' }
     else { Start-Process $url }
     Say 'Waiting for the approval (up to ten minutes)...'
-    $finished = Get-PtaReply 'auth' 'machine' 'finish' '--wait'
+    $finished = Get-CliReply 'auth' 'machine' 'finish' '--wait'
     if ($finished -and $finished.ok -and $finished.data.connected) {
         Say "Connected to $Origin. Choose this computer's allowed directories in the portal (Settings > Machines) before running work on it."
     } else {
@@ -476,7 +596,7 @@ function Join-Account {
 function Install-Archive {
     $arch = Get-Architecture
     if ($arch -ne 'AMD64') {
-        Fail "There is no prebuilt archive for Windows on $arch. Install with Cargo instead: cargo install $Package --locked (needs the Rust toolchain from https://rustup.rs)."
+        Fail "There is no prebuilt archive for Windows on $arch. Install with Cargo instead: cargo install $Product --locked (needs the Rust toolchain from https://rustup.rs)."
     }
     Assert-NoCargoCopy
     if (-not $Version) {
@@ -488,6 +608,7 @@ function Install-Archive {
         }
     }
     Test-Version $Version
+    if (Test-BeforeRename $Version) { Use-LegacyLayout }
     $archive = "$Package-$Target-v$Version.zip"
     Say "Installing $Package $Version for $Target into $Root."
 
@@ -511,7 +632,7 @@ function Install-Archive {
         if ($TestSource) {
             Say 'Build provenance not checked (test source).'
         } elseif (Test-GhSignedIn) {
-            if ((Invoke-Native gh attestation verify $zip --repo $Repository).Code -ne 0) { Fail "GitHub could not verify the archive's build provenance. Nothing was changed. Run 'gh attestation verify' on the archive to see why." }
+            if ((Invoke-Native gh attestation verify $zip --repo $Provenance).Code -ne 0) { Fail "GitHub could not verify the archive's build provenance. Nothing was changed. Run 'gh attestation verify' on the archive to see why." }
             Say 'Build provenance verified with gh attestation verify.'
         } else {
             Say 'Build provenance not checked: install the GitHub CLI (gh) and sign in to verify it. The SHA-256 matched.'
@@ -522,23 +643,23 @@ function Install-Archive {
         New-Item -ItemType Directory -Path $newBin | Out-Null
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         try { [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $unpacked) } catch { Fail 'The archive could not be unpacked. Nothing was changed.' }
-        foreach ($name in $Package, $Cli) {
+        foreach ($name in $Bins) {
             $file = Join-Path $unpacked "$Package-$Target-v$Version\$name.exe"
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { Fail "The archive does not contain $name.exe. Nothing was changed." }
             Copy-Item -LiteralPath $file -Destination (Join-Path $newBin "$name.exe")
         }
         $reported = (Invoke-Native (Join-Path $newBin "$Cli.exe") --version --json).Text
         if ($reported -notmatch [regex]::Escape("`"cli_version`":`"$Version`"")) {
-            Fail 'The unpacked pta does not run on this computer or reports another version. Nothing was changed.'
+            Fail "The unpacked $Cli does not run on this computer or reports another version. Nothing was changed."
         }
 
         if (Test-Path -LiteralPath (Get-ProfileDir)) { Say "Using the existing profile at $(Get-ProfileDir); it is kept as it is." }
         # Only now does anything installed change: stop the old host, swap the bin directory. A
         # running executable cannot be replaced on Windows, so the host is stopped first.
-        Stop-PtaHost
+        Stop-AppHost
         $previous = Join-Path $stage 'previous'
         if (Test-Path -LiteralPath $Bin) {
-            try { Move-Item -LiteralPath $Bin -Destination $previous } catch { Fail 'The previous installation could not be replaced (is a pta command still running?). Nothing was changed.' }
+            try { Move-Item -LiteralPath $Bin -Destination $previous } catch { Fail "The previous installation could not be replaced (is a $Cli command still running?). Nothing was changed." }
         }
         try {
             Move-Item -LiteralPath $newBin -Destination $Bin
@@ -548,7 +669,7 @@ function Install-Archive {
         }
         $recordJson = [ordered] @{
             schema = 1; kind = 'archive'; package = $Package; version = $Version; target = $Target
-            bins = @($Package, $Cli); repository = "https://github.com/$Repository"; archive = $archive
+            bins = @($Bins); repository = $RecordRepository; archive = $archive
             sha256 = $digest; installed_at = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
         } | ConvertTo-Json
         $recordFile = Join-Path $stage $Record
@@ -557,11 +678,11 @@ function Install-Archive {
     } finally {
         Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Say "Installed $((Invoke-Pta '--version').Text) in $Bin."
+    Say "Installed $((Invoke-Cli '--version').Text) in $Bin."
     Clear-StaleBinstallRecord
 
     Add-UserPath
-    if ($SkipService) { Say 'Not registered to start at login (-NoService).' } else { Install-PtaService }
+    if ($SkipService) { Say 'Not registered to start at login (-NoService).' } else { Install-HostService }
     Enable-UnattendedUpdates
     if ($Origin) { Join-Account }
     Say ''
@@ -576,19 +697,19 @@ function Uninstall-Archive {
     if (-not (Test-Path -LiteralPath $recordFile) -or ((Get-Content -LiteralPath $recordFile -Raw | ConvertFrom-Json).kind -ne 'archive')) {
         Fail "No installation by this script was found in $Root."
     }
-    if (Test-Path -LiteralPath (Join-Path $Bin "$Cli.exe")) {
-        if (Start-PtaHost) {
-            $reply = Get-PtaReply 'service' 'uninstall' '--confirmed'
+    if (Get-CliPath) {
+        if (Start-AppHost) {
+            $reply = Get-CliReply 'service' 'uninstall' '--confirmed'
             if (-not $reply -or -not $reply.ok) { Warn "The login task could not be removed; remove it with '$Cli service uninstall --confirmed'." }
         }
-        Stop-PtaHost
+        Stop-AppHost
     }
     Remove-UserPath
     Remove-Item -LiteralPath $Bin -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $recordFile -Force
     if (-not (Get-ChildItem -LiteralPath $Root -Force)) { Remove-Item -LiteralPath $Root -Force }
-    Say "Removed $Package from $Root. The profile at $(Get-ProfileDir) was kept."
-    Say "A skill copy or MCP registration made for a coding CLI stays; remove it there (for example 'claude mcp remove $Package')."
+    Say "Removed Kuroko from $Root. The profile at $(Get-ProfileDir) was kept."
+    Say "A skill copy or MCP registration made for a coding CLI stays; remove it there (for example 'claude mcp remove $Integration')."
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -596,14 +717,15 @@ function Uninstall-Archive {
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     if ($TestSource) {
-        if ($env:PTA_INSTALL_TEST -ne '1') { Fail '-TestSource is only for the installer''s own tests.' }
+        if ((Get-EnvValue 'INSTALL_TEST') -ne '1') { Fail '-TestSource is only for the installer''s own tests.' }
         if (-not (Test-Path -LiteralPath $TestSource -PathType Container)) { Fail 'The test source must be a local directory.' }
         $TestSource = (Resolve-Path -LiteralPath $TestSource).Path
         Warn "TEST MODE: installing from $TestSource instead of the release."
     }
     if ($Origin) { $Origin = Test-Origin $Origin }
     if ($Version) { Test-Version $Version }
-    if (-not $Root) { $Root = if ($env:PTA_INSTALL_ROOT) { $env:PTA_INSTALL_ROOT } else { Join-Path $env:LOCALAPPDATA "Programs\$Package" } }
+    if (-not $Root) { $Root = Get-EnvValue 'INSTALL_ROOT' }
+    if (-not $Root) { $Root = Get-DefaultRoot }
     $Root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
     $Bin = Join-Path $Root 'bin'
     if ($Uninstall) { Uninstall-Archive } else { Install-Archive }

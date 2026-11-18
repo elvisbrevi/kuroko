@@ -20,26 +20,27 @@ fn hex(bytes: &[u8]) -> String {
     crate::hash::sha256_hex(bytes)
 }
 
-/// The release archive of `version`: the directory with the matched pair, a licence and a readme.
-/// The executables are scripts that report `reported`, so a pair is verified without building.
+/// The release archive of `version`: the directory with every executable of this package and a
+/// licence. The executables are scripts that report `reported` (the CLI its JSON, the host and the
+/// aliases the package and version), so they are verified without building.
 fn archive_of(version: &str, reported: &str) -> Vec<u8> {
     use crate::maintenance::release::tests::{Kind, tgz, zip};
     let dir = release::directory_name(TARGET, &Version::parse(version).unwrap());
-    let host = format!("#!/bin/sh\necho \"personal-teams-assistant {reported}\"\n");
+    let host = format!("#!/bin/sh\necho \"{} {reported}\"\n", core::OWN.name);
     let cli =
         format!("#!/bin/sh\necho '{{\"ok\":true,\"data\":{{\"cli_version\":\"{reported}\"}}}}'\n");
-    let names = [
-        format!("{dir}/"),
-        format!("{dir}/{}", core::exe_name(core::CRATE)),
-        format!("{dir}/{}", core::exe_name(core::CLI)),
-        format!("{dir}/LICENSE"),
-    ];
-    let entries = [
-        (names[0].as_str(), Kind::Dir),
-        (names[1].as_str(), Kind::File(host.into_bytes())),
-        (names[2].as_str(), Kind::File(cli.into_bytes())),
-        (names[3].as_str(), Kind::File(b"MIT".to_vec())),
-    ];
+    let names: Vec<String> = core::OWN
+        .bins
+        .iter()
+        .map(|name| format!("{dir}/{}", core::exe_name(name)))
+        .collect();
+    let (top, licence) = (format!("{dir}/"), format!("{dir}/LICENSE"));
+    let mut entries = vec![(top.as_str(), Kind::Dir)];
+    for (entry, name) in names.iter().zip(core::OWN.bins) {
+        let body = if *name == core::OWN.cli { &cli } else { &host };
+        entries.push((entry.as_str(), Kind::File(body.clone().into_bytes())));
+    }
+    entries.push((licence.as_str(), Kind::File(b"MIT".to_vec())));
     if cfg!(windows) {
         zip(&entries)
     } else {
@@ -80,9 +81,9 @@ fn source(uri: &str) -> Source {
 
 fn record(version: &str) -> String {
     serde_json::to_string_pretty(&json!({
-        "schema": 1, "kind": "archive", "package": core::CRATE, "version": version,
-        "target": TARGET, "bins": [core::CRATE, core::CLI],
-        "repository": "https://github.com/elvisbrevi/personal-teams-assistant",
+        "schema": 1, "kind": "archive", "package": core::OWN.name, "version": version,
+        "target": TARGET, "bins": core::OWN.bins,
+        "repository": core::OWN.repository,
         "archive": archive_name(version), "sha256": "0".repeat(64),
         "installed_at": "2026-11-01T00:00:00Z",
     }))
@@ -103,7 +104,8 @@ fn renew(f: &mut Fixture, edit: impl FnOnce(&mut Environment)) {
 }
 
 fn bins(f: &Fixture) -> Vec<u8> {
-    [core::CRATE, core::CLI]
+    core::OWN
+        .bins
         .iter()
         // As the fixture writes them: without `.exe`, also on Windows.
         .flat_map(|name| fs::read(f.install.join("bin").join(name)).unwrap())
@@ -213,13 +215,13 @@ async fn an_archive_installation_stages_its_release_archive_without_cargo() {
     let archive = manifest.archive.unwrap();
     assert_eq!(archive.name, archive_name("0.9.14"));
     assert_eq!(archive.sha256, hex(&archive_of("0.9.14", "0.9.14")));
-    // Only the two executables were kept: no licence, no download.
+    // Only the executables were kept: no licence, no download.
     let mut kept: Vec<String> = fs::read_dir(base.join("root/bin"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     kept.sort();
-    assert_eq!(kept, ["personal-teams-assistant", "pta"]);
+    assert_eq!(kept, core::OWN.bins);
     assert!(!base.join("download").exists());
     let text = done.to_string();
     assert!(!text.contains(&releases.uri()), "no address in the status");
@@ -432,7 +434,7 @@ async fn an_archive_update_is_applied_and_its_record_follows_only_a_healthy_comm
         apply::drive(&dir, &fake, tune()).await,
         Outcome::Committed
     ));
-    assert_eq!(installed(&f, core::CRATE), format!("{NEW} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{NEW} {HOST}"));
     let written: Value =
         serde_json::from_str(&fs::read_to_string(f.install.join(core::ARCHIVE_RECORD)).unwrap())
             .unwrap();
@@ -466,7 +468,7 @@ async fn an_archive_update_is_applied_and_its_record_follows_only_a_healthy_comm
         apply::drive(&dir, &fake, tune()).await,
         Outcome::RolledBack
     ));
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     assert_eq!(
         fs::read_to_string(f.install.join(core::ARCHIVE_RECORD)).unwrap(),
         before
@@ -738,7 +740,7 @@ async fn unattended_updating_defers_while_the_microsoft_session_needs_renewal() 
     let saved = load(&dir);
     assert_eq!(saved.deferred.as_ref().unwrap().reasons, [RENEWAL]);
     assert!(core::apply::read(&dir).is_none(), "nothing was stopped");
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
 
     // Signed in again: the waiting request goes ahead.
     let data = profiles_of(&f).remove(0).data;
@@ -775,7 +777,7 @@ async fn a_persons_update_counts_an_assistant_that_needed_renewal_honestly() {
         apply::drive(&dir, &fake, tune()).await,
         Outcome::Committed
     ));
-    assert_eq!(installed(&f, core::CRATE), format!("{NEW} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{NEW} {HOST}"));
     assert!(fake.logged().contains(&"start_assistant".to_owned()));
     let status = call(&f.host, Local, "crate_update_status", json!({}))
         .await
@@ -955,7 +957,7 @@ async fn an_update_asked_before_its_archive_is_attached_waits_and_then_installs_
         apply::drive(&dir, &Fake::new(&f), tune()).await,
         Outcome::Committed
     ));
-    assert!(installed(&f, core::CRATE).contains("personal-teams-assistant 0.9.14"));
+    assert!(installed(&f, HOST).contains(&format!("{} 0.9.14", core::OWN.name)));
     let written: Value =
         serde_json::from_str(&fs::read_to_string(f.install.join(core::ARCHIVE_RECORD)).unwrap())
             .unwrap();
@@ -1003,9 +1005,7 @@ async fn an_archive_that_never_appears_ends_the_wait_with_its_text_and_installs_
         "{error}"
     );
     assert!(
-        error.contains(
-            "https://github.com/elvisbrevi/personal-teams-assistant/releases/tag/v0.9.14"
-        ),
+        error.contains("https://github.com/elvisbrevi/kuroko/releases/tag/v0.9.14"),
         "{error}"
     );
     assert_eq!(done["waiting_for_archive"], Value::Null);
@@ -1156,106 +1156,77 @@ async fn the_release_probe_downloads_nothing_and_reads_a_redirect_as_attached() 
     );
 }
 
-/// The successor's release archive (docs/rename-kuroko.md): its own name, and its four executables,
-/// which report the successor's package and `reported`.
-#[cfg(unix)]
-fn successor_archive(version: &str, reported: &str) -> Vec<u8> {
-    use crate::maintenance::release::tests::{Kind, tgz, zip};
-    let successor = core::SUCCESSOR.unwrap();
-    let dir = release::directory_name_for(successor, TARGET, &Version::parse(version).unwrap());
-    let host = format!("#!/bin/sh\necho \"kuroko {reported}\"\n");
-    let cli =
-        format!("#!/bin/sh\necho '{{\"ok\":true,\"data\":{{\"cli_version\":\"{reported}\"}}}}'\n");
-    let names: Vec<String> = successor
-        .bins
-        .iter()
-        .map(|name| format!("{dir}/{}", core::exe_name(name)))
-        .collect();
-    let entries: Vec<(&str, Kind)> = names
-        .iter()
-        .zip(successor.bins)
-        .map(|(entry, name)| {
-            let body = if *name == successor.cli || *name == core::CLI {
-                cli.clone()
-            } else {
-                host.clone()
-            };
-            (entry.as_str(), Kind::File(body.into_bytes()))
-        })
-        .collect();
-    if cfg!(windows) {
-        zip(&entries)
-    } else {
-        tgz(&entries)
-    }
-}
-
 #[cfg(unix)]
 #[tokio::test]
-async fn an_archive_installation_moves_to_the_successor_once_the_registry_lists_it() {
+async fn an_archive_installation_of_the_predecessor_is_updated_to_this_package() {
     let _serial = SERIAL.lock().await;
     let server = registry(&[line("0.9.13", false), line("0.9.14", false)]).await;
-    let successor = core::SUCCESSOR.unwrap();
-    let version = Version(0, 18, 0);
-    let name = release::archive_name_for(successor, TARGET, &version);
-    let archive = successor_archive("0.18.0", "0.18.0");
-    let releases = MockServer::start().await;
-    let asset = |file: &str| format!("/owner/kuroko/releases/download/v0.18.0/{file}");
-    Mock::given(method("GET"))
-        .and(path(asset(&name)))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive.clone()))
-        .mount(&releases)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(asset(&format!("{name}.sha256"))))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(format!("{}  {name}\n", hex(&archive))),
-        )
-        .mount(&releases)
-        .await;
+    let releases = release_of("0.9.14", archive_of("0.9.14", "0.9.14"), None).await;
     let mut f = fixture(&server);
     archived(&mut f, Some(source(&releases.uri())));
-    // Before the successor is published, this package's own newest release is the one looked at
-    // (its archive is not in this double's release, so it waits).
+    // What the install scripts wrote for the former package.
+    let predecessor = as_predecessor(&mut f);
+    fs::write(
+        f.install.join(core::ARCHIVE_RECORD),
+        serde_json::to_string_pretty(&json!({
+            "schema": 1, "kind": "archive", "package": predecessor.name, "version": "0.9.13",
+            "target": TARGET, "bins": predecessor.bins, "repository": predecessor.repository,
+            "archive": format!("{}-{TARGET}-v0.9.13.tgz", predecessor.name),
+            "sha256": "0".repeat(64), "installed_at": "2026-11-01T00:00:00Z",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let status = call(&f.host, Local, "crate_update_status", json!({})).await;
+    assert_eq!(status.data["installed"], "0.9.13", "{}", status.data);
+    assert_eq!(status.data["install"]["kind"], "archive");
     let checked = call(&f.host, Window, "crate_update_check", json!({})).await;
-    assert_eq!(checked.data["archive_missing"]["version"], "0.9.14");
+    assert_eq!(checked.data["available"], "0.9.14");
     assert_eq!(checked.data["available_package"], Value::Null);
-    Mock::given(method("GET"))
-        .and(path("/ku/ro/kuroko"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_string(
-                json!({"name":"kuroko","vers":"0.18.0","yanked":false,"rust_version":"1.95"})
-                    .to_string(),
-            ),
-        )
-        .mount(&server)
-        .await;
-    let checked = call(&f.host, Window, "crate_update_check", json!({})).await;
-    assert_eq!(checked.data["available"], "0.18.0");
-    assert_eq!(checked.data["available_package"], "kuroko");
     let staged = call(
         &f.host,
         Window,
         "crate_update_stage",
-        json!({"version":"0.18.0"}),
+        json!({"version":"0.9.14"}),
     )
     .await;
     assert!(staged.ok, "{:?}", staged.message);
     let done = settled(&f).await;
     assert_eq!(done["state"], "staged", "{done}");
-    assert_eq!(done["can_apply"], true);
-    let base = staged_dir(&directory(&f.host), "0.18.0");
+    let base = staged_dir(&directory(&f.host), "0.9.14");
     let manifest: Manifest =
         serde_json::from_str(&fs::read_to_string(base.join("manifest.json")).unwrap()).unwrap();
-    assert_eq!(manifest.package.as_deref(), Some("kuroko"));
-    assert_eq!(manifest.archive.unwrap().name, name);
+    assert_eq!(manifest.package, None);
+    assert_eq!(manifest.archive.unwrap().name, archive_name("0.9.14"));
     let mut kept: Vec<String> = fs::read_dir(base.join("root/bin"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     kept.sort();
-    assert_eq!(
-        kept,
-        ["kuroko", "kuroko-host", "personal-teams-assistant", "pta"]
-    );
+    assert_eq!(kept, core::OWN.bins);
+
+    let dir = directory(&f.host);
+    let reply = requested(&f).await;
+    assert!(reply.ok, "{:?}", reply.message);
+    assert!(matches!(
+        apply::drive(&dir, &Fake::new(&f), tune()).await,
+        Outcome::Committed
+    ));
+    for name in core::OWN.bins {
+        assert!(installed(&f, name).contains("0.9.14"), "{name}");
+    }
+    // The record now names this package, its executables and its repository.
+    let written: Value =
+        serde_json::from_str(&fs::read_to_string(f.install.join(core::ARCHIVE_RECORD)).unwrap())
+            .unwrap();
+    assert_eq!(written["version"], "0.9.14");
+    assert_eq!(written["archive"], archive_name("0.9.14"));
+    assert_eq!(written["package"], core::OWN.name);
+    assert_eq!(written["bins"], json!(core::OWN.bins));
+    assert_eq!(written["repository"], core::OWN.repository);
+    let after = call(&f.host, Local, "crate_update_status", json!({}))
+        .await
+        .data;
+    assert_eq!(after["installed"], "0.9.14");
+    assert_eq!(after["apply"]["state"], "success");
 }

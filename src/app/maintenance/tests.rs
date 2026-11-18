@@ -9,6 +9,8 @@ use wiremock::{
 };
 
 const RUNNING: Version = Version(0, 9, 13);
+/// This package's application, which the installation runs and an update restarts.
+const HOST: &str = core::OWN.host;
 
 /// The tests share the process-wide environment override.
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -17,10 +19,15 @@ fn line(version: &str, yanked: bool) -> String {
     json!({"name":core::CRATE,"vers":version,"yanked":yanked,"rust_version":"1.90"}).to_string()
 }
 
+/// This package's entry in the sparse index.
+fn index() -> String {
+    format!("/{}", core::index_path(core::CRATE))
+}
+
 async fn registry(lines: &[String]) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/pe/rs/personal-teams-assistant"))
+        .and(path(index()))
         .respond_with(ResponseTemplate::new(200).set_body_string(lines.join("\n")))
         .mount(&server)
         .await;
@@ -50,12 +57,13 @@ struct Fixture {
 
 impl Fixture {
     fn installed(&self) -> Vec<u8> {
-        [
-            fs::read(self.install.join("bin/personal-teams-assistant")).unwrap(),
-            fs::read(self.install.join("bin/pta")).unwrap(),
-            fs::read(self.install.join(".crates2.json")).unwrap(),
-        ]
-        .concat()
+        core::OWN
+            .bins
+            .iter()
+            .map(|name| self.install.join("bin").join(name))
+            .chain([self.install.join(".crates2.json")])
+            .flat_map(|path| fs::read(path).unwrap())
+            .collect()
     }
     fn arguments(&self) -> Option<String> {
         fs::read_to_string(self.tools.join("arguments.txt")).ok()
@@ -63,10 +71,20 @@ impl Fixture {
     fn staged(&self) -> PathBuf {
         directory(&self.host).join("staged")
     }
-    /// Cargo for the synthetic release `version`; `gate` makes it wait for a file.
+    /// Cargo for the synthetic release `version`; `gate` makes it wait for a file. It installs
+    /// every executable of this package: the CLI reports its JSON, the others the package name.
     #[cfg(unix)]
     fn cargo(&self, version: &str, gate: bool) {
         let tools = self.tools.display();
+        let (package, cli) = (core::OWN.name, core::OWN.cli);
+        let bins = json!(core::OWN.bins);
+        let others: Vec<&str> = core::OWN
+            .bins
+            .iter()
+            .copied()
+            .filter(|name| *name != cli)
+            .collect();
+        let others = others.join(" ");
         let wait = if gate {
             format!("while [ ! -f {tools}/go ]; do sleep 0.05; done\n")
         } else {
@@ -83,10 +101,10 @@ echo '   Compiling serde v1.0.0' >&2
 root=""
 while [ $# -gt 0 ]; do if [ "$1" = "--root" ]; then root="$2"; fi; shift; done
 mkdir -p "$root/bin"
-printf '#!/bin/sh\necho "{{\\"ok\\":true,\\"data\\":{{\\"cli_version\\":\\"{version}\\"}}}}"\n' > "$root/bin/pta"
-printf '#!/bin/sh\necho "personal-teams-assistant {version}"\n' > "$root/bin/personal-teams-assistant"
-chmod +x "$root/bin/pta" "$root/bin/personal-teams-assistant"
-printf '{{"installs":{{"personal-teams-assistant {version} (registry+https://github.com/rust-lang/crates.io-index)":{{"bins":["personal-teams-assistant","pta"],"features":[],"all_features":false,"no_default_features":true,"profile":"release","target":"x86_64-unknown-linux-gnu","rustc":"host: x86_64-unknown-linux-gnu"}}}}}}' > "$root/.crates2.json"
+printf '#!/bin/sh\necho "{{\\"ok\\":true,\\"data\\":{{\\"cli_version\\":\\"{version}\\"}}}}"\n' > "$root/bin/{cli}"
+for name in {others}; do printf '#!/bin/sh\necho "{package} {version}"\n' > "$root/bin/$name"; done
+chmod +x "$root"/bin/*
+printf '{{"installs":{{"{package} {version} (registry+https://github.com/rust-lang/crates.io-index)":{{"bins":{bins},"features":[],"all_features":false,"no_default_features":true,"profile":"release","target":"x86_64-unknown-linux-gnu","rustc":"host: x86_64-unknown-linux-gnu"}}}}}}' > "$root/.crates2.json"
 "#
             ),
         );
@@ -99,12 +117,13 @@ fn fixture(registry: &MockServer) -> Fixture {
     let host = host(root.path());
     let install = root.path().join("install");
     let tools = root.path().join("tools");
-    script(&install.join("bin/personal-teams-assistant"), "echo host");
-    script(&install.join("bin/pta"), "echo cli");
+    for name in core::OWN.bins {
+        script(&install.join("bin").join(name), &format!("echo {name}"));
+    }
     fs::write(
         install.join(".crates2.json"),
         json!({"installs":{format!("{} 0.9.13 (registry+https://github.com/rust-lang/crates.io-index)", core::CRATE): {
-            "bins":["personal-teams-assistant","pta"],"features":[],"all_features":false,
+            "bins":core::OWN.bins,"features":[],"all_features":false,
             "no_default_features":true,"profile":"release","target":"x86_64-unknown-linux-gnu",
             "rustc":"host: x86_64-unknown-linux-gnu"}}})
         .to_string(),
@@ -113,7 +132,7 @@ fn fixture(registry: &MockServer) -> Fixture {
     fs::create_dir_all(&tools).unwrap();
     let env = Environment {
         registry: registry.uri(),
-        exe: install.join("bin/personal-teams-assistant"),
+        exe: install.join("bin").join(HOST),
         variables: [
             (
                 "PATH".to_owned(),
@@ -259,7 +278,7 @@ async fn a_wrong_or_malformed_registry_answer_is_a_failed_check_not_an_update() 
     // A redirect to somewhere else is a failure too.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/pe/rs/personal-teams-assistant"))
+        .and(path(index()))
         .respond_with(
             ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1:9/evil"),
         )
@@ -313,14 +332,13 @@ async fn staging_builds_the_matched_pair_beside_the_untouched_installation() {
     assert_eq!(done["staged"]["version"], "0.9.14");
     assert_eq!(done["staged"]["no_default_features"], true);
     assert_eq!(done["staged"]["features"], json!([]));
-    assert_eq!(
-        done["staged"]["binaries"],
-        json!(["personal-teams-assistant", "pta"])
-    );
+    assert_eq!(done["staged"]["binaries"], json!(core::OWN.bins));
     assert_eq!(done["stage"]["progress"]["crates"], 1);
     assert_eq!(done["installed"], "0.9.13");
     assert_eq!(done["available"], "0.9.14");
-    assert!(f.staged().join("0.9.14/root/bin/pta").is_file());
+    for name in core::OWN.bins {
+        assert!(f.staged().join("0.9.14/root/bin").join(name).is_file());
+    }
     assert!(f.staged().join("0.9.14/manifest.json").is_file());
     assert!(!f.staged().join("0.9.14.partial").exists());
     // Still nothing replaced.
@@ -628,7 +646,7 @@ async fn custom_installations_get_a_diagnostic_not_an_update() {
     let server = registry(&[line("0.9.14", false)]).await;
     let mut f = fixture(&server);
     // A development build: not in a Cargo `bin` directory.
-    f.env.exe = f.install.join("target/debug/personal-teams-assistant");
+    f.env.exe = f.install.join("target/debug").join(HOST);
     *TEST.lock().unwrap() = Some(f.env.clone());
     let status = call(&f.host, Local, "crate_update_status", json!({})).await;
     assert_eq!(status.data["install"]["supported"], false);
@@ -652,7 +670,7 @@ async fn custom_installations_get_a_diagnostic_not_an_update() {
     assert_eq!(staged.code, "not_ready");
 
     // A path install.
-    f.env.exe = f.install.join("bin/personal-teams-assistant");
+    f.env.exe = f.install.join("bin").join(HOST);
     *TEST.lock().unwrap() = Some(f.env.clone());
     let record = fs::read_to_string(f.install.join(".crates2.json"))
         .unwrap()
@@ -702,7 +720,7 @@ async fn dismissing_hides_that_release_only() {
     // A newer release shows the notice again.
     server.reset().await;
     Mock::given(method("GET"))
-        .and(path("/pe/rs/personal-teams-assistant"))
+        .and(path(index()))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_string([line("0.9.14", false), line("0.9.15", false)].join("\n")),
@@ -768,7 +786,7 @@ async fn a_staged_pair_that_changed_or_was_installed_is_no_longer_reported_stage
     assert_eq!(finished(&f).await["state"], "staged");
 
     // A file replaced after verification is not a verified pair.
-    let cli = f.staged().join("0.9.14/root/bin/pta");
+    let cli = f.staged().join("0.9.14/root/bin").join(core::CLI);
     let original = fs::read(&cli).unwrap();
     fs::write(&cli, "x").unwrap();
     assert_ne!(
@@ -819,7 +837,7 @@ const NEW: &str = "host 0.9.14";
 /// Puts version-bearing files where the installation and the prepared pair would be.
 fn with_pair(f: &Fixture) {
     let dir = directory(&f.host);
-    for name in [core::CRATE, core::CLI] {
+    for name in core::OWN.bins {
         fs::write(
             f.install.join("bin").join(core::exe_name(name)),
             format!("{OLD} {name}"),
@@ -829,12 +847,12 @@ fn with_pair(f: &Fixture) {
     let base = staged_dir(&dir, "0.9.14");
     fs::create_dir_all(base.join("root/bin")).unwrap();
     let mut binaries = BTreeMap::new();
-    for name in [core::CRATE, core::CLI] {
+    for name in core::OWN.bins {
         let path = base.join("root/bin").join(core::exe_name(name));
         fs::write(&path, format!("{NEW} {name}")).unwrap();
-        binaries.insert(name.to_owned(), core::digest(&path).unwrap());
+        binaries.insert((*name).to_owned(), core::digest(&path).unwrap());
     }
-    let record = json!({"bins":["personal-teams-assistant","pta"],"features":[],"all_features":false,
+    let record = json!({"bins":core::OWN.bins,"features":[],"all_features":false,
         "no_default_features":true,"profile":"release"});
     fs::write(
         base.join("root/.crates2.json"),
@@ -912,13 +930,13 @@ impl Fake {
         self.log.lock().unwrap().clone()
     }
     fn on_disk(&self) -> String {
-        fs::read_to_string(self.install.join("bin").join(core::exe_name(core::CRATE))).unwrap()
+        fs::read_to_string(self.install.join("bin").join(core::exe_name(HOST))).unwrap()
     }
     /// Whether the new version is on disk: the fixture's bytes, or the pair of a downloaded release
     /// archive (scripts that report their version).
     fn new_on_disk(&self) -> bool {
         let on_disk = self.on_disk();
-        on_disk.starts_with(NEW) || on_disk.contains("personal-teams-assistant 0.9.14")
+        on_disk.starts_with(NEW) || on_disk.contains(&format!("{} 0.9.14", core::OWN.name))
     }
 }
 
@@ -1010,7 +1028,7 @@ async fn a_prepared_pair_is_installed_restarted_and_reported_only_after_the_heal
     // Requested, not done: nothing is replaced until the helper runs, and nothing says "installed".
     assert_eq!(reply.data["state"], "applying");
     assert_eq!(reply.data["apply"]["state"], "applying");
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     assert_eq!(reply.data["can_stage"], false);
     let again = requested(&f).await;
     assert_eq!(again.code, "state_conflict", "one update at a time");
@@ -1034,17 +1052,11 @@ async fn a_prepared_pair_is_installed_restarted_and_reported_only_after_the_heal
         Outcome::Committed
     ));
 
-    assert_eq!(installed(&f, core::CRATE), format!("{NEW} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{NEW} {HOST}"));
     assert_eq!(installed(&f, core::CLI), format!("{NEW} {}", core::CLI));
     let log = fake.logged();
     assert_eq!(log[0], "quit");
-    assert_eq!(
-        log[1],
-        "start host 0.9.14 personal-teams-assistant --headless".replace(
-            "host 0.9.14 personal-teams-assistant",
-            &format!("{NEW} {}", core::CRATE)
-        )
-    );
+    assert_eq!(log[1], format!("start {NEW} {HOST} --headless"));
     assert!(
         log.contains(&"start_assistant".to_owned()),
         "the assistant is restored: {log:?}"
@@ -1096,11 +1108,7 @@ async fn an_unhealthy_or_unstartable_new_version_restores_the_previous_pair_and_
             matches!(apply::drive(&dir, &fake, tune()).await, Outcome::RolledBack),
             "{name}"
         );
-        assert_eq!(
-            installed(&f, core::CRATE),
-            format!("{OLD} {}", core::CRATE),
-            "{name}"
-        );
+        assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"), "{name}");
         assert_eq!(
             installed(&f, core::CLI),
             format!("{OLD} {}", core::CLI),
@@ -1244,7 +1252,7 @@ async fn when_nothing_can_be_started_the_outcome_is_failed_with_a_recovery_path(
         Outcome::Failed
     ));
     // Even then the previous executables are back and the data is untouched.
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     let status = call(&f.host, Local, "crate_update_status", json!({}))
         .await
         .data;
@@ -1273,7 +1281,7 @@ async fn a_host_that_will_not_quit_changes_nothing() {
         Outcome::RolledBack
     ));
     assert_eq!(fake.logged(), ["quit"]);
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     let status = call(&f.host, Local, "crate_update_status", json!({}))
         .await
         .data;
@@ -1319,7 +1327,7 @@ async fn work_in_progress_defers_the_update_instead_of_stopping_it() {
         core::apply::read(&dir).is_none(),
         "no journal: nothing began"
     );
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
 
     // Cancelling withdraws it.
     let cancelled = call(&f.host, Local, "crate_update_cancel", json!({})).await;
@@ -1346,7 +1354,7 @@ async fn work_in_progress_defers_the_update_instead_of_stopping_it() {
         "nothing was stopped: {:?}",
         fake.logged()
     );
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     let status = call(&f.host, Local, "crate_update_status", json!({}))
         .await
         .data;
@@ -1451,7 +1459,7 @@ async fn an_interrupted_update_is_undone_before_status_is_reported() {
             .unwrap()
             .contains("interrupted")
     );
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     assert_eq!(installed(&f, core::CLI), format!("{OLD} {}", core::CLI));
     assert_eq!(
         status["state"], "staged",
@@ -1503,7 +1511,7 @@ async fn a_prepared_newest_release_is_installed_by_the_same_request_and_a_keycha
     assert!(reply.ok, "{:?}", reply.message);
     assert_eq!(reply.data["outcome"], "applying");
     assert_eq!(reply.data["target"], "0.9.14");
-    assert_eq!(installed(&f, core::CRATE), format!("{OLD} {}", core::CRATE));
+    assert_eq!(installed(&f, HOST), format!("{OLD} {HOST}"));
     let again = call(&f.host, Local, "crate_update_latest", json!({})).await;
     assert_eq!(again.data["outcome"], "applying");
     let history = call(&f.host, Local, "crate_update_status", json!({}))
@@ -1547,4 +1555,91 @@ async fn one_request_prepares_the_newest_release_and_then_installs_it() {
     let journal = core::apply::read(&directory(&f.host)).unwrap();
     assert_eq!(journal.to, "0.9.14");
     assert!(!journal.intent.unattended);
+}
+
+/// Turns the fixture's installation into one of the predecessor package (docs/rename-kuroko.md):
+/// only its executables are installed, and the running host is its application.
+#[cfg(unix)]
+fn as_predecessor(f: &mut Fixture) -> core::Package {
+    let [predecessor] = core::PREDECESSORS else {
+        panic!("this package replaced exactly one predecessor")
+    };
+    for name in core::OWN
+        .bins
+        .iter()
+        .filter(|n| !predecessor.bins.contains(*n))
+    {
+        fs::remove_file(f.install.join("bin").join(name)).unwrap();
+    }
+    f.env.exe = f.install.join("bin").join(predecessor.host);
+    *TEST.lock().unwrap() = Some(f.env.clone());
+    *predecessor
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_installation_recorded_under_the_predecessors_name_is_updated_to_this_package() {
+    let _serial = SERIAL.lock().await;
+    let server = registry(&[line("0.9.14", false)]).await;
+    let mut f = fixture(&server);
+    let predecessor = as_predecessor(&mut f);
+    fs::write(
+        f.install.join(".crates2.json"),
+        json!({"installs":{"personal-teams-assistant 0.9.13 (registry+https://github.com/rust-lang/crates.io-index)": {
+            "bins":predecessor.bins,"features":[],"all_features":false,
+            "no_default_features":true,"profile":"release","target":"x86_64-unknown-linux-gnu",
+            "rustc":"host: x86_64-unknown-linux-gnu"}}})
+        .to_string(),
+    )
+    .unwrap();
+    f.cargo("0.9.14", false);
+    let status = call(&f.host, Local, "crate_update_status", json!({})).await;
+    assert_eq!(status.data["install"]["supported"], true, "{}", status.data);
+    assert_eq!(status.data["installed"], "0.9.13");
+    let checked = call(&f.host, Local, "crate_update_check", json!({})).await;
+    assert_eq!(checked.data["available"], "0.9.14");
+    assert_eq!(checked.data["available_package"], Value::Null);
+    assert!(
+        call(
+            &f.host,
+            Local,
+            "crate_update_stage",
+            json!({"version":"0.9.14"})
+        )
+        .await
+        .ok
+    );
+    let done = finished(&f).await;
+    assert_eq!(done["state"], "staged", "{done}");
+    assert_eq!(done["staged"]["binaries"], json!(core::OWN.bins));
+    let arguments = f.arguments().unwrap();
+    let words: Vec<&str> = arguments.split_whitespace().collect();
+    assert_eq!(&words[..4], ["install", core::CRATE, "--version", "0.9.14"]);
+
+    let dir = directory(&f.host);
+    let reply = requested(&f).await;
+    assert!(reply.ok, "{:?}", reply.message);
+    assert!(matches!(
+        apply::drive(&dir, &Fake::new(&f), tune()).await,
+        Outcome::Committed
+    ));
+    // The predecessor's executables are replaced and this package's own are added.
+    for name in core::OWN.bins {
+        assert!(
+            installed(&f, name).contains("0.9.14"),
+            "{name}: {}",
+            installed(&f, name)
+        );
+    }
+    let records = fs::read_to_string(f.install.join(".crates2.json")).unwrap();
+    assert!(
+        records.contains(&format!("{} 0.9.14", core::CRATE))
+            && !records.contains("personal-teams-assistant 0.9.13"),
+        "{records}"
+    );
+    let after = call(&f.host, Local, "crate_update_status", json!({}))
+        .await
+        .data;
+    assert_eq!(after["installed"], "0.9.14");
+    assert_eq!(after["apply"]["state"], "success");
 }
