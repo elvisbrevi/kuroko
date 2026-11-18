@@ -4,12 +4,22 @@
 /** This device's look (Settings › General › Appearance): the mode (`light`, `dark` or none to follow
  *  the system), the palette and the style. They live in `localStorage`, not in the profile, and apply
  *  before the first paint; an unknown or missing value is the default (Paper, Stickers, the system). */
-const THEME_KEY = 'pta-theme';
-const PALETTE_KEY = 'pta-palette';
-const STYLE_KEY = 'pta-style';
+const THEME_KEY = 'kuroko-theme';
+const PALETTE_KEY = 'kuroko-palette';
+const STYLE_KEY = 'kuroko-style';
 const DEFAULT_PALETTE = 'paper';
 const DEFAULT_STYLE = 'sticker';
-function storedLook(key) { try { return localStorage.getItem(key); } catch { return null; } }
+/** A saved choice; one saved by an earlier version under its `pta-` name is moved to `key`. */
+function storedLook(key) {
+  try {
+    const value = localStorage.getItem(key);
+    if (value !== null) return value;
+    const former = key.replace(/^kuroko-/, 'pta-');
+    const moved = localStorage.getItem(former);
+    if (moved !== null) { localStorage.setItem(key, moved); localStorage.removeItem(former); }
+    return moved;
+  } catch { return null; }
+}
 function storeLook(key, value) {
   try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); }
   catch { /* applies to this page only */ }

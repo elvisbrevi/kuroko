@@ -223,6 +223,7 @@ fn definitions_hold_no_account_variable_or_credential() {
             "STATE_ENCRYPTION_KEY",
             "_FILE",
             "PTA_PROFILE_DIR",
+            "KUROKO_PROFILE_DIR",
             "PTA_UPDATE_HANDOVER",
         ] {
             assert!(!definition.contains(name), "{manager:?} {name}");

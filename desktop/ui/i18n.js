@@ -10,7 +10,16 @@ const UI_LANGUAGES = ['es', 'en'];
 let uiLanguage = (() => {
   /** @type {string | null} */
   let stored = null;
-  try { stored = localStorage.getItem('pta-language'); } catch { /* storage unavailable */ }
+  try {
+    stored = localStorage.getItem('kuroko-language');
+    // Saved by an earlier version under its former name: moved to the current one.
+    const former = stored === null ? localStorage.getItem('pta-language') : null;
+    if (former !== null) {
+      localStorage.setItem('kuroko-language', former);
+      localStorage.removeItem('pta-language');
+      stored = former;
+    }
+  } catch { /* storage unavailable */ }
   if (stored && UI_LANGUAGES.includes(stored)) return stored;
   return typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('en') ? 'en' : 'es';
 })();
@@ -72,7 +81,7 @@ function num(value, maximumFractionDigits = 2, minimumFractionDigits = 0) {
 function useLanguage(language) {
   const next = UI_LANGUAGES.includes(language) ? language : 'es';
   let stored = false;
-  try { localStorage.setItem('pta-language', next); stored = localStorage.getItem('pta-language') === next; } catch { /* not persisted */ }
+  try { localStorage.setItem('kuroko-language', next); stored = localStorage.getItem('kuroko-language') === next; } catch { /* not persisted */ }
   // Without storage a reload would guess the same language again: stay instead of looping.
   if (next === uiLanguage || !stored) return false;
   window.location.reload();

@@ -1398,10 +1398,10 @@ async fn the_sessions_a_workflow_starts_carry_the_work_item_in_their_name() {
         })
         .collect();
     assert_eq!(names.len(), 3, "{names:?}");
-    assert_eq!(names[0], format!("Teams Assistant - director {HU}"));
-    assert_eq!(names[1], format!("Teams Assistant - {HU} Pay by card"));
+    assert_eq!(names[0], format!("Kuroko - director {HU}"));
+    assert_eq!(names[1], format!("Kuroko - {HU} Pay by card"));
     let expected: String = format!(
-        "Teams Assistant - 201 Fix \"rounding\" in totals {}",
+        "Kuroko - 201 Fix \"rounding\" in totals {}",
         "x".repeat(300)
     )
     .chars()
@@ -1416,7 +1416,7 @@ async fn the_sessions_a_workflow_starts_carry_the_work_item_in_their_name() {
         .op("workflow_run_status", json!({"run":coded}))
         .await
         .unwrap();
-    assert!(!status.to_string().contains("Teams Assistant"));
+    assert!(!status.to_string().contains("Kuroko - "));
 }
 
 #[tokio::test]

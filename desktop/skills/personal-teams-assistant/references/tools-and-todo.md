@@ -325,10 +325,10 @@ never kept. A stopped session is reachable again only when the user opens it wit
 instead of guessing from the run's state or the machine's processes.
 
 In the provider's session list (Claude Remote Control, Codex threads) each session is named
-after what it works on: `Teams Assistant - <work item ID> <title>` for a coding or planning run
-(the title on one line, shortened to 100 characters), `Teams Assistant - director <ID>`,
-`Teams Assistant - summary <ID>` and `Teams Assistant - supervision <ID>` for the workflow
-director's and supervisor's sessions, and `Teams Assistant - new
+after what it works on: `Kuroko - <work item ID> <title>` for a coding or planning run
+(the title on one line, shortened to 100 characters), `Kuroko - director <ID>`,
+`Kuroko - summary <ID>` and `Kuroko - supervision <ID>` for the workflow
+director's and supervisor's sessions, and `Kuroko - new
 user story` (`new bug`, `new epic`) for a request run. OpenCode sessions are not named. A worker
 too old to receive the item names those sessions without the ID.
 

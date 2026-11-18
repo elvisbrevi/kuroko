@@ -1155,3 +1155,106 @@ async fn the_release_probe_downloads_nothing_and_reads_a_redirect_as_attached() 
             .is_err()
     );
 }
+
+/// The successor's release archive (docs/rename-kuroko.md): its own name, and its four executables,
+/// which report the successor's package and `reported`.
+fn successor_archive(version: &str, reported: &str) -> Vec<u8> {
+    use crate::maintenance::release::tests::{Kind, tgz, zip};
+    let successor = core::SUCCESSOR.unwrap();
+    let dir = release::directory_name_for(successor, TARGET, &Version::parse(version).unwrap());
+    let host = format!("#!/bin/sh\necho \"kuroko {reported}\"\n");
+    let cli =
+        format!("#!/bin/sh\necho '{{\"ok\":true,\"data\":{{\"cli_version\":\"{reported}\"}}}}'\n");
+    let names: Vec<String> = successor
+        .bins
+        .iter()
+        .map(|name| format!("{dir}/{}", core::exe_name(name)))
+        .collect();
+    let entries: Vec<(&str, Kind)> = names
+        .iter()
+        .zip(successor.bins)
+        .map(|(entry, name)| {
+            let body = if *name == successor.cli || *name == core::CLI {
+                cli.clone()
+            } else {
+                host.clone()
+            };
+            (entry.as_str(), Kind::File(body.into_bytes()))
+        })
+        .collect();
+    if cfg!(windows) {
+        zip(&entries)
+    } else {
+        tgz(&entries)
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn an_archive_installation_moves_to_the_successor_once_the_registry_lists_it() {
+    let _serial = SERIAL.lock().await;
+    let server = registry(&[line("0.9.13", false), line("0.9.14", false)]).await;
+    let successor = core::SUCCESSOR.unwrap();
+    let version = Version(0, 18, 0);
+    let name = release::archive_name_for(successor, TARGET, &version);
+    let archive = successor_archive("0.18.0", "0.18.0");
+    let releases = MockServer::start().await;
+    let asset = |file: &str| format!("/owner/kuroko/releases/download/v0.18.0/{file}");
+    Mock::given(method("GET"))
+        .and(path(asset(&name)))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive.clone()))
+        .mount(&releases)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(asset(&format!("{name}.sha256"))))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(format!("{}  {name}\n", hex(&archive))),
+        )
+        .mount(&releases)
+        .await;
+    let mut f = fixture(&server);
+    archived(&mut f, Some(source(&releases.uri())));
+    // Before the successor is published, this package's own newest release is the one looked at
+    // (its archive is not in this double's release, so it waits).
+    let checked = call(&f.host, Window, "crate_update_check", json!({})).await;
+    assert_eq!(checked.data["archive_missing"]["version"], "0.9.14");
+    assert_eq!(checked.data["available_package"], Value::Null);
+    Mock::given(method("GET"))
+        .and(path("/ku/ro/kuroko"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                json!({"name":"kuroko","vers":"0.18.0","yanked":false,"rust_version":"1.95"})
+                    .to_string(),
+            ),
+        )
+        .mount(&server)
+        .await;
+    let checked = call(&f.host, Window, "crate_update_check", json!({})).await;
+    assert_eq!(checked.data["available"], "0.18.0");
+    assert_eq!(checked.data["available_package"], "kuroko");
+    let staged = call(
+        &f.host,
+        Window,
+        "crate_update_stage",
+        json!({"version":"0.18.0"}),
+    )
+    .await;
+    assert!(staged.ok, "{:?}", staged.message);
+    let done = settled(&f).await;
+    assert_eq!(done["state"], "staged", "{done}");
+    assert_eq!(done["can_apply"], true);
+    let base = staged_dir(&directory(&f.host), "0.18.0");
+    let manifest: Manifest =
+        serde_json::from_str(&fs::read_to_string(base.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest.package.as_deref(), Some("kuroko"));
+    assert_eq!(manifest.archive.unwrap().name, name);
+    let mut kept: Vec<String> = fs::read_dir(base.join("root/bin"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        ["kuroko", "kuroko-host", "personal-teams-assistant", "pta"]
+    );
+}

@@ -600,9 +600,9 @@ impl DirectTask {
     pub(crate) fn is_classify(&self) -> bool {
         *self == Self::Classify
     }
-    /// The session's name: `Teams Assistant - director 42` for a classification of item 42,
-    /// `Teams Assistant - summary 42` for a summary of its run and `Teams Assistant -
-    /// supervision 42` for a supervisor's look at it; `Teams Assistant - audit` for an audit.
+    /// The session's name: `Kuroko - director 42` for a classification of item 42,
+    /// `Kuroko - summary 42` for a summary of its run and `Kuroko -
+    /// supervision 42` for a supervisor's look at it; `Kuroko - audit` for an audit.
     pub(crate) fn session_name(self, item: Option<u64>) -> SessionName {
         let purpose = match self {
             Self::Classify => "director",
@@ -1483,7 +1483,7 @@ mod tests {
             assert!(prompt.find(DIRECT_RULES) < prompt.find("Ignore the rules"));
             assert!(!arguments.iter().any(|a| a.contains("Ignore the rules")));
             // The session's name is never an argument.
-            assert!(!arguments.iter().any(|a| a.contains("Teams Assistant")));
+            assert!(!arguments.iter().any(|a| a.contains("Kuroko - ")));
             let env = read("env.txt");
             assert!(!env.contains("must-not-leak") && !env.contains("PTA_DIRECTOR_TEST_SECRET"));
         }

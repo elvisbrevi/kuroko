@@ -769,7 +769,7 @@ while read -r control; do :; done
                 .unwrap();
         assert_eq!(
             remote["request"]["name"],
-            "Teams Assistant - 4211 Fix \"rounding\" now"
+            "Kuroko - 4211 Fix \"rounding\" now"
         );
         let id = native.lock().unwrap().clone();
         assert!(alive(&id).await);

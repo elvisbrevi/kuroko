@@ -20,8 +20,64 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 /// The profile directory that holds staged pairs, the update journal and its lock.
 pub const DIRECTORY: &str = "maintenance";
-pub const CRATE: &str = "personal-teams-assistant";
-pub const CLI: &str = "pta";
+pub const CRATE: &str = OWN.name;
+pub const CLI: &str = OWN.cli;
+
+/// A crates.io package an installation of this product can be updated to: this one, or the one the
+/// product continues as under a new name. Its executables are the host, the CLI and, for a
+/// successor, aliases under the names older installations start (service entries, MCP clients).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Package {
+    pub name: &'static str,
+    pub host: &'static str,
+    pub cli: &'static str,
+    /// Every executable the package installs; an update replaces exactly these.
+    pub bins: &'static [&'static str],
+    /// The GitHub repository whose releases hold the package's archives.
+    pub repository: &'static str,
+}
+
+/// This package.
+pub const OWN: Package = Package {
+    name: "personal-teams-assistant",
+    host: "personal-teams-assistant",
+    cli: "pta",
+    bins: &["personal-teams-assistant", "pta"],
+    repository: env!("CARGO_PKG_REPOSITORY"),
+};
+
+/// The package the product continues as: once the registry lists it, an update installs it in
+/// place of this one, the same way this installation was installed (docs/rename-kuroko.md). Its
+/// binaries keep this package's names as aliases, so entries that start them keep working.
+pub const SUCCESSOR: Option<Package> = Some(Package {
+    name: "kuroko",
+    host: "kuroko-host",
+    cli: "kuroko",
+    bins: &["kuroko", "kuroko-host", "personal-teams-assistant", "pta"],
+    repository: "https://github.com/elvisbrevi/kuroko",
+});
+
+/// Every package an installation of this product may be recorded under. Cargo's and the install
+/// scripts' records of any of them belong to this installation, so an update replaces them all.
+pub const FAMILY: [&str; 2] = ["personal-teams-assistant", "kuroko"];
+
+/// Every executable any package of the product installs.
+pub const FAMILY_BINARIES: [&str; 4] = ["personal-teams-assistant", "pta", "kuroko", "kuroko-host"];
+
+/// The packages this one replaced under earlier names; their records are this installation's too.
+pub const PREDECESSORS: &[Package] = &[];
+
+/// The package called `name`: this one, its successor or a predecessor.
+pub fn package(name: &str) -> Option<Package> {
+    std::iter::once(OWN)
+        .chain(SUCCESSOR)
+        .chain(PREDECESSORS.iter().copied())
+        .find(|package| package.name == name)
+}
+
+fn bin_set(package: Package) -> BTreeSet<&'static str> {
+    package.bins.iter().copied().collect()
+}
 /// The sparse index Cargo itself reads for crates.io.
 pub const INDEX: &str = "https://index.crates.io";
 const MAX_INDEX: usize = 4 << 20;
@@ -80,6 +136,8 @@ impl std::fmt::Display for Version {
 pub struct Release {
     pub version: Version,
     pub rust_version: Option<Version>,
+    /// This package, or its successor once the registry lists it.
+    pub package: Package,
 }
 
 #[derive(Deserialize)]
@@ -106,13 +164,18 @@ pub fn index_path(name: &str) -> String {
 /// malformed lines, pre-releases and yanked versions are ignored; an answer that does not
 /// describe this crate at all is an error rather than "nothing newer".
 pub fn newest_stable(body: &str) -> Result<Option<Release>> {
+    newest_stable_of(body, OWN)
+}
+
+/// [`newest_stable`] for `package`'s own index answer.
+pub fn newest_stable_of(body: &str, package: Package) -> Result<Option<Release>> {
     let mut recognized = 0usize;
     let mut best: Option<Release> = None;
     for line in body.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(entry) = serde_json::from_str::<Entry>(line) else {
             continue;
         };
-        if entry.name != CRATE {
+        if entry.name != package.name {
             continue;
         }
         recognized += 1;
@@ -126,19 +189,28 @@ pub fn newest_stable(body: &str) -> Result<Option<Release>> {
             best = Some(Release {
                 version,
                 rust_version: entry.rust_version.as_deref().and_then(Version::parse_rust),
+                package,
             });
         }
     }
     ensure!(
         recognized > 0,
-        "The registry answer does not describe {CRATE}."
+        "The registry answer does not describe {}.",
+        package.name
     );
     Ok(best)
 }
 
 /// Reads the crate's index entry: bounded, read-only, no redirects, no credentials.
 pub async fn fetch_index(base: &str) -> Result<String> {
-    let url = format!("{}/{}", base.trim_end_matches('/'), index_path(CRATE));
+    fetch_index_of(base, OWN.name)
+        .await?
+        .context("The package registry answered with status 404.")
+}
+
+/// Reads `name`'s index entry, or nothing when the registry does not list that crate (404).
+pub async fn fetch_index_of(base: &str, name: &str) -> Result<Option<String>> {
+    let url = format!("{}/{}", base.trim_end_matches('/'), index_path(name));
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
@@ -152,6 +224,9 @@ pub async fn fetch_index(base: &str) -> Result<String> {
         .send()
         .await
         .context("The package registry could not be reached.")?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
     ensure!(
         response.status() == reqwest::StatusCode::OK,
         "The package registry answered with status {}.",
@@ -169,7 +244,9 @@ pub async fn fetch_index(base: &str) -> Result<String> {
             "The package registry answer is too large."
         );
     }
-    String::from_utf8(body).context("The package registry answer is not text.")
+    String::from_utf8(body)
+        .map(Some)
+        .context("The package registry answer is not text.")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -333,8 +410,7 @@ pub fn archive(exe: &Path) -> Option<std::result::Result<Archive, String>> {
         let bins: BTreeSet<&str> = record.bins.iter().map(|b| bin_name(b)).collect();
         if record.schema != 1
             || record.kind != "archive"
-            || record.package != CRATE
-            || bins != BTreeSet::from([CRATE, CLI])
+            || package(&record.package).is_none_or(|p| bins != bin_set(p))
             || !valid_target(&record.target)
         {
             return Err(invalid());
@@ -347,16 +423,22 @@ pub fn archive(exe: &Path) -> Option<std::result::Result<Archive, String>> {
     })())
 }
 
-/// The one entry for this crate: its version, source and build choices.
-fn own_record(records: Records) -> std::result::Result<(Version, Record), String> {
+/// The one entry for this product (under any of its package names): the package, its version,
+/// source and build choices.
+fn own_record(records: Records) -> std::result::Result<(String, Version, Record), String> {
     let mut found = records.installs.into_iter().filter_map(|(key, record)| {
         let (name, rest) = key.split_once(' ')?;
-        (name == CRATE).then_some(())?;
+        FAMILY.contains(&name).then_some(())?;
         let (version, source) = rest.split_once(' ')?;
         let source = source.strip_prefix('(')?.strip_suffix(')')?;
-        Some((version.to_owned(), source.to_owned(), record))
+        Some((
+            name.to_owned(),
+            version.to_owned(),
+            source.to_owned(),
+            record,
+        ))
     });
-    let (version, source, record) = found
+    let (name, version, source, record) = found
         .next()
         .ok_or("Cargo has no install record for this package in that location.")?;
     if found.next().is_some() {
@@ -370,7 +452,7 @@ fn own_record(records: Records) -> std::result::Result<(Version, Record), String
     }
     let version =
         Version::parse(&version).ok_or("The installed version is not a stable release number.")?;
-    Ok((version, record))
+    Ok((name, version, record))
 }
 
 /// The installation `exe` belongs to, or why it cannot be updated from here. A diagnostic is
@@ -399,7 +481,7 @@ pub fn inspect(exe: &Path) -> std::result::Result<Installation, String> {
         });
     }
     let (records, prebuilt) = read_records(&root)?;
-    let (version, record) = own_record(records)?;
+    let (_, version, record) = own_record(records)?;
     let bins: BTreeSet<&str> = record.bins.iter().map(|b| bin_name(b)).collect();
     if !(bins.contains(CRATE) && bins.contains(CLI)) {
         return Err(
@@ -549,9 +631,20 @@ pub fn install_args(
     root: &Path,
     target_dir: &Path,
 ) -> Vec<OsString> {
+    install_args_for(OWN, installation, version, root, target_dir)
+}
+
+/// [`install_args`] for `package`: this one, or the successor installed the same way.
+pub fn install_args_for(
+    package: Package,
+    installation: &Installation,
+    version: &Version,
+    root: &Path,
+    target_dir: &Path,
+) -> Vec<OsString> {
     if installation.prebuilt {
         // `=` pins the exact release; without it the newest compatible one would be taken.
-        let mut args: Vec<OsString> = ["binstall", CRATE, "--version"]
+        let mut args: Vec<OsString> = ["binstall", package.name, "--version"]
             .into_iter()
             .map(OsString::from)
             .collect();
@@ -560,7 +653,7 @@ pub fn install_args(
         args.push(root.as_os_str().to_owned());
         return args;
     }
-    let mut args: Vec<OsString> = ["install", CRATE, "--version"]
+    let mut args: Vec<OsString> = ["install", package.name, "--version"]
         .into_iter()
         .map(OsString::from)
         .collect();
@@ -804,6 +897,17 @@ pub struct Manifest {
     /// manifest (and the journal that embeds it) stays readable by earlier versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive: Option<ArchiveFile>,
+    /// The staged package when it is not this one (the successor that replaces it); omitted
+    /// otherwise, for the same reason as `archive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+}
+
+impl Manifest {
+    /// The package that was staged; `None` for a name no version of this product knows.
+    pub fn staged_package(&self) -> Option<Package> {
+        self.package.as_deref().map_or(Some(OWN), package)
+    }
 }
 
 pub(crate) fn exe_name(name: &str) -> String {
@@ -834,16 +938,29 @@ pub async fn verify(
     env: &[(OsString, OsString)],
     now: i64,
 ) -> Result<Manifest> {
+    verify_for(OWN, root, version, wanted, env, now).await
+}
+
+/// [`verify`] for a staged `package`: this one, or the successor that replaces it.
+pub async fn verify_for(
+    package: Package,
+    root: &Path,
+    version: &Version,
+    wanted: &Installation,
+    env: &[(OsString, OsString)],
+    now: i64,
+) -> Result<Manifest> {
     let (records, _) = read_records(root).map_err(anyhow::Error::msg)?;
-    let (recorded, record) = own_record(records).map_err(anyhow::Error::msg)?;
+    let (name, recorded, record) = own_record(records).map_err(anyhow::Error::msg)?;
     ensure!(
-        recorded == *version,
-        "The staged package is not version {version}."
+        name == package.name && recorded == *version,
+        "The staged package is not {} version {version}.",
+        package.name
     );
     let bins: BTreeSet<&str> = record.bins.iter().map(|b| bin_name(b)).collect();
     ensure!(
-        bins == BTreeSet::from([CRATE, CLI]),
-        "The staged package is not the matched application and pta pair."
+        bins == bin_set(package),
+        "The staged package does not hold exactly the application and its command."
     );
     let mut features = record.features.clone();
     features.sort();
@@ -854,7 +971,7 @@ pub async fn verify(
             && record.no_default_features == wanted.no_default_features,
         "The staged build does not use the installed feature choice."
     );
-    let binaries = verify_pair(root, version, env).await?;
+    let binaries = verify_pair_for(package, root, version, env).await?;
     Ok(Manifest {
         schema: 1,
         version: version.to_string(),
@@ -865,7 +982,14 @@ pub async fn verify(
         target: wanted.target.clone(),
         binaries,
         archive: None,
+        package: other_package(package),
     })
+}
+
+/// What a manifest records about its package: nothing for this one, so a manifest (and the
+/// journal that embeds it) stays readable by earlier versions; the name for any other.
+pub fn other_package(package: Package) -> Option<String> {
+    (package != OWN).then(|| package.name.to_owned())
 }
 
 /// Digests both executables under `root/bin` and checks that they report `version`. Executes only
@@ -875,12 +999,22 @@ pub async fn verify_pair(
     version: &Version,
     env: &[(OsString, OsString)],
 ) -> Result<BTreeMap<String, Digest>> {
+    verify_pair_for(OWN, root, version, env).await
+}
+
+/// [`verify_pair`] for `package`: digests every executable it installs and probes its host and CLI.
+pub async fn verify_pair_for(
+    package: Package,
+    root: &Path,
+    version: &Version,
+    env: &[(OsString, OsString)],
+) -> Result<BTreeMap<String, Digest>> {
     let mut binaries = BTreeMap::new();
-    for name in [CRATE, CLI] {
+    for name in package.bins {
         let path = root.join("bin").join(exe_name(name));
-        binaries.insert(name.to_owned(), digest(&path)?);
+        binaries.insert((*name).to_owned(), digest(&path)?);
     }
-    let cli = root.join("bin").join(exe_name(CLI));
+    let cli = root.join("bin").join(exe_name(package.cli));
     let reported = probe(&cli, &["--version", "--json"], env).await?;
     let reported: serde_json::Value = serde_json::from_str(reported.trim())
         .context("The staged pta does not report its version.")?;
@@ -888,10 +1022,10 @@ pub async fn verify_pair(
         reported["data"]["cli_version"] == version.to_string(),
         "The staged pta reports a different version."
     );
-    let host = root.join("bin").join(exe_name(CRATE));
+    let host = root.join("bin").join(exe_name(package.host));
     let reported = probe(&host, &["--version"], env).await?;
     ensure!(
-        reported.trim() == format!("{CRATE} {version}"),
+        reported.trim() == format!("{} {version}", package.name),
         "The staged application reports a different version."
     );
     Ok(binaries)

@@ -259,6 +259,7 @@ async fn a_wrong_or_malformed_registry_answer_is_a_failed_check_not_an_update() 
     // A redirect to somewhere else is a failure too.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
+        .and(path("/pe/rs/personal-teams-assistant"))
         .respond_with(
             ResponseTemplate::new(302).insert_header("location", "http://127.0.0.1:9/evil"),
         )
@@ -701,6 +702,7 @@ async fn dismissing_hides_that_release_only() {
     // A newer release shows the notice again.
     server.reset().await;
     Mock::given(method("GET"))
+        .and(path("/pe/rs/personal-teams-assistant"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_string([line("0.9.14", false), line("0.9.15", false)].join("\n")),
@@ -849,6 +851,7 @@ fn with_pair(f: &Fixture) {
         target: None,
         binaries,
         archive: None,
+        package: None,
     };
     fs::write(
         base.join("manifest.json"),

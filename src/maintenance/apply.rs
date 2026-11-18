@@ -7,7 +7,10 @@
 //! one to take. Files are named by the journal's ID, so a leftover of an earlier attempt can never
 //! be mistaken for this one. Every observable point calls the `hook`, which production leaves empty
 //! and tests use to inject failures at exactly that point.
-use super::{ARCHIVE_RECORD, ArchiveFile, CLI, CRATE, Digest, Manifest, digest, exe_name};
+use super::{
+    ARCHIVE_RECORD, ArchiveFile, Digest, FAMILY, FAMILY_BINARIES, Manifest, Package, digest,
+    exe_name,
+};
 use anyhow::{Context, Result, anyhow, ensure};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -25,7 +28,6 @@ const SCHEMA: u32 = 1;
 /// How long an unfinished journal whose lock is free may still be a hand-over between the host and
 /// its helper rather than an interrupted update.
 pub const GRACE_SECONDS: i64 = 60;
-const BINARIES: [&str; 2] = [CRATE, CLI];
 /// The installation's records a rollback puts back: Cargo's two, and the install scripts' own.
 const RECORDS: [&str; 3] = [".crates.toml", ".crates2.json", ARCHIVE_RECORD];
 const RETRIES: u32 = 20;
@@ -511,7 +513,7 @@ fn merge_records(root: &Path, staged: &Path, id: &str) -> Result<()> {
     ) {
         let mut live: serde_json::Value = serde_json::from_str(&live)?;
         let new: serde_json::Value = serde_json::from_str(&new)?;
-        let ours = |key: &str| key.split(' ').next() == Some(CRATE);
+        let ours = |key: &str| key.split(' ').next().is_some_and(|n| FAMILY.contains(&n));
         let installs = live["installs"]
             .as_object_mut()
             .context("Cargo's install record is not valid.")?;
@@ -530,7 +532,7 @@ fn merge_records(root: &Path, staged: &Path, id: &str) -> Result<()> {
     ) {
         let mut live: toml::Table = live.parse()?;
         let new: toml::Table = new.parse()?;
-        let ours = |key: &str| key.split(' ').next() == Some(CRATE);
+        let ours = |key: &str| key.split(' ').next().is_some_and(|n| FAMILY.contains(&n));
         let table = live
             .entry("v1")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -550,12 +552,24 @@ fn merge_records(root: &Path, staged: &Path, id: &str) -> Result<()> {
 }
 
 /// Rewrites the install scripts' record for the archive now installed: version, archive, digest
-/// and time; every other field (target, repository, binaries, ones a later script adds) is kept.
-fn archive_record(root: &Path, version: &str, archive: &ArchiveFile, id: &str) -> Result<()> {
+/// and time, and for a successor package its name, executables and repository; every other field
+/// (target, ones a later script adds) is kept.
+fn archive_record(
+    root: &Path,
+    version: &str,
+    archive: &ArchiveFile,
+    package: Option<Package>,
+    id: &str,
+) -> Result<()> {
     let path = root.join(ARCHIVE_RECORD);
     let text = fs::read_to_string(&path).context("The installation record cannot be read.")?;
     let mut record: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&text).context("The installation record is not valid.")?;
+    if let Some(package) = package {
+        record.insert("package".into(), package.name.into());
+        record.insert("bins".into(), package.bins.to_vec().into());
+        record.insert("repository".into(), package.repository.into());
+    }
     record.insert("version".into(), version.into());
     record.insert("archive".into(), archive.name.clone().into());
     record.insert("sha256".into(), archive.sha256.clone().into());
@@ -667,6 +681,23 @@ impl Apply {
         self.dir.join(BACKUPS).join(&self.journal.id)
     }
 
+    /// The executables the staged package installs. A successor package adds some that were not
+    /// installed before (see [`Self::added`]).
+    fn binaries(&self) -> Vec<String> {
+        self.journal.manifest.binaries.keys().cloned().collect()
+    }
+
+    /// Whether this update put `name` in place where no executable of that name was installed:
+    /// undoing it removes the file instead of restoring a previous one.
+    fn added(&self, name: &str) -> bool {
+        !self.journal.previous.contains_key(name)
+            && self
+                .journal
+                .steps
+                .iter()
+                .any(|step| step == &format!("{name}:installed"))
+    }
+
     /// Records what is installed and copies what the new version could change: Cargo's records
     /// and the data. Nothing here modifies anything that is in use.
     pub fn back_up(&mut self) -> Result<()> {
@@ -682,13 +713,21 @@ impl Apply {
             }
         }
         crate::security::private_dir(&base)?;
-        for name in BINARIES {
-            let live = self.journal.bin().join(exe_name(name));
+        for name in self.binaries() {
+            let live = self.journal.bin().join(exe_name(&name));
+            // A successor package adds executables that are not installed yet.
+            if !live.exists() {
+                continue;
+            }
             self.journal.previous.insert(
-                name.to_owned(),
+                name,
                 digest(&live).context("The installed executable cannot be read.")?,
             );
         }
+        ensure!(
+            !self.journal.previous.is_empty(),
+            "The installed executables cannot be found."
+        );
         let records = base.join("records");
         crate::security::private_dir(&records)?;
         for name in RECORDS {
@@ -710,7 +749,8 @@ impl Apply {
     /// file renamed aside, the copy renamed into its name; then Cargo's records.
     pub fn replace(&mut self) -> Result<()> {
         self.phase(Phase::Replacing)?;
-        for name in BINARIES {
+        for name in self.binaries() {
+            let name = name.as_str();
             let expected = self
                 .journal
                 .manifest
@@ -729,10 +769,12 @@ impl Apply {
                 "A staged executable changed after it was verified."
             );
             self.step(&format!("{name}:copied"))?;
-            self.at(&format!("retire:{name}"))?;
-            retry(self.pause, || fs::rename(&live, &previous))
-                .context("The installed executable is in use and cannot be replaced.")?;
-            self.step(&format!("{name}:retired"))?;
+            if self.journal.previous.contains_key(name) {
+                self.at(&format!("retire:{name}"))?;
+                retry(self.pause, || fs::rename(&live, &previous))
+                    .context("The installed executable is in use and cannot be replaced.")?;
+                self.step(&format!("{name}:retired"))?;
+            }
             self.at(&format!("install:{name}"))?;
             retry(self.pause, || fs::rename(&new, &live))
                 .context("The new executable could not be put in place.")?;
@@ -754,12 +796,22 @@ impl Apply {
             && self.journal.previous.iter().all(|(name, expected)| {
                 digest(&self.journal.bin().join(exe_name(name))).is_ok_and(|d| &d == expected)
             })
+            && self
+                .binaries()
+                .iter()
+                .filter(|name| self.added(name))
+                .all(|name| !self.journal.bin().join(exe_name(name)).exists())
     }
 
     fn undo(&self, name: &str) -> Result<()> {
         let live = self.journal.bin().join(exe_name(name));
         let previous = self.path(name, "previous");
         let failed = self.path(name, "failed");
+        if self.added(name) && live.exists() {
+            let _ = fs::remove_file(&failed);
+            retry(self.pause, || fs::rename(&live, &failed))
+                .context("The new executable is in use and cannot be removed.")?;
+        }
         if previous.exists() {
             if live.exists() {
                 let _ = fs::remove_file(&failed);
@@ -779,10 +831,10 @@ impl Apply {
         self.phase(Phase::RollingBack)?;
         self.at("rollback")?;
         let mut first = None;
-        for name in BINARIES {
+        for name in self.binaries() {
             if let Err(error) = self
                 .at(&format!("undo:{name}"))
-                .and_then(|()| self.undo(name))
+                .and_then(|()| self.undo(&name))
             {
                 first.get_or_insert(error);
             }
@@ -845,17 +897,24 @@ impl Apply {
     pub fn commit(&mut self) -> Result<()> {
         if let Some(archive) = self.journal.manifest.archive.clone() {
             self.at("record")?;
+            let package = self
+                .journal
+                .manifest
+                .package
+                .as_ref()
+                .and_then(|_| self.journal.manifest.staged_package());
             archive_record(
                 &self.journal.root,
                 &self.journal.to,
                 &archive,
+                package,
                 &self.journal.id,
             )?;
             self.step("record")?;
         }
         self.phase(Phase::Committed)?;
-        for name in BINARIES {
-            let _ = fs::remove_file(self.path(name, "previous"));
+        for name in self.binaries() {
+            let _ = fs::remove_file(self.path(&name, "previous"));
         }
         let _ = fs::remove_dir_all(self.backup_dir());
         Ok(())
@@ -946,7 +1005,7 @@ pub fn sweep(dir: &Path, root: &Path, installed: super::Version) {
     if let Ok(entries) = fs::read_dir(root.join("bin")) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let ours = BINARIES
+            let ours = FAMILY_BINARIES
                 .iter()
                 .any(|b| name.starts_with(&format!(".{}.", exe_name(b))));
             // A rolled-back update keeps nothing in `bin` that it needs: its `.previous` files

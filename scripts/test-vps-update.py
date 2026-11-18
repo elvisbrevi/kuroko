@@ -36,15 +36,19 @@ printf '{"ok":true,"data":{"host_running":true,"host_version":"%s","running":%s,
 """
 CARGO = """#!/bin/sh
 echo "cargo $*" >> "$WORLD/calls"
+crate=$2
 while [ $# -gt 0 ]; do [ "$1" = --version ] && version=$2; shift; done
 [ "$CARGO_INCREMENTAL" = 0 ] || exit 3
 [ "$CARGO_BUILD_JOBS" = 2 ] || exit 4
 if grep -qx "$version" "$WORLD/install-fails" 2>/dev/null; then echo "error: could not compile" >&2; exit 101; fi
-for name in pta personal-teams-assistant; do
+names="pta personal-teams-assistant"
+# The successor keeps the former names beside its own; `--force` takes them over from the old package.
+[ "$crate" = kuroko ] && names="$names kuroko kuroko-host"
+for name in $names; do
   sed "s/{{version}}/$version/" "$WORLD/binary" > "$CARGO_HOME/bin/$name"
   chmod +x "$CARGO_HOME/bin/$name"
 done
-echo "personal-teams-assistant $version (registry)" > "$CARGO_HOME/.crates.toml"
+echo "$crate $version (registry)" > "$CARGO_HOME/.crates.toml"
 if [ -f "$WORLD/busy-after-install" ]; then
   python3 -c 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute("UPDATE runs SET status=?", ("running",)).connection.commit()' "$WORLD/data/activity-registration.db"
 fi
@@ -63,12 +67,15 @@ esac
 
 class Index(http.server.BaseHTTPRequestHandler):
     entries = []
+    # The successor's entries; while empty the index does not list the crate (404).
+    successor = []
 
     def do_GET(self):
-        if self.path != "/pe/rs/personal-teams-assistant":
+        entries = {"/pe/rs/personal-teams-assistant": Index.entries, "/ku/ro/kuroko": Index.successor}.get(self.path)
+        if not entries:
             self.send_error(404)
             return
-        body = "".join(json.dumps(e) + "\n" for e in Index.entries).encode()
+        body = "".join(json.dumps(e) + "\n" for e in entries).encode()
         self.send_response(200)
         self.end_headers()
         self.wfile.write(body)
@@ -146,9 +153,10 @@ class Updater(unittest.TestCase):
             path.chmod(0o755)
         (self.cargo / ".crates.toml").write_text(f"personal-teams-assistant {version} (path)\n")
 
-    def publish(self, *versions, yanked=()):
+    def publish(self, *versions, yanked=(), successor=()):
         Index.entries = [{"name": "personal-teams-assistant", "vers": v, "yanked": False} for v in versions]
         Index.entries += [{"name": "personal-teams-assistant", "vers": v, "yanked": True} for v in yanked]
+        Index.successor = [{"name": "kuroko", "vers": v, "yanked": False} for v in successor]
 
     def run_update(self, *args):
         result = subprocess.run([sys.executable, "-I", str(SCRIPT), *args], env=self.env,
@@ -197,6 +205,33 @@ class Updater(unittest.TestCase):
         self.assertIn("updated 0.7.28 -> 0.7.29", self.history())
         self.assertEqual(self.run_update()[0], 0)
         self.assertNotIn("restart", " ".join(self.calls()))
+
+    def test_the_successor_package_replaces_this_one_once_published(self):
+        self.publish("0.7.28", "0.7.29", successor=("0.8.0",))
+        code, output = self.run_update()
+        self.assertEqual(code, 0, output)
+        calls = self.calls()
+        self.assertIn("cargo install kuroko --version 0.8.0 --locked --no-default-features --force", calls)
+        self.assertEqual((self.installed(), self.running()), ("0.8.0", "0.8.0"))
+        for name in ("pta", "personal-teams-assistant", "kuroko", "kuroko-host"):
+            self.assertTrue((self.cargo / "bin" / name).is_file(), name)
+        self.assertIn("kuroko 0.8.0", (self.cargo / ".crates.toml").read_text())
+        self.assertIn("installing kuroko 0.8.0", self.history())
+        # The next release comes from the successor too.
+        self.publish("0.7.28", "0.7.29", successor=("0.8.0", "0.8.1"))
+        self.assertEqual(self.run_update()[0], 0)
+        self.assertIn("cargo install kuroko --version 0.8.1 --locked --no-default-features --force", self.calls())
+
+    def test_a_successor_that_fails_is_rolled_back_to_the_former_package(self):
+        self.publish("0.7.28", successor=("0.8.0",))
+        (self.world / "unhealthy").write_text("0.8.0\n")
+        code, output = self.run_update()
+        self.assertEqual(code, 1, output)
+        self.assertEqual((self.installed(), self.running()), ("0.7.28", "0.7.28"))
+        self.assertIn("personal-teams-assistant 0.7.28 (path)", (self.cargo / ".crates.toml").read_text())
+        for name in ("kuroko", "kuroko-host"):
+            self.assertFalse((self.cargo / "bin" / name).exists(), name)
+        self.assertIn("0.8.0", self.blocked())
 
     def test_unhealthy_release_is_rolled_back_and_blocked_until_a_newer_one(self):
         self.publish("0.7.28", "0.7.29")

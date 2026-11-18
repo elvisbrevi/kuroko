@@ -1,6 +1,7 @@
 # Renaming the product to Kuroko
 
-Status: **phase 0, inventory**, waiting for the owner's approval. No code has changed yet.
+Status: the owner approved this inventory and the revised order (§2) on 2026-11-18. **Phase 1, the
+bridge release `personal-teams-assistant` 0.17.0**, is in progress (§6).
 
 The visible brand has been Kuroko since 0.16.0 (#321). This plan renames the crate, the binaries,
 the CLI, MCP, the skill, the environment variables, the service entries, the URLs and the text, so
@@ -278,3 +279,48 @@ scopes, the OAuth flow and the Entra app.
    only once every machine reports migrated service entries and MCP configurations.
 7. **Optional hosts**: `kuroko-cloud.elvisbrevi.cl` and a new portal host (the iPhone PWA would need
    to be added again).
+
+## 6. Phase 1: the bridge release (0.17.0)
+
+What 0.17.0 contains:
+
+- **Successor-aware updater.** `maintenance::SUCCESSOR` describes `kuroko`: the host `kuroko-host`,
+  the CLI `kuroko`, the four executables (`kuroko`, `kuroko-host`, `personal-teams-assistant`,
+  `pta`) and the repository `github.com/elvisbrevi/kuroko`. Checks read `kuroko`'s index entry
+  first and fall back to this crate's entry while the registry does not list it. Staging builds
+  (`cargo install kuroko`), fetches (`cargo binstall kuroko`) or downloads (`kuroko-<target>-v<version>`
+  from the new repository) the successor the way the installation was installed. Verification
+  requires the four executables, and the manifest records `package: "kuroko"`. The helper started
+  for the successor is its own `kuroko-host`.
+- **Apply and rollback across packages.** The helper replaces the executables the manifest lists
+  and removes the ones it added when it undoes the update. It replaces Cargo's records of both names
+  with the staged package's and, for an archive installation, rewrites `install.json`'s `package`,
+  `bins` and `repository`. Since the successor's helper applies it, 0.18.0 carries the same code.
+- **Renamed repository.** A release download follows a `github.com` redirect under the same owner
+  to `/releases/download/`, so 0.17.x keeps updating after the rename.
+- **`KUROKO_PROFILE_DIR`**, with `PTA_PROFILE_DIR` still read (`src/env_names.rs`); child hosts
+  get both names.
+- **Sessions** are named `Kuroko - …`; the **GUI** reads and writes `kuroko-*` `localStorage` keys
+  and moves values saved under `pta-*`.
+- **`scripts/vps-update.py`** installs `kuroko` with `--force` once the registry lists it, backs up
+  and restores the executables of both names, and removes the successor's new ones on a rollback.
+- **Rehearsal.** In debug builds only, `KUROKO_UPDATE_INDEX` and `KUROKO_UPDATE_RELEASES` point the
+  in-app updater at local doubles, so the jump from 0.17.0 to 0.18.0 can be rehearsed with real
+  binaries before 0.18.0 is published.
+
+What moved to 0.18.0, and why:
+
+- **Service entries** (`kuroko-<id>.service`, `cl.elvisbrevi.kuroko.host.<id>`, `Kuroko-<id>`) need
+  `kuroko-host`, which only exists in the `kuroko` package. Until then, the alias keeps the existing
+  entries working. 0.18.0 migrates them when the host starts or on `service install`/repair.
+- **The invocation name and deprecation notices** only make sense once a `kuroko` binary exists.
+- **The other `PTA_*` variables** (development, installer, VPS updater) are renamed with the
+  scripts that read them, in phases 2 and 4.
+
+Manual steps tied to this release:
+
+- The macOS computer asks the Keychain to allow each new version, so 0.17.0 (and later 0.18.0) is
+  installed there with someone at the computer choosing **Always Allow**. It is also still on
+  0.15.0 with 0.16.0 prepared.
+- The new `vps-update.py` is copied to `~/.local/bin/personal-teams-assistant-update` once 0.17.0
+  is merged.

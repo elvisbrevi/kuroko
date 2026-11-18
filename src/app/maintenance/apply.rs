@@ -182,6 +182,13 @@ pub(super) async fn request(
             &format!("Prepare version {version} first: no verified copy of it is ready."),
         );
     };
+    let Some(package) = manifest.staged_package() else {
+        return Reply::error(
+            "state_conflict",
+            6,
+            "The prepared copy is of a package this version does not know. Prepare the update again.",
+        );
+    };
     let base = staged_dir(&dir, &version.to_string()).join("root");
     if !core::unchanged(&base, &manifest) {
         return Reply::error(
@@ -276,7 +283,7 @@ pub(super) async fn request(
             installation
                 .root
                 .join("bin")
-                .join(core::exe_name(core::CRATE)),
+                .join(core::exe_name(core::OWN.host)),
         );
         tokio::task::spawn_blocking(move || {
             super::super::service::manages(&profile, &exe).is_some()
@@ -312,7 +319,7 @@ pub(super) async fn request(
         audit(&dir, "unattended_apply", Some(version), None, None);
     }
     if !env.manual
-        && let Err(error) = spawn(&base)
+        && let Err(error) = spawn(&base, package)
     {
         let _ = fs::remove_file(dir.join(journal::JOURNAL));
         return Reply::error("operation_failed", 1, &error.to_string());
@@ -373,8 +380,10 @@ pub(super) fn cancel(host: &Host, env: &Environment) -> Reply {
     }
 }
 
-fn spawn(staged: &Path) -> Result<()> {
-    let exe = staged.join("bin").join(core::exe_name(core::CRATE));
+/// Starts the helper from the prepared copy: the staged package's own host, which may be the
+/// successor's.
+fn spawn(staged: &Path, package: core::Package) -> Result<()> {
+    let exe = staged.join("bin").join(core::exe_name(package.host));
     ensure!(exe.is_file(), "The prepared application is missing.");
     let mut command = std::process::Command::new(exe);
     command
@@ -423,7 +432,7 @@ pub(crate) fn run_helper() -> i32 {
     let Some(entry) = journal::read(&dir).filter(|j| j.phase == Phase::Requested) else {
         return 2;
     };
-    let exe = entry.bin().join(core::exe_name(core::CRATE));
+    let exe = entry.bin().join(core::exe_name(core::OWN.host));
     let service = entry
         .intent
         .service
@@ -718,7 +727,7 @@ impl Platform for Local {
             .await
             .context("The application could not be started.")?;
         }
-        let exe = self.root.join("bin").join(core::exe_name(core::CRATE));
+        let exe = self.root.join("bin").join(core::exe_name(core::OWN.host));
         let mut command = std::process::Command::new(exe);
         for flag in launch
             .iter()

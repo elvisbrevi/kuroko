@@ -1885,11 +1885,13 @@ pub fn run() {
         return;
     }
     // A service manager that cannot set variables (the Windows Task Scheduler) names an isolated
-    // profile with `--profile-dir`; it means exactly `PTA_PROFILE_DIR`.
+    // profile with `--profile-dir`; it means exactly `KUROKO_PROFILE_DIR`.
     let (args, profile) = service::profile_argument(std::env::args().skip(1).collect());
     if let Some(profile) = profile {
-        // SAFETY: nothing else runs yet; every thread and runtime starts after this point.
-        unsafe { std::env::set_var("PTA_PROFILE_DIR", profile) };
+        for (name, value) in crate::env_names::pairs(crate::env_names::PROFILE_DIR, profile) {
+            // SAFETY: nothing else runs yet; every thread and runtime starts after this point.
+            unsafe { std::env::set_var(name, value) };
+        }
     }
     // Lets an update verify a staged build without starting a host.
     if args.as_slice() == ["--version"] {

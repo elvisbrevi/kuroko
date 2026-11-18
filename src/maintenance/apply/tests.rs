@@ -1,6 +1,7 @@
 //! Replacement, undo, recovery and work checks on real files in temporary directories, with
 //! synthetic executables (plain bytes: nothing here runs a program) and injected failures.
 use super::*;
+use crate::maintenance::{CLI, CRATE};
 use serde_json::json;
 
 const OLD_HOST: &[u8] = b"previous host executable";
@@ -109,6 +110,7 @@ impl Fixture {
             target: None,
             binaries,
             archive: None,
+            package: None,
         }
     }
 
@@ -788,6 +790,7 @@ fn a_rollback_or_a_failed_record_write_restores_the_archive_record() {
         &f.root,
         "0.9.14",
         apply.journal.manifest.archive.as_ref().unwrap(),
+        None,
         "job1",
     )
     .unwrap();
@@ -841,4 +844,180 @@ fn windows_locked_executable_of_an_archive_installation() {
     apply.roll_back().unwrap();
     f.assert_previous_pair();
     assert_eq!(fs::read_to_string(&record).unwrap(), before);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The successor package (docs/rename-kuroko.md): the product continues under another crate name
+// whose package keeps this one's executables as aliases and adds its own.
+
+const SUCCESSOR: &[&str] = &["kuroko", "kuroko-host", "personal-teams-assistant", "pta"];
+
+fn successor_contents(name: &str) -> Vec<u8> {
+    format!("successor {name} executable").into_bytes()
+}
+
+/// The fixture with the successor staged: its four executables and its own Cargo records.
+fn successor_fixture() -> Fixture {
+    let f = Fixture::new();
+    for name in SUCCESSOR {
+        fs::write(
+            f.staged.join("bin").join(exe_name(name)),
+            successor_contents(name),
+        )
+        .unwrap();
+    }
+    let key = "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)";
+    let record = json!({"bins":SUCCESSOR,"features":[],"all_features":false,
+        "no_default_features":true,"profile":"release"});
+    fs::write(
+        f.staged.join(".crates2.json"),
+        json!({"installs":{key: record}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        f.staged.join(".crates.toml"),
+        format!("[v1]\n\"{key}\" = {}\n", json!(SUCCESSOR)),
+    )
+    .unwrap();
+    f
+}
+
+fn successor_apply(f: &Fixture) -> Apply {
+    let mut journal = f.journal();
+    journal.to = "0.18.0".into();
+    journal.manifest.version = "0.18.0".into();
+    journal.manifest.package = Some("kuroko".into());
+    journal.manifest.binaries = SUCCESSOR
+        .iter()
+        .map(|n| {
+            (
+                (*n).to_owned(),
+                digest(&f.staged.join("bin").join(exe_name(n))).unwrap(),
+            )
+        })
+        .collect();
+    Apply::new(&f.maintenance, journal).without_pause()
+}
+
+#[test]
+fn the_successor_replaces_this_package_its_executables_and_its_records() {
+    let f = successor_fixture();
+    let mut apply = successor_apply(&f);
+    apply.back_up().unwrap();
+    // Only what was installed has a previous version to come back to.
+    assert_eq!(
+        apply.journal.previous.keys().collect::<Vec<_>>(),
+        [CRATE, CLI]
+    );
+    apply.replace().unwrap();
+    for name in SUCCESSOR {
+        assert_eq!(f.bin(name), successor_contents(name), "{name}");
+    }
+    assert!(apply.installed_is_new());
+    assert!(!apply.installed_is_previous());
+    let records = fs::read_to_string(f.root.join(".crates2.json")).unwrap();
+    assert!(
+        records.contains("kuroko 0.18.0")
+            && !records.contains("personal-teams-assistant 0.9.13")
+            && records.contains("other 1.0.0"),
+        "{records}"
+    );
+    let toml = fs::read_to_string(f.root.join(".crates.toml")).unwrap();
+    assert!(
+        toml.contains("kuroko 0.18.0")
+            && !toml.contains("personal-teams-assistant 0.9.13")
+            && toml.contains("other 1.0.0"),
+        "{toml}"
+    );
+    apply.commit().unwrap();
+    assert!(f.leftovers().is_empty(), "{:?}", f.leftovers());
+}
+
+#[test]
+fn a_successor_that_fails_anywhere_leaves_exactly_the_previous_package() {
+    for point in [
+        "backup",
+        "copy:kuroko",
+        "install:kuroko",
+        "copy:kuroko-host",
+        "install:kuroko-host",
+        "retire:personal-teams-assistant",
+        "install:pta",
+        "records",
+        "",
+    ] {
+        let f = successor_fixture();
+        let target = point.to_owned();
+        let mut apply = successor_apply(&f).with_hook(move |at| {
+            if at == target {
+                Err(io::Error::other("injected"))
+            } else {
+                Ok(())
+            }
+        });
+        let result = apply.back_up().and_then(|()| apply.replace());
+        assert_eq!(result.is_err(), !point.is_empty(), "{point}");
+        let mut undo = Apply::new(&f.maintenance, read(&f.maintenance).unwrap()).without_pause();
+        if point != "backup" {
+            undo.roll_back().unwrap();
+            assert!(undo.installed_is_previous(), "{point}");
+        }
+        f.assert_previous();
+        for name in ["kuroko", "kuroko-host"] {
+            assert!(
+                !f.root.join("bin").join(exe_name(name)).exists(),
+                "{point}: {name}"
+            );
+        }
+        // Running it again changes nothing.
+        let mut again = Apply::new(&f.maintenance, read(&f.maintenance).unwrap()).without_pause();
+        again.roll_back().unwrap();
+        f.assert_previous();
+    }
+}
+
+#[test]
+fn an_archive_installation_record_names_the_successor_once_committed() {
+    let (f, before) = archive_fixture();
+    let f = {
+        // The archive fixture's staging with the successor's executables.
+        for name in SUCCESSOR {
+            fs::write(
+                f.staged.join("bin").join(exe_name(name)),
+                successor_contents(name),
+            )
+            .unwrap();
+        }
+        f
+    };
+    let mut apply = successor_apply(&f);
+    apply.journal.manifest.target = Some("x86_64-unknown-linux-gnu".into());
+    apply.journal.manifest.archive = Some(ArchiveFile {
+        name: "kuroko-x86_64-unknown-linux-gnu-v0.18.0.tgz".into(),
+        sha256: "2".repeat(64),
+        size: 42,
+    });
+    apply.back_up().unwrap();
+    apply.replace().unwrap();
+    let record = f.root.join(super::super::ARCHIVE_RECORD);
+    assert_eq!(fs::read_to_string(&record).unwrap(), before);
+    apply.commit().unwrap();
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&record).unwrap()).unwrap();
+    assert_eq!(written["package"], "kuroko");
+    assert_eq!(written["version"], "0.18.0");
+    assert_eq!(written["bins"], json!(SUCCESSOR));
+    assert_eq!(
+        written["repository"],
+        "https://github.com/elvisbrevi/kuroko"
+    );
+    assert_eq!(
+        written["archive"],
+        "kuroko-x86_64-unknown-linux-gnu-v0.18.0.tgz"
+    );
+    assert_eq!(written["target"], "x86_64-unknown-linux-gnu");
+    // The record now describes an installation this version recognizes and updates.
+    let exe = f.root.join("bin").join(exe_name(CLI));
+    let archive = crate::maintenance::archive(&exe).unwrap().unwrap();
+    assert_eq!(archive.version, crate::maintenance::Version(0, 18, 0));
 }

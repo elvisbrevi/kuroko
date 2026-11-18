@@ -404,6 +404,7 @@ fn the_build_environment_keeps_tool_settings_and_drops_everything_else() {
         ("STATE_ENCRYPTION_KEY", "state-secret"),
         ("PTA_MACHINE_TOKEN", "machine-secret"),
         ("PTA_PROFILE_DIR", "/profile"),
+        ("KUROKO_PROFILE_DIR", "/profile"),
         ("GITHUB_TOKEN", "github-secret"),
         ("RUSTFLAGS", "-C link-arg=-fuse-ld=evil"),
         ("CARGO_TARGET_DIR", "/elsewhere"),
@@ -422,6 +423,7 @@ fn the_build_environment_keeps_tool_settings_and_drops_everything_else() {
         "STATE_ENCRYPTION_KEY",
         "PTA_MACHINE_TOKEN",
         "PTA_PROFILE_DIR",
+        "KUROKO_PROFILE_DIR",
         "GITHUB_TOKEN",
         "RUSTFLAGS",
         "CARGO_TARGET_DIR",
@@ -802,4 +804,165 @@ fn cargos_own_record_wins_over_an_archive_record_and_no_record_is_no_archive() {
     assert_eq!(inspect(&exe).unwrap().version, v("0.11.2"));
     // An executable outside a bin directory has no installation of any kind.
     assert!(archive(&dir.path().join(exe_name(CLI))).is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// The successor package (docs/rename-kuroko.md).
+
+fn successor() -> Package {
+    SUCCESSOR.expect("this package names its successor")
+}
+
+#[test]
+fn the_successor_keeps_this_packages_executables_as_aliases() {
+    let next = successor();
+    assert_eq!(
+        (next.name, next.host, next.cli),
+        ("kuroko", "kuroko-host", "kuroko")
+    );
+    for name in OWN.bins {
+        assert!(next.bins.contains(name), "{name}");
+    }
+    for name in OWN.bins.iter().chain(next.bins) {
+        assert!(FAMILY_BINARIES.contains(name), "{name}");
+    }
+    assert!(FAMILY.contains(&OWN.name) && FAMILY.contains(&next.name));
+    assert_eq!(package("kuroko"), Some(next));
+    assert_eq!(package(CRATE), Some(OWN));
+    assert_eq!(package("other"), None);
+    assert_eq!(index_path(next.name), "ku/ro/kuroko");
+}
+
+#[test]
+fn the_successors_index_answer_is_read_for_the_successor_only() {
+    let body = [
+        line("kuroko", "0.18.0", false),
+        line("kuroko", "0.18.1", true),
+        line("personal-teams-assistant", "0.99.0", false),
+    ]
+    .join("\n");
+    let release = newest_stable_of(&body, successor()).unwrap().unwrap();
+    assert_eq!(
+        (release.version, release.package),
+        (v("0.18.0"), successor())
+    );
+    // This package's own answer never yields the successor.
+    let own = newest_stable(&[line(CRATE, "0.17.0", false)].join("\n"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(own.package, OWN);
+    assert!(newest_stable_of(&line(CRATE, "0.17.0", false), successor()).is_err());
+}
+
+#[test]
+fn a_successor_is_installed_the_way_this_package_was() {
+    let installation = Installation {
+        root: PathBuf::from("/installed"),
+        version: v("0.17.0"),
+        features: Vec::new(),
+        all_features: false,
+        no_default_features: true,
+        target: None,
+        prebuilt: false,
+        archive: false,
+    };
+    let args = |installation: &Installation| {
+        install_args_for(
+            successor(),
+            installation,
+            &v("0.18.0"),
+            Path::new("/stage"),
+            Path::new("/cache"),
+        )
+        .into_iter()
+        .map(|a| a.into_string().unwrap())
+        .collect::<Vec<_>>()
+    };
+    let built = args(&installation);
+    assert_eq!(built[..4], ["install", "kuroko", "--version", "0.18.0"]);
+    assert!(built.contains(&"--no-default-features".to_owned()));
+    let fetched = args(&Installation {
+        prebuilt: true,
+        ..installation
+    });
+    assert_eq!(fetched[..4], ["binstall", "kuroko", "--version", "=0.18.0"]);
+}
+
+#[test]
+fn an_installation_recorded_under_the_successors_name_is_still_recognized() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut record = full_record();
+    record["bins"] = json!(successor().bins);
+    write_records(
+        dir.path(),
+        "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
+        record,
+    );
+    let found = inspect(&dir.path().join("bin").join(CLI)).unwrap();
+    assert_eq!(found.version, v("0.18.0"));
+    // An archive record of the successor, as the update leaves it.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("bin")).unwrap();
+    let archive_record = |bins: &[&str]| {
+        json!({
+            "schema": 1, "kind": "archive", "package": "kuroko", "version": "0.18.0",
+            "target": "x86_64-unknown-linux-gnu", "bins": bins,
+        })
+        .to_string()
+    };
+    std::fs::write(
+        dir.path().join(ARCHIVE_RECORD),
+        archive_record(successor().bins),
+    )
+    .unwrap();
+    let exe = dir.path().join("bin").join(CLI);
+    assert_eq!(archive(&exe).unwrap().unwrap().version, v("0.18.0"));
+    // The successor's name with this package's executables only is not a valid record.
+    std::fs::write(dir.path().join(ARCHIVE_RECORD), archive_record(OWN.bins)).unwrap();
+    assert!(archive(&exe).unwrap().is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_staged_successor_is_verified_with_all_its_executables() {
+    let dir = tempfile::tempdir().unwrap();
+    let version = "0.18.0";
+    processes::script(
+        &dir.path().join("bin").join("kuroko"),
+        &format!("echo '{{\"ok\":true,\"data\":{{\"cli_version\":\"{version}\"}}}}'"),
+    );
+    for name in ["kuroko-host", "personal-teams-assistant", "pta"] {
+        processes::script(
+            &dir.path().join("bin").join(name),
+            &format!("echo 'kuroko {version}'"),
+        );
+    }
+    let mut record = full_record();
+    record["bins"] = json!(successor().bins);
+    write_records(
+        dir.path(),
+        "kuroko 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
+        record,
+    );
+    let wanted = processes::wanted();
+    let manifest = verify_for(successor(), dir.path(), &v(version), &wanted, &[], 5)
+        .await
+        .unwrap();
+    assert_eq!(manifest.package.as_deref(), Some("kuroko"));
+    assert_eq!(manifest.staged_package(), Some(successor()));
+    assert_eq!(manifest.binaries.len(), 4);
+    // The same root is not this package, and this package's manifests name no package.
+    assert!(
+        verify(dir.path(), &v(version), &wanted, &[], 5)
+            .await
+            .is_err()
+    );
+    assert_eq!(other_package(OWN), None);
+    // A successor without one of its aliases is refused.
+    std::fs::remove_file(dir.path().join("bin").join("pta")).unwrap();
+    assert!(
+        verify_for(successor(), dir.path(), &v(version), &wanted, &[], 5)
+            .await
+            .is_err()
+    );
 }

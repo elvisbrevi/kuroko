@@ -4,11 +4,11 @@
 //! a field of the provider's protocol, never as a command-line argument, and is never logged.
 
 /// Every name starts with this, so none can read as an option or a path.
-const PREFIX: &str = "Teams Assistant";
+const PREFIX: &str = "Kuroko";
 /// The longest name, in characters, within what the providers' session lists show.
 pub(crate) const NAME_CHARS: usize = 100;
 
-/// A session's name: `Teams Assistant`, or `Teams Assistant - <what it is about>` without
+/// A session's name: `Kuroko`, or `Kuroko - <what it is about>` without
 /// control or invisible formatting characters and shortened to `NAME_CHARS` on a character
 /// boundary.
 #[derive(Clone, PartialEq, Eq)]
@@ -19,12 +19,12 @@ impl Default for SessionName {
     }
 }
 impl SessionName {
-    /// A coding or planning run of a work item: `Teams Assistant - 42 Fix rounding`.
+    /// A coding or planning run of a work item: `Kuroko - 42 Fix rounding`.
     pub(crate) fn item(id: u64, title: &str) -> Self {
         Self::about(&format!("{id} {title}"))
     }
     /// A session for a fixed purpose, about an item when it has one:
-    /// `Teams Assistant - director 42`.
+    /// `Kuroko - director 42`.
     pub(crate) fn purpose(purpose: &str, item: Option<u64>) -> Self {
         match item {
             Some(id) => Self::about(&format!("{purpose} {id}")),
@@ -85,7 +85,7 @@ mod tests {
     fn a_name_carries_the_item_shortened_without_control_or_invisible_characters() {
         assert_eq!(
             SessionName::item(4211, "Fix rounding").as_str(),
-            "Teams Assistant - 4211 Fix rounding"
+            "Kuroko - 4211 Fix rounding"
         );
         // Line breaks, tabs and quotes: one line, quotes kept as text.
         let name = SessionName::item(
@@ -94,64 +94,55 @@ mod tests {
         );
         assert_eq!(
             name.as_str(),
-            "Teams Assistant - 7 First line second \"quoted\" 'part' [31m"
+            "Kuroko - 7 First line second \"quoted\" 'part' [31m"
         );
         // A title that reads as an option or a path stays inside the name.
         let name = SessionName::item(8, "--dangerously-skip-permissions /etc/passwd");
-        assert!(name.as_str().starts_with("Teams Assistant - 8 --"));
+        assert!(name.as_str().starts_with("Kuroko - 8 --"));
         // Invisible reordering characters are removed.
         assert_eq!(
             SessionName::item(9, "a\u{202E}b\u{200B}c\u{FEFF}").as_str(),
-            "Teams Assistant - 9 abc"
+            "Kuroko - 9 abc"
         );
         // 300 characters, multibyte ones included: shortened on a character boundary.
         let title = "ñ".repeat(150) + &"x".repeat(150);
         let name = SessionName::item(10, &title);
         assert_eq!(name.as_str().chars().count(), NAME_CHARS);
         assert!(name.as_str().ends_with("ñ…"));
-        assert!(name.as_str().starts_with("Teams Assistant - 10 ñ"));
+        assert!(name.as_str().starts_with("Kuroko - 10 ñ"));
         // A space at the cut is not kept before the ellipsis.
-        let name = SessionName::item(11, &("x".repeat(77) + " " + &"y".repeat(200)));
+        let name = SessionName::item(11, &("x".repeat(86) + " " + &"y".repeat(200)));
         assert!(name.as_str().ends_with("x…"), "{}", name.as_str());
         assert_eq!(name.as_str().chars().count(), NAME_CHARS - 1);
         assert!(name.as_str().chars().all(|c| !c.is_control()));
     }
     #[test]
     fn a_session_without_an_item_keeps_a_fixed_name() {
-        assert_eq!(SessionName::default().as_str(), "Teams Assistant");
-        assert_eq!(
-            SessionName::item(12, "\n\t ").as_str(),
-            "Teams Assistant - 12"
-        );
+        assert_eq!(SessionName::default().as_str(), "Kuroko");
+        assert_eq!(SessionName::item(12, "\n\t ").as_str(), "Kuroko - 12");
         assert_eq!(
             SessionName::purpose("director", Some(42)).as_str(),
-            "Teams Assistant - director 42"
+            "Kuroko - director 42"
         );
         use super::super::DirectTask;
         for (task, name) in [
-            (DirectTask::Classify, "Teams Assistant - director 42"),
-            (DirectTask::Summarize, "Teams Assistant - summary 42"),
-            (DirectTask::Supervise, "Teams Assistant - supervision 42"),
+            (DirectTask::Classify, "Kuroko - director 42"),
+            (DirectTask::Summarize, "Kuroko - summary 42"),
+            (DirectTask::Supervise, "Kuroko - supervision 42"),
             // An audit names no one item.
-            (DirectTask::Audit, "Teams Assistant - audit"),
+            (DirectTask::Audit, "Kuroko - audit"),
         ] {
             assert_eq!(task.session_name(Some(42)).as_str(), name);
         }
         assert_eq!(
             SessionName::purpose("director", None).as_str(),
-            "Teams Assistant - director"
+            "Kuroko - director"
         );
         assert_eq!(
             SessionName::request("hu").as_str(),
-            "Teams Assistant - new user story"
+            "Kuroko - new user story"
         );
-        assert_eq!(
-            SessionName::request("bug").as_str(),
-            "Teams Assistant - new bug"
-        );
-        assert_eq!(
-            SessionName::request("epic").as_str(),
-            "Teams Assistant - new epic"
-        );
+        assert_eq!(SessionName::request("bug").as_str(), "Kuroko - new bug");
+        assert_eq!(SessionName::request("epic").as_str(), "Kuroko - new epic");
     }
 }

@@ -2006,17 +2006,17 @@ mod tests {
     fn a_reconnected_session_keeps_the_name_of_its_purpose_and_item() {
         let name = |record: Value| recorded_name(&record).as_str().to_owned();
         for (purpose, expected) in [
-            ("classification", "Teams Assistant - director 41"),
-            ("summary", "Teams Assistant - summary 41"),
-            ("supervision", "Teams Assistant - supervision 41"),
+            ("classification", "Kuroko - director 41"),
+            ("summary", "Kuroko - summary 41"),
+            ("supervision", "Kuroko - supervision 41"),
         ] {
             assert_eq!(name(json!({"purpose":purpose,"item":{"id":41}})), expected);
         }
         assert_eq!(
             name(json!({"purpose":"request","kind":"bug","item":null})),
-            "Teams Assistant - new bug"
+            "Kuroko - new bug"
         );
-        assert_eq!(name(json!({"purpose":"other"})), "Teams Assistant");
+        assert_eq!(name(json!({"purpose":"other"})), "Kuroko");
     }
     #[test]
     fn a_permission_prompt_never_ends_a_run_in_needs_attention() {

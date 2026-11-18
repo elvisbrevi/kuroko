@@ -86,8 +86,14 @@ fn environment() -> Environment {
     if let Some(environment) = TEST.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return environment;
     }
+    let (registry, release) = rehearsal().unwrap_or_else(|| {
+        (
+            core::INDEX.to_owned(),
+            core::release::Source::official().ok(),
+        )
+    });
     Environment {
-        registry: core::INDEX.into(),
+        registry,
         exe: std::env::current_exe().unwrap_or_default(),
         variables: std::env::vars_os().collect(),
         running: Version::parse(env!("CARGO_PKG_VERSION")).expect("a stable package version"),
@@ -96,11 +102,38 @@ fn environment() -> Environment {
             .filter(|a| matches!(a.as_str(), "--headless" | "--host" | "--service"))
             .collect(),
         manual: false,
-        release: core::release::Source::official().ok(),
+        release,
         keychain: None,
         archive_poll: Duration::from_secs(ARCHIVE_POLL),
         archive_wait: ARCHIVE_WAIT,
     }
+}
+
+/// A rehearsal of an update against local doubles of the registry and the release host:
+/// `KUROKO_UPDATE_INDEX` (a sparse index) and `KUROKO_UPDATE_RELEASES` (`http://HOST/OWNER/REPO`,
+/// whose host is the only one a download may be redirected to). Debug builds only: a release build
+/// never reads either variable, so its registry and release addresses stay fixed.
+fn rehearsal() -> Option<(String, Option<core::release::Source>)> {
+    #[cfg(debug_assertions)]
+    {
+        let index = crate::env_names::var_os("UPDATE_INDEX")?
+            .into_string()
+            .ok()?;
+        let releases = crate::env_names::var_os("UPDATE_RELEASES")
+            .and_then(|value| value.into_string().ok())
+            .and_then(|base| {
+                let host = url::Url::parse(&base).ok()?.host_str()?.to_owned();
+                Some(core::release::Source {
+                    base: base.trim_end_matches('/').to_owned(),
+                    hosts: vec![host],
+                    https_only: false,
+                })
+            });
+        tracing::warn!(event = "update_rehearsal");
+        Some((index, releases))
+    }
+    #[cfg(not(debug_assertions))]
+    None
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -113,6 +146,8 @@ struct Saved {
     checked_at: Option<i64>,
     /// The newest stable release the registry listed at the last successful check.
     latest: Option<String>,
+    /// The package of `latest` when it is the successor this one continues as; `None` for this one.
+    latest_package: Option<String>,
     check_error: Option<String>,
     dismissed: Option<String>,
     stage: Option<Stage>,
@@ -421,6 +456,9 @@ fn status(host: &Host, env: &Environment) -> Value {
         "running": env.running.to_string(),
         "installed": installed.map(|v| v.to_string()),
         "available": offer.map(|v| v.to_string()),
+        // The product continues under this package name: the update installs it in place of this
+        // one, keeping this one's command names.
+        "available_package": offer.and(saved.latest_package.clone()),
         "restart_required": installed.is_some_and(|i| i > env.running),
         "checked_at": saved.checked_at,
         "check_error": saved.check_error,
@@ -660,8 +698,9 @@ pub(super) async fn operate(host: &Arc<Host>, request: &control::Request) -> Rep
 /// matter (not an archive installation, or nothing newer), otherwise the answer of the release host.
 async fn archive_published(
     env: &Environment,
-    version: Version,
+    release: &core::Release,
 ) -> Option<std::result::Result<bool, String>> {
+    let version = release.version;
     let installation = core::inspect(&env.exe).ok().filter(|i| i.archive)?;
     if version <= env.running.max(installation.version) {
         return None;
@@ -669,10 +708,24 @@ async fn archive_published(
     let source = env.release.as_ref()?;
     let target = installation.target.as_deref()?;
     Some(
-        core::release::published(source, &version, target)
+        core::release::published_for(release.package, source, &version, target)
             .await
             .map_err(|e| e.to_string()),
     )
+}
+
+/// The newest stable release of this product: the successor's once the registry lists it (the
+/// product continues under that name, so this package publishes nothing newer), otherwise this
+/// package's own.
+async fn newest(env: &Environment) -> Result<Option<core::Release>> {
+    if let Some(successor) = core::SUCCESSOR
+        && let Some(body) = core::fetch_index_of(&env.registry, successor.name).await?
+        && let Some(release) = core::newest_stable_of(&body, successor)?
+    {
+        return Ok(Some(release));
+    }
+    let body = core::fetch_index(&env.registry).await?;
+    core::newest_stable(&body)
 }
 
 /// Reads the registry and remembers what it listed and, for an archive installation, whether the
@@ -681,13 +734,13 @@ async fn refresh(
     host: &Host,
     env: &Environment,
 ) -> std::result::Result<Option<core::Release>, String> {
-    let result = async {
-        let body = core::fetch_index(&env.registry).await?;
-        core::newest_stable(&body)
-    }
-    .await;
+    let result = newest(env).await;
     let archive = match &result {
-        Ok(Some(release)) => archive_published(env, release.version).await,
+        Ok(Some(release)) => archive_published(env, release).await,
+        _ => None,
+    };
+    let package = match &result {
+        Ok(Some(release)) => core::other_package(release.package),
         _ => None,
     };
     let dir = directory(host);
@@ -702,6 +755,7 @@ async fn refresh(
         match &outcome {
             Ok(latest) => {
                 saved.latest = latest.clone();
+                saved.latest_package = package.clone();
                 saved.check_error = probe_error.clone();
                 // Not known to be attached (missing, or the release host did not answer): not
                 // offered. The first time it was missing is kept, so waits stay bounded.
@@ -957,6 +1011,7 @@ async fn stage(host: &Arc<Host>, env: &Environment, requested: &str, wait: Optio
         dir,
         profile,
         version,
+        package: release.package,
         installation,
         cargo,
         source,
@@ -1020,6 +1075,8 @@ struct Work {
     dir: PathBuf,
     profile: PathBuf,
     version: Version,
+    /// This package, or the successor that replaces it, installed the same way.
+    package: core::Package,
     installation: Installation,
     /// Cargo, for a Cargo or `cargo binstall` installation.
     cargo: Option<PathBuf>,
@@ -1076,7 +1133,8 @@ impl Work {
         source: &core::release::Source,
     ) -> std::result::Result<(), (String, Vec<String>)> {
         let target = self.installation.target.clone().unwrap_or_default();
-        let manifest = core::release::stage(
+        let manifest = core::release::stage_for(
+            self.package,
             source,
             &self.version,
             &target,
@@ -1107,7 +1165,13 @@ impl Work {
             security::private_dir(&trimmed)
         })
         .await;
-        let args = core::install_args(&self.installation, &self.version, &root, &cache);
+        let args = core::install_args_for(
+            self.package,
+            &self.installation,
+            &self.version,
+            &root,
+            &cache,
+        );
         let built = core::build(
             cargo,
             &args,
@@ -1136,7 +1200,8 @@ impl Work {
             }
             Ok(()) => {
                 self.update(|stage| stage.phase = "verifying".into());
-                let manifest = core::verify(
+                let manifest = core::verify_for(
+                    self.package,
                     &root,
                     &self.version,
                     &self.installation,
