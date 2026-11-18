@@ -1,7 +1,9 @@
-// Renders the app icon (desktop/icons/source/app.png: the lime face tile on a white background, kept
-// outside the crate) to the images the GUI (local page and portal), the PWA and the landing use. iOS gets a full-bleed square cut just inside the tile, so its own
-// rounded mask meets the tile's glossy rim; browsers and the PWA manifest get the tile with
-// transparent corners. Usage: node scripts/render-icons.mjs   (Playwright from scripts/ui-preview/deps.mjs)
+// Renders the app icon (desktop/icons/source/app.png: Kuroko, the clay kuroko's head on a full-bleed
+// cream square, kept outside the crate) to the images the GUI (local page and portal), the PWA, the
+// landing and the Teams band use. iOS gets the full square, which its own rounded mask cuts; browsers,
+// the PWA manifest and the band get a rounded tile with transparent corners.
+// Usage: node scripts/render-icons.mjs   (Playwright from scripts/ui-preview/deps.mjs)
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,47 +11,45 @@ import { launch } from './ui-preview/deps.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = `data:image/png;base64,${fs.readFileSync(path.join(root, 'desktop/icons/source/app.png')).toString('base64')}`;
-// The tile in the source: its box, its corner radius and the lime of its rim. `edge` cuts its
-// antialiased outline, which carries the white background, off the transparent corners.
-const tile = { left: 121, top: 124, right: 1128, bottom: 1120, radius: 249, rim: '#a4db0a', edge: 3 };
+// The tile's corner radius, as a share of its side (close to the iOS mask).
+const RADIUS = 0.225;
 const outputs = [
-  { name: 'desktop/ui/apple-touch-icon.png', size: 180, inset: 16, opaque: true },
-  { name: 'desktop/ui/icon-192.png', size: 192, inset: 0 },
-  { name: 'desktop/ui/icon-512.png', size: 512, inset: 0 },
-  { name: 'desktop/ui/favicon.png', size: 64, inset: 0 },
+  { name: 'desktop/ui/apple-touch-icon.png', size: 180, opaque: true },
+  { name: 'desktop/ui/icon-192.png', size: 192 },
+  { name: 'desktop/ui/icon-512.png', size: 512 },
+  { name: 'desktop/ui/favicon.png', size: 64 },
+  // The mark before the Teams band's label (src/adapters/card.rs embeds it in every card): reduced
+  // to a palette with ImageMagick, about 1 KB.
+  { name: 'src/adapters/kuroko-badge.png', size: 40, colors: 64 },
   // The landing's brand mark, tab icon and home-screen icon.
-  { name: 'site/public/assets/icon.png', size: 256, inset: 0 },
-  { name: 'site/public/assets/apple-touch-icon.png', size: 180, inset: 16, opaque: true },
+  { name: 'site/public/assets/icon.png', size: 256 },
+  { name: 'site/public/assets/apple-touch-icon.png', size: 180, opaque: true },
 ];
 const browser = await launch();
 const page = await browser.newPage();
 async function render(output) {
-  const data = await page.evaluate(async ({ source, tile, output }) => {
+  const data = await page.evaluate(async ({ source, output, radius }) => {
     const image = new Image();
     image.src = source;
     await image.decode();
-    // A square around the tile's center, `inset` source pixels inside its widest side.
-    const side = tile.right - tile.left - 2 * output.inset;
-    const x = (tile.left + tile.right - side) / 2, y = (tile.top + tile.bottom - side) / 2;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = output.size;
     const g = canvas.getContext('2d');
     g.imageSmoothingQuality = 'high';
-    const scale = output.size / side;
-    g.scale(scale, scale);
-    g.translate(-x, -y);
-    if (output.opaque) { g.fillStyle = tile.rim; g.fillRect(x, y, side, side); }
-    // Only the tile: the white background and its shadow become the rim's lime or transparent.
-    g.beginPath();
-    g.roundRect(tile.left + tile.edge, tile.top + tile.edge, tile.right - tile.left - 2 * tile.edge, tile.bottom - tile.top - 2 * tile.edge, tile.radius - tile.edge);
-    g.clip();
-    g.drawImage(image, 0, 0);
+    if (!output.opaque) {
+      g.beginPath();
+      g.roundRect(0, 0, output.size, output.size, output.size * radius);
+      g.clip();
+    }
+    g.drawImage(image, 0, 0, output.size, output.size);
     return canvas.toDataURL('image/png');
-  }, { source, tile, output });
+  }, { source, output, radius: RADIUS });
   return Buffer.from(data.split(',')[1], 'base64');
 }
 for (const output of outputs) {
-  fs.writeFileSync(path.join(root, output.name), await render(output));
+  const file = path.join(root, output.name);
+  fs.writeFileSync(file, await render(output));
+  if (output.colors) execFileSync('convert', [file, '-strip', '-colors', String(output.colors), file]);
   console.log(`${output.name} (${output.size} × ${output.size})`);
 }
 await browser.close();

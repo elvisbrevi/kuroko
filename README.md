@@ -1,6 +1,8 @@
 <p align="center"><img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/icon.png" width="120" height="120" alt=""></p>
 
-<h1 align="center">Personal Teams Assistant</h1>
+<h1 align="center">Kuroko</h1>
+
+<p align="center"><em>Personal Teams Assistant</em> · You on stage. Kuroko handles the rest.</p>
 
 <p align="center"><strong>Answers in Teams as you, and only with what you authorize.</strong><br>
 <a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/personal-teams-assistant">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a></p>

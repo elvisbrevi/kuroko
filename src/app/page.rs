@@ -81,7 +81,7 @@ pub(super) fn handoff_dir(profile: &Path) -> PathBuf {
 /// address leaves the host; the code stays inside the file.
 fn handoff(url: &str) -> String {
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><meta http-equiv=\"refresh\" content=\"0;url={url}\"><title>Personal Teams Assistant</title></head><body><a href=\"{url}\">Personal Teams Assistant</a></body></html>"
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\"><meta http-equiv=\"refresh\" content=\"0;url={url}\"><title>Kuroko</title></head><body><a href=\"{url}\">Personal Teams Assistant</a></body></html>"
     )
 }
 
@@ -452,7 +452,7 @@ fn document() -> Response {
 
 /// Shown without a session: a used, expired or missing sign-in. It names the next step and
 /// never offers a link that signs in.
-const SIGNED_OUT: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Personal Teams Assistant</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Open the assistant again</h1><p role=\"alert\">This page's sign-in ended or was already used. Open it again from this computer with the command below, or by starting the application.</p><p><code>pta app open</code></p></main></body></html>";
+const SIGNED_OUT: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Kuroko</title><link rel=\"stylesheet\" href=\"/style.css\"><script type=\"module\" src=\"/i18n.js\"></script></head><body><main class=\"panel\"><h1>Open the assistant again</h1><p role=\"alert\">This page's sign-in ended or was already used. Open it again from this computer with the command below, or by starting the application.</p><p><code>pta app open</code></p></main></body></html>";
 
 fn signed_out() -> Response {
     (
@@ -491,7 +491,7 @@ async fn exchange(State(host): State<Arc<Host>>, uri: Uri) -> Response {
     let mut response = asset_owned(
         "text/html; charset=utf-8",
         format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url=/#k={key}\"><title>Personal Teams Assistant</title></head><body></body></html>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url=/#k={key}\"><title>Kuroko</title></head><body></body></html>"
         ),
     );
     response.headers_mut().insert(
