@@ -13,15 +13,22 @@
 //! [`System`] runs the real managers through `security::program` (no console window on Windows).
 //! A definition holds the executable, the launch flags, the profile when it is not the standard
 //! one and, on macOS and Linux, a fixed minimal `PATH`: never an account variable or a credential.
+//!
+//! Entries created before the product was called Kuroko have their former names and start the
+//! alias `personal-teams-assistant`. They keep working, and the host renames them by itself
+//! ([`migrate`]): a host its former entry started installs the new entry and disables the former
+//! one without stopping itself, and a host the new entry started removes the former one. The
+//! computer always has an entry that starts the host at login.
 use super::{
     authority,
     control::{self, Reply},
     *,
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{ffi::OsStr, time::Duration};
 
-/// Marks every definition this module writes; nothing without it is changed or removed.
+/// Marks every definition this module writes; nothing without it is changed or removed. Entries
+/// of every version carry it, so it never changes.
 const MARKER: &str = "Personal Teams Assistant host, created by pta service install";
 /// The flag the entry adds to `--host`: the host restores the assistant's saved intent.
 pub(crate) const FLAG: &str = "--service";
@@ -91,6 +98,8 @@ pub(crate) struct Target {
     pub uid: Option<u32>,
     /// `DOMAIN\user` (Windows).
     pub user: String,
+    /// The entry of the versions before Kuroko: its former name, starting the alias host.
+    pub legacy: bool,
 }
 
 /// The identity of an entry: derived from the profile, so another profile gets its own.
@@ -128,7 +137,7 @@ impl Target {
         );
         Ok(Self {
             manager,
-            exe,
+            exe: host_program(&exe),
             profile: profile.to_path_buf(),
             isolated: control::isolated_profile_dir()?.is_some(),
             id: id(profile),
@@ -136,16 +145,42 @@ impl Target {
             config_home,
             uid: owner_uid(profile),
             user,
+            legacy: false,
         })
+    }
+
+    /// The same entry under its name before Kuroko.
+    pub(crate) fn former(&self) -> Self {
+        Self {
+            legacy: true,
+            ..self.clone()
+        }
     }
 
     /// What the operating system calls the entry; it reveals no path.
     pub(crate) fn name(&self) -> String {
-        match self.manager {
-            Manager::Launchd => format!("dev.personalteams.assistant.host.{}", self.id),
-            Manager::Systemd => format!("personal-teams-assistant-{}.service", self.id),
-            Manager::TaskScheduler => format!("PersonalTeamsAssistant-{}", self.id),
+        match (self.manager, self.legacy) {
+            (Manager::Launchd, false) => format!("cl.elvisbrevi.kuroko.host.{}", self.id),
+            (Manager::Systemd, false) => format!("kuroko-{}.service", self.id),
+            (Manager::TaskScheduler, false) => format!("Kuroko-{}", self.id),
+            (Manager::Launchd, true) => format!("dev.personalteams.assistant.host.{}", self.id),
+            (Manager::Systemd, true) => format!("personal-teams-assistant-{}.service", self.id),
+            (Manager::TaskScheduler, true) => format!("PersonalTeamsAssistant-{}", self.id),
         }
+    }
+
+    /// The executables the entry may start: the host, or for a former entry the alias it was
+    /// written for and, when it was written by a host started under the new name, the host. The
+    /// first is the one a definition names.
+    fn programs(&self) -> Vec<PathBuf> {
+        let mut programs = Vec::new();
+        if self.legacy && self.exe.file_stem() == Some(OsStr::new(crate::maintenance::OWN.host)) {
+            for package in crate::maintenance::PREDECESSORS {
+                programs.push(sibling(&self.exe, package.host));
+            }
+        }
+        programs.push(self.exe.clone());
+        programs
     }
 
     /// The definition file (macOS and Linux); a scheduled task lives in the Task Scheduler.
@@ -201,10 +236,30 @@ impl Target {
 
     /// The whole definition as the manager receives it.
     pub(crate) fn definition(&self) -> String {
+        self.definition_of(&self.programs()[0])
+    }
+
+    fn definition_of(&self, program: &Path) -> String {
         match self.manager {
-            Manager::Launchd => plist(self),
-            Manager::Systemd => unit(self),
-            Manager::TaskScheduler => task(self),
+            Manager::Launchd => plist(self, program),
+            Manager::Systemd => unit(self, program),
+            Manager::TaskScheduler => task(self, program),
+        }
+    }
+
+    /// Whether a stored definition is the one this entry would have.
+    fn is_current(&self, content: &str) -> bool {
+        self.programs()
+            .iter()
+            .any(|program| content == self.definition_of(program))
+    }
+
+    /// The command that removes the entry, as its definition says.
+    fn remover(&self) -> &'static str {
+        if self.legacy {
+            "pta service uninstall"
+        } else {
+            "kuroko service uninstall"
         }
     }
 
@@ -213,6 +268,30 @@ impl Target {
     }
     fn service(&self) -> String {
         format!("{}/{}", self.domain(), self.name())
+    }
+}
+
+/// The executable `name` next to `exe`, with the same extension.
+fn sibling(exe: &Path, name: &str) -> PathBuf {
+    let mut file = std::ffi::OsString::from(name);
+    if let Some(extension) = exe.extension() {
+        file.push(".");
+        file.push(extension);
+    }
+    exe.with_file_name(file)
+}
+
+/// The host an entry starts: a host started through its former name (the alias
+/// `personal-teams-assistant`) names the host beside it, so new entries start `kuroko-host`.
+fn host_program(exe: &Path) -> PathBuf {
+    let alias = crate::maintenance::PREDECESSORS
+        .iter()
+        .any(|package| exe.file_stem() == Some(OsStr::new(package.host)));
+    let host = sibling(exe, crate::maintenance::OWN.host);
+    if alias && host.is_file() {
+        host
+    } else {
+        exe.to_path_buf()
     }
 }
 
@@ -241,15 +320,15 @@ fn xml(text: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn plist(t: &Target) -> String {
-    let arguments: String = std::iter::once(t.exe.to_string_lossy().into_owned())
+fn plist(t: &Target, program: &Path) -> String {
+    let arguments: String = std::iter::once(program.to_string_lossy().into_owned())
         .chain(t.arguments())
         .map(|a| format!("    <string>{}</string>\n", xml(&a)))
         .collect();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- {MARKER}; `pta service uninstall` removes it. -->
+<!-- {MARKER}; `{remover}` removes it. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -278,6 +357,7 @@ fn plist(t: &Target) -> String {
 "#,
         label = xml(&t.name()),
         path = xml(&t.path()),
+        remover = t.remover(),
     )
 }
 
@@ -292,8 +372,8 @@ fn systemd_word(word: &str) -> String {
     )
 }
 
-fn unit(t: &Target) -> String {
-    let exec: Vec<String> = std::iter::once(t.exe.to_string_lossy().into_owned())
+fn unit(t: &Target, program: &Path) -> String {
+    let exec: Vec<String> = std::iter::once(program.to_string_lossy().into_owned())
         .chain(t.arguments())
         .map(|a| systemd_word(&a))
         .collect();
@@ -302,9 +382,9 @@ fn unit(t: &Target) -> String {
         .replace('"', "\\\"")
         .replace('%', "%%");
     format!(
-        "# {MARKER}; `pta service uninstall` removes it.
+        "# {MARKER}; `{remover}` removes it.
 [Unit]
-Description=Personal Teams Assistant host
+Description={description}
 
 [Service]
 Type=simple
@@ -320,6 +400,12 @@ TimeoutStopSec=90
 WantedBy=default.target
 ",
         exec = exec.join(" "),
+        remover = t.remover(),
+        description = if t.legacy {
+            "Personal Teams Assistant host"
+        } else {
+            "Kuroko host"
+        },
     )
 }
 
@@ -358,12 +444,12 @@ fn task_arguments(t: &Target) -> String {
         .join(" ")
 }
 
-fn task(t: &Target) -> String {
+fn task(t: &Target, program: &Path) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>{MARKER} ({id}); pta service uninstall removes it.</Description>
+    <Description>{MARKER} ({id}); {remover} removes it.</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -411,8 +497,9 @@ fn task(t: &Target) -> String {
 "#,
         id = t.id,
         user = xml(&t.user),
-        command = xml(&t.exe.to_string_lossy()),
+        command = xml(&program.to_string_lossy()),
         arguments = xml(&task_arguments(t)),
+        remover = t.remover(),
     )
 }
 
@@ -531,6 +618,8 @@ pub(crate) struct Status {
     pub current: bool,
     /// The manager loaded the entry (launchd) or enabled it (systemd).
     pub loaded: bool,
+    /// Nothing disabled the entry: the manager starts it at the next login.
+    pub enabled: bool,
     pub running: bool,
     pub last_error: Option<String>,
     /// Linux: the user manager keeps running without a session.
@@ -546,6 +635,16 @@ pub(crate) fn status(t: &Target, runner: &impl Runner) -> Status {
         Manager::Launchd => {
             let content = t.file().and_then(|f| read_file(&f));
             let print = runner.run("launchctl", &words(&["print", &t.service()]));
+            // `"label" => disabled` (`=> true` before macOS 11); a label without one is enabled.
+            let overrides = runner.run("launchctl", &words(&["print-disabled", &t.domain()]));
+            let label = format!("\"{}\"", t.name());
+            let disabled = overrides.ok
+                && overrides.stdout.lines().any(|line| {
+                    line.trim()
+                        .strip_prefix(&label)
+                        .and_then(|rest| rest.trim().strip_prefix("=>"))
+                        .is_some_and(|value| matches!(value.trim(), "disabled" | "true"))
+                });
             let code = print.stdout.lines().find_map(|line| {
                 line.trim()
                     .strip_prefix("last exit code = ")
@@ -562,8 +661,9 @@ pub(crate) fn status(t: &Target, runner: &impl Runner) -> Status {
                 available: true,
                 installed: content.as_deref().is_some_and(|c| c.contains(MARKER)),
                 foreign: content.as_deref().is_some_and(|c| !c.contains(MARKER)),
-                current: content.as_deref() == Some(t.definition().as_str()),
+                current: content.as_deref().is_some_and(|c| t.is_current(c)),
                 loaded: print.ok,
+                enabled: !disabled,
                 running: print.ok
                     && print
                         .stdout
@@ -607,12 +707,14 @@ pub(crate) fn status(t: &Target, runner: &impl Runner) -> Status {
                 );
                 ran.ok.then(|| ran.stdout.trim() == "yes")
             });
+            let enabled = show.ok && value("UnitFileState").as_deref() == Some("enabled");
             Status {
                 available: show.ok,
                 installed: content.as_deref().is_some_and(|c| c.contains(MARKER)),
                 foreign: content.as_deref().is_some_and(|c| !c.contains(MARKER)),
-                current: content.as_deref() == Some(t.definition().as_str()),
-                loaded: show.ok && value("UnitFileState").as_deref() == Some("enabled"),
+                current: content.as_deref().is_some_and(|c| t.is_current(c)),
+                loaded: enabled,
+                enabled,
                 running: show.ok && value("ActiveState").as_deref() == Some("active"),
                 last_error: result.filter(|_| show.ok).map(|r| {
                     let code = value("ExecMainStatus").unwrap_or_default();
@@ -627,12 +729,19 @@ pub(crate) fn status(t: &Target, runner: &impl Runner) -> Status {
             // The stored task is reformatted by the Task Scheduler: compare the values.
             let current = installed
                 && element(&query.stdout, "Command").is_some_and(|command| {
-                    command
-                        .trim_matches('"')
-                        .eq_ignore_ascii_case(&t.exe.to_string_lossy())
+                    t.programs().iter().any(|program| {
+                        command
+                            .trim_matches('"')
+                            .eq_ignore_ascii_case(&program.to_string_lossy())
+                    })
                 })
                 && element(&query.stdout, "Arguments").as_deref()
                     == Some(task_arguments(t).as_str());
+            // `/Change /DISABLE` sets the task's own `<Enabled>` (its trigger has another one).
+            let enabled = installed
+                && query.stdout.find("<Settings>").is_none_or(|start| {
+                    element(&query.stdout[start..], "Enabled").as_deref() != Some("false")
+                });
             let detail = installed
                 .then(|| {
                     runner.run(
@@ -654,6 +763,7 @@ pub(crate) fn status(t: &Target, runner: &impl Runner) -> Status {
                 foreign: query.ok && !installed,
                 current,
                 loaded: installed,
+                enabled,
                 running: result.as_deref() == Some(TASK_RUNNING),
                 last_error: result
                     .filter(|r| !TASK_FINE.contains(&r.as_str()))
@@ -705,6 +815,13 @@ fn failed(what: &str) -> Refusal {
 
 /// Registers the entry; with an up-to-date entry it changes nothing. Returns whether it changed.
 pub(crate) fn install(t: &Target, runner: &impl Runner) -> std::result::Result<bool, Refusal> {
+    register(t, runner, true)
+}
+
+/// `load`: launchd loads the agent now, which starts it (`RunAtLoad`). Without it the file is
+/// only written, and launchd loads it at the next login or when [`start`] asks for it. systemd
+/// enables the unit and the Task Scheduler registers the task either way; neither starts it.
+fn register(t: &Target, runner: &impl Runner, load: bool) -> std::result::Result<bool, Refusal> {
     let before = status(t, runner);
     if before.foreign {
         return Err(("state_conflict", FOREIGN.into()));
@@ -713,7 +830,7 @@ pub(crate) fn install(t: &Target, runner: &impl Runner) -> std::result::Result<b
     match t.manager {
         Manager::Launchd => {
             let file = t.file().expect("a LaunchAgent has a file");
-            if before.current && before.loaded {
+            if before.current && (before.loaded || !load) {
                 return Ok(false);
             }
             if !before.current && before.running {
@@ -721,6 +838,9 @@ pub(crate) fn install(t: &Target, runner: &impl Runner) -> std::result::Result<b
             }
             if !before.current {
                 write_definition(&file, &definition)?;
+            }
+            if !load {
+                return Ok(true);
             }
             if before.loaded {
                 // A stopped job with another definition is replaced; nothing runs it now.
@@ -855,6 +975,151 @@ pub(crate) fn uninstall(t: &Target, runner: &impl Runner) -> std::result::Result
     }
 }
 
+/// Keeps an entry from starting at the next login without stopping a host it runs.
+fn disable(t: &Target, runner: &impl Runner) -> bool {
+    match t.manager {
+        Manager::Launchd => runner.run("launchctl", &words(&["disable", &t.service()])),
+        Manager::Systemd => runner.run("systemctl", &words(&["--user", "disable", &t.name()])),
+        Manager::TaskScheduler => runner.run(
+            "schtasks",
+            &words(&["/Change", "/TN", &t.name(), "/DISABLE"]),
+        ),
+    }
+    .ok
+}
+
+/// The entry that exists for `t`: the current one when it is installed, otherwise the former one
+/// when that is installed, otherwise the current one. Starting, stopping and status use it.
+pub(crate) fn entry(t: &Target, runner: &impl Runner) -> Target {
+    let current = Target {
+        legacy: false,
+        ..t.clone()
+    };
+    if status(&current, runner).installed {
+        return current;
+    }
+    let former = current.former();
+    if status(&former, runner).installed {
+        former
+    } else {
+        current
+    }
+}
+
+/// What [`migrate`] did about an entry with the former name.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Migration {
+    /// There is none, or it waits for the new entry to start the host.
+    Unchanged,
+    /// The new entry was installed and the former one disabled; the host keeps running.
+    Renamed,
+    /// The new entry started this host, so the former one was removed.
+    Retired,
+    /// A step failed; the former entry still starts the host at login.
+    Failed,
+}
+
+/// Moves an entry with the former name to the new one, from a host the manager started.
+/// `started_as_host`: this process is the host itself, not the alias a former entry starts.
+///
+/// Started by the former entry (the new one is not installed), it installs the new entry without
+/// starting it and, once that reads back installed and current, disables the former one without
+/// stopping it; if a step fails, what was added is removed and the former entry is left as it
+/// was. Started by the new entry while the former one exists and runs nothing, it removes the
+/// former one. Nothing here stops or starts a host.
+pub(crate) fn migrate(t: &Target, started_as_host: bool, runner: &impl Runner) -> Migration {
+    let former = t.former();
+    let old = status(&former, runner);
+    if !old.installed {
+        return Migration::Unchanged;
+    }
+    let new = status(t, runner);
+    if !new.installed && !new.foreign {
+        tracing::info!(
+            event = "service_entry_rename",
+            manager = t.manager.label(),
+            from = %former.name(),
+            to = %t.name()
+        );
+        let ready = register(t, runner, false).is_ok() && {
+            let check = status(t, runner);
+            check.installed && check.current && (t.manager == Manager::Launchd || check.loaded)
+        };
+        if !ready {
+            tracing::warn!(event = "service_entry_rename_failed", step = "install");
+            let _ = uninstall(t, runner);
+            return Migration::Failed;
+        }
+        if !disable(&former, runner) {
+            tracing::warn!(
+                event = "service_entry_rename_failed",
+                step = "disable_former"
+            );
+            let _ = uninstall(t, runner);
+            return Migration::Failed;
+        }
+        tracing::info!(
+            event = "service_entry_renamed",
+            manager = t.manager.label(),
+            name = %t.name()
+        );
+        return Migration::Renamed;
+    }
+    if new.installed && new.current && started_as_host && !old.running {
+        return match uninstall(&former, runner) {
+            Ok(_) => {
+                tracing::info!(
+                    event = "service_former_entry_removed",
+                    manager = t.manager.label(),
+                    name = %former.name()
+                );
+                Migration::Retired
+            }
+            Err(_) => {
+                tracing::warn!(
+                    event = "service_former_entry_not_removed",
+                    manager = t.manager.label()
+                );
+                Migration::Failed
+            }
+        };
+    }
+    Migration::Unchanged
+}
+
+/// `service install`: installs the new entry, then retires the former one. A former entry that
+/// runs this host is only disabled; the new entry removes it once it started the host.
+pub(crate) fn repair(t: &Target, runner: &impl Runner) -> std::result::Result<bool, Refusal> {
+    let mut changed = install(t, runner)?;
+    let former = t.former();
+    let old = status(&former, runner);
+    if !old.installed {
+        return Ok(changed);
+    }
+    if !old.running {
+        uninstall(&former, runner)?;
+        return Ok(true);
+    }
+    if old.enabled {
+        if !disable(&former, runner) {
+            return Err(failed("disable the entry with the former name"));
+        }
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// `service uninstall`: removes the new entry and the former one.
+pub(crate) fn remove(t: &Target, runner: &impl Runner) -> std::result::Result<bool, Refusal> {
+    let changed = uninstall(t, runner)?;
+    let former = t.former();
+    if !status(&former, runner).installed {
+        return Ok(changed);
+    }
+    uninstall(&former, runner)?;
+    Ok(true)
+}
+
 /// Starts the host through the manager, so the manager tracks the process it runs.
 pub(crate) fn start(t: &Target, runner: &impl Runner) -> Result<()> {
     let before = status(t, runner);
@@ -901,7 +1166,7 @@ pub(crate) fn stop(t: &Target, runner: &impl Runner) {
 /// Whether an installed entry starts this executable for this profile: then an update restarts
 /// the host through the manager.
 pub(crate) fn manages(profile: &Path, exe: &Path) -> Option<Target> {
-    let target = Target::detect(profile, exe).ok()?;
+    let target = entry(&Target::detect(profile, exe).ok()?, &System);
     let found = status(&target, &System);
     (found.installed && found.current).then_some(target)
 }
@@ -916,6 +1181,9 @@ pub(crate) fn launched_by_service() -> bool {
 
 fn view(t: &Target, s: &Status) -> Value {
     let mut notes = Vec::new();
+    if s.installed && t.legacy {
+        notes.push("The entry has the name it had before Kuroko. The host renames it the next time the entry starts it, or install the service again.".to_owned());
+    }
     if s.installed && !s.current {
         notes.push("The entry starts another executable or profile: install the service again to point it at this one.".to_owned());
     }
@@ -937,6 +1205,24 @@ fn view(t: &Target, s: &Status) -> Value {
         "this_host": launched_by_service(),
         "notes": notes,
     })
+}
+
+/// The status of the entry that exists, and of a former one that still does beside it.
+fn report(t: &Target, runner: &impl Runner) -> Value {
+    let active = entry(t, runner);
+    let mut data = view(&active, &status(&active, runner));
+    if !active.legacy {
+        let former = active.former();
+        let old = status(&former, runner);
+        if old.installed {
+            data["former"] = json!({
+                "name": former.name(),
+                "installed": true,
+                "enabled": old.enabled,
+            });
+        }
+    }
+    data
 }
 
 fn unsupported() -> Value {
@@ -983,11 +1269,11 @@ pub(super) async fn operate(host: &Arc<Host>, request: &control::Request) -> Rep
     let method = request.method.clone();
     let worked = tokio::task::spawn_blocking(move || {
         let change = match method.as_str() {
-            "service_install" => Some(install(&target, &System)),
-            "service_uninstall" => Some(uninstall(&target, &System)),
+            "service_install" => Some(repair(&target, &System)),
+            "service_uninstall" => Some(remove(&target, &System)),
             _ => None,
         };
-        (change, view(&target, &status(&target, &System)))
+        (change, report(&target, &System))
     })
     .await;
     let Ok((change, mut data)) = worked else {
@@ -1022,6 +1308,19 @@ pub(super) async fn operate(host: &Arc<Host>, request: &control::Request) -> Rep
             Reply::success(data)
         }
     }
+}
+
+/// Renames this host's entry of an earlier version, in the background of a host the manager
+/// started ([`migrate`]).
+pub(super) fn upgrade(profile: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Ok(target) = Target::detect(profile, &exe) else {
+        return;
+    };
+    let started_as_host = exe.file_stem() == Some(OsStr::new(crate::maintenance::OWN.host));
+    migrate(&target, started_as_host, &System);
 }
 
 // ---------------------------------------------------------------------------------------------

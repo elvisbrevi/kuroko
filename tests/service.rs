@@ -1,7 +1,9 @@
-//! `pta service` against the CI runner's real service manager: install, a start by the manager
+//! `kuroko service` against the CI runner's real service manager: install, a start by the manager
 //! standing in for a login, a second start that exits because the profile is owned, and
-//! uninstall. The profile is a temporary directory (`--profile-dir`), never a real one, and the
-//! entry is removed at the end whatever happens.
+//! uninstall. The host is started through the alias `personal-teams-assistant`, as hosts of
+//! earlier versions were, and the entry starts `kuroko-host` beside it. The profile is a temporary
+//! directory (`--profile-dir`), never a real one, and the entry is removed at the end whatever
+//! happens.
 //!
 //! It registers an entry with the operating system, so it runs only where CI asks for it
 //! (`PTA_SERVICE_LIVE_TEST=1`); everywhere else it returns at once. The definitions and command
@@ -48,7 +50,7 @@ impl Profile {
     }
 
     fn pta(&self, args: &[&str]) -> (i32, Value) {
-        let output = Command::new(env!("CARGO_BIN_EXE_pta"))
+        let output = Command::new(env!("CARGO_BIN_EXE_kuroko"))
             .args(["--json", "--non-interactive"])
             .args(args)
             .env("PTA_PROFILE_DIR", &self.dir)
@@ -57,7 +59,7 @@ impl Profile {
             .unwrap();
         let reply = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
             panic!(
-                "pta {args:?}: {} {}",
+                "kuroko {args:?}: {} {}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             )
@@ -69,7 +71,7 @@ impl Profile {
         let (code, reply) = self.pta(args);
         assert!(
             code == 0 && reply["ok"] == true,
-            "pta {args:?}: {code} {reply}"
+            "kuroko {args:?}: {code} {reply}"
         );
         reply["data"].clone()
     }
@@ -229,10 +231,11 @@ fn a_login_starts_the_host_through_the_service_manager_and_uninstall_removes_onl
     let again = profile.ok(&["service", "install", "--confirmed"]);
     assert_eq!(again["changed"], false, "{again}");
     // Nothing that reveals the profile or the executable.
-    let exe = PathBuf::from(env!("CARGO_BIN_EXE_personal-teams-assistant"));
+    let alias = PathBuf::from(env!("CARGO_BIN_EXE_personal-teams-assistant"));
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_kuroko-host"));
     for reply in [&before, &installed, &again] {
         assert!(
-            !mentions(reply, &profile.dir) && !mentions(reply, &exe),
+            !mentions(reply, &profile.dir) && !mentions(reply, &exe) && !mentions(reply, &alias),
             "{reply}"
         );
     }

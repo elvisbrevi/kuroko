@@ -65,6 +65,10 @@ pub(crate) fn run(
         if restore {
             tokio::spawn(service::restore(host.clone(), service::restore_pause()));
         }
+        if service::launched_by_service() {
+            let profile = host.state.settings.profile().to_path_buf();
+            tokio::task::spawn_blocking(move || service::upgrade(&profile));
+        }
         if start_service {
             // Keep the host alive on failure so `pta status/doctor/audit` can diagnose it.
             let reply = control::dispatch(&host, control::Request::new("start_assistant")).await;

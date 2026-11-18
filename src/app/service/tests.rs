@@ -4,23 +4,32 @@
 use super::*;
 use crate::app::variables::tests::{call, host};
 use authority::Transport::{Agent, Browser, Local, Machine};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
-/// Answers each command by the first scripted prefix it starts with; anything else succeeds empty.
+/// Answers each command by the first scripted prefix it starts with that has answers left;
+/// anything else succeeds empty.
 #[derive(Default)]
 struct Script {
-    answers: Vec<(String, Ran)>,
+    answers: Vec<(String, Ran, Cell<Option<usize>>)>,
     log: RefCell<Vec<String>>,
 }
 
 impl Script {
-    fn answer(mut self, prefix: &str, ok: bool, stdout: &str) -> Self {
+    fn answer(self, prefix: &str, ok: bool, stdout: &str) -> Self {
+        self.scripted(prefix, ok, stdout, None)
+    }
+    /// An answer for the first `times` matching commands only.
+    fn answer_times(self, prefix: &str, times: usize, ok: bool, stdout: &str) -> Self {
+        self.scripted(prefix, ok, stdout, Some(times))
+    }
+    fn scripted(mut self, prefix: &str, ok: bool, stdout: &str, times: Option<usize>) -> Self {
         self.answers.push((
             prefix.to_owned(),
             Ran {
                 ok,
                 stdout: stdout.to_owned(),
             },
+            Cell::new(times),
         ));
         self
     }
@@ -47,8 +56,11 @@ impl Runner for Script {
         self.log.borrow_mut().push(line.clone());
         self.answers
             .iter()
-            .find(|(prefix, _)| line.starts_with(prefix.as_str()))
-            .map(|(_, ran)| ran.clone())
+            .find(|(prefix, _, left)| line.starts_with(prefix.as_str()) && left.get() != Some(0))
+            .map(|(_, ran, left)| {
+                left.set(left.get().map(|n| n - 1));
+                ran.clone()
+            })
             .unwrap_or(Ran {
                 ok: true,
                 stdout: String::new(),
@@ -61,7 +73,7 @@ fn target(manager: Manager, root: &Path, isolated: bool) -> Target {
     fs::create_dir_all(&profile).unwrap();
     Target {
         manager,
-        exe: root.join("bin").join("personal-teams-assistant"),
+        exe: root.join("bin").join("kuroko-host"),
         id: id(&profile),
         profile,
         isolated,
@@ -69,10 +81,48 @@ fn target(manager: Manager, root: &Path, isolated: bool) -> Target {
         config_home: root.join("home/.config"),
         uid: Some(501),
         user: "WORKSTATION\\synthetic".into(),
+        legacy: false,
     }
 }
 
 const SHOW_STOPPED: &str = "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0\nUnitFileState=enabled\n";
+const SHOW_RUNNING: &str = "LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\nUnitFileState=enabled\n";
+const SHOW_ABSENT: &str = "LoadState=not-found\nActiveState=inactive\nUnitFileState=\n";
+
+/// Writes an entry's definition file as the version that created it did.
+fn place(t: &Target) {
+    let file = t.file().unwrap();
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, t.definition()).unwrap();
+}
+
+/// What a scheduled task's CSV status line says, with its numeric last result.
+fn task_csv(name: &str, result: &str) -> String {
+    format!(
+        "\"HOST\",\"\\{name}\",\"N/A\",\"Running\",\"Interactive only\",\"11/6/2026 9:00:00 AM\",\"{result}\",\"WORKSTATION\\synthetic\",\"x\"\r\n"
+    )
+}
+
+/// Commands that would start or stop a host.
+const STARTS_OR_STOPS: [&str; 9] = [
+    "launchctl bootout",
+    "launchctl bootstrap",
+    "launchctl kickstart",
+    "launchctl kill",
+    "systemctl --user start",
+    "systemctl --user stop",
+    "systemctl --user restart",
+    "schtasks /Run",
+    "schtasks /End",
+];
+
+fn starts_or_stops(script: &Script) -> Vec<String> {
+    script
+        .changes()
+        .into_iter()
+        .filter(|c| STARTS_OR_STOPS.iter().any(|p| c.starts_with(p)))
+        .collect()
+}
 
 #[test]
 fn one_entry_per_profile_and_its_name_reveals_no_path() {
@@ -641,4 +691,550 @@ fn a_host_with_the_profiles_private_home_cannot_register_the_users_entry() {
     let profile = root.path().join("profile");
     // HOME is never under a profile in a person's session.
     assert!(!sandboxed(&profile));
+}
+
+#[test]
+fn new_entries_are_named_for_kuroko_and_former_ones_keep_their_names() {
+    let root = tempfile::tempdir().unwrap();
+    let id = target(Manager::Launchd, root.path(), false).id;
+    for (manager, new, old) in [
+        (
+            Manager::Launchd,
+            format!("cl.elvisbrevi.kuroko.host.{id}"),
+            format!("dev.personalteams.assistant.host.{id}"),
+        ),
+        (
+            Manager::Systemd,
+            format!("kuroko-{id}.service"),
+            format!("personal-teams-assistant-{id}.service"),
+        ),
+        (
+            Manager::TaskScheduler,
+            format!("Kuroko-{id}"),
+            format!("PersonalTeamsAssistant-{id}"),
+        ),
+    ] {
+        let t = target(manager, root.path(), false);
+        let former = t.former();
+        assert!(!t.legacy && former.legacy);
+        assert_eq!(t.name(), new);
+        assert_eq!(former.name(), old);
+        if let (Some(file), Some(former_file)) = (t.file(), former.file()) {
+            assert!(file.to_string_lossy().contains(&new));
+            assert!(former_file.to_string_lossy().contains(&old));
+        }
+        // Both carry the marker that recognizes them; the new one starts the host, the former one
+        // the alias it was written for.
+        let alias = root.path().join("bin").join("personal-teams-assistant");
+        let (definition, previous) = (t.definition(), former.definition());
+        assert!(definition.contains(MARKER) && previous.contains(MARKER));
+        assert_eq!(previous, former.definition_of(&alias));
+        assert!(definition.contains("kuroko-host"));
+        assert!(!definition.contains("personal-teams-assistant"));
+        assert!(previous.contains("personal-teams-assistant"));
+        assert!(definition.contains("kuroko service uninstall"));
+        assert!(previous.contains("pta service uninstall"));
+    }
+    // A former unit is read back exactly as the versions before Kuroko wrote it.
+    let unit = target(Manager::Systemd, root.path(), false)
+        .former()
+        .definition();
+    assert!(
+        unit.lines()
+            .any(|l| l == "Description=Personal Teams Assistant host")
+    );
+    let unit = target(Manager::Systemd, root.path(), false).definition();
+    assert!(unit.lines().any(|l| l == "Description=Kuroko host"));
+}
+
+#[test]
+fn an_entry_installed_from_the_alias_starts_the_host_beside_it() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let alias = bin.join(format!("personal-teams-assistant{suffix}"));
+    let host = bin.join(format!("kuroko-host{suffix}"));
+    fs::write(&alias, "").unwrap();
+    // Without the host beside it, the alias stays.
+    assert_eq!(host_program(&alias), alias);
+    fs::write(&host, "").unwrap();
+    assert_eq!(host_program(&alias), host);
+    assert_eq!(host_program(&host), host);
+    let other = bin.join(format!("something-else{suffix}"));
+    assert_eq!(host_program(&other), other);
+    if Manager::current().is_some() {
+        let profile = root.path().join("profile");
+        fs::create_dir_all(&profile).unwrap();
+        let t = Target::detect(&profile, &alias).unwrap();
+        assert_eq!(t.exe, host);
+        assert!(!t.legacy);
+        // A former entry starts the alias, or the host when a host started under its new name
+        // wrote it.
+        assert_eq!(t.former().programs(), [alias, host]);
+    }
+}
+
+#[test]
+fn the_entry_that_exists_is_the_new_one_then_the_former_one() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Systemd, root.path(), false);
+    let script = Script::default().answer("systemctl --user show", true, SHOW_STOPPED);
+    // Neither: the new one.
+    assert_eq!(entry(&t, &script).name(), t.name());
+    place(&t.former());
+    let found = entry(&t, &script);
+    assert!(found.legacy);
+    assert_eq!(found.name(), t.former().name());
+    // A former entry starts and stops the host until it is renamed.
+    start(&found, &script).unwrap();
+    assert!(
+        script
+            .changes()
+            .contains(&format!("systemctl --user start {}", t.former().name()))
+    );
+    place(&t);
+    assert!(!entry(&t, &script).legacy);
+    assert!(!entry(&t.former(), &script).legacy);
+
+    let task = target(Manager::TaskScheduler, root.path(), false);
+    let (new, old) = (task.name(), task.former().name());
+    let only_former = Script::default()
+        .answer(
+            &format!("schtasks /Query /TN {old} /XML"),
+            true,
+            &task.former().definition(),
+        )
+        .answer(&format!("schtasks /Query /TN {new} /XML"), false, "");
+    assert!(entry(&task, &only_former).legacy);
+    let both = Script::default().answer("schtasks /Query", true, &task.definition());
+    assert!(!entry(&task, &both).legacy);
+}
+
+#[test]
+fn a_host_its_former_launch_agent_started_renames_it_without_stopping_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Launchd, root.path(), false);
+    let former = t.former();
+    place(&former);
+    let (new_file, old_file) = (t.file().unwrap(), former.file().unwrap());
+    let script = || {
+        Script::default()
+            .answer(
+                &format!("launchctl print gui/501/{}", former.name()),
+                true,
+                "\tstate = running\n",
+            )
+            .answer("launchctl print gui/501/", false, "")
+    };
+    let running = script();
+    assert_eq!(migrate(&t, false, &running), Migration::Renamed);
+    // The new agent is only written (launchd loads it at the next login); the former one is
+    // disabled, not booted out.
+    assert_eq!(
+        running.changes(),
+        [format!("launchctl disable gui/501/{}", former.name())]
+    );
+    assert_eq!(fs::read_to_string(&new_file).unwrap(), t.definition());
+    assert_eq!(fs::read_to_string(&old_file).unwrap(), former.definition());
+    // Its status names the new entry and the former one beside it.
+    let after = script().answer(
+        "launchctl print-disabled gui/501",
+        true,
+        &format!(
+            "disabled services = {{\n\t\"{}\" => disabled\n}}\n",
+            former.name()
+        ),
+    );
+    let shown = report(&t, &after);
+    assert_eq!(shown["name"], t.name());
+    assert_eq!(shown["installed"], true);
+    assert_eq!(shown["current"], true);
+    assert_eq!(
+        shown["former"],
+        json!({"name": former.name(), "installed": true, "enabled": false})
+    );
+    // Started through the former entry again (it was not disabled in time): nothing more.
+    let again = script();
+    assert_eq!(migrate(&t, false, &again), Migration::Unchanged);
+    assert!(again.changes().is_empty());
+
+    // A refused step removes the new agent and leaves the former one as it was.
+    fs::remove_file(&new_file).unwrap();
+    let refused = script().answer("launchctl disable", false, "");
+    assert_eq!(migrate(&t, false, &refused), Migration::Failed);
+    assert!(!new_file.exists());
+    assert_eq!(fs::read_to_string(&old_file).unwrap(), former.definition());
+    assert!(starts_or_stops(&refused).is_empty());
+}
+
+#[test]
+fn a_host_the_new_launch_agent_started_removes_the_former_one() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Launchd, root.path(), false);
+    let former = t.former();
+    place(&t);
+    place(&former);
+    let script = |former_state: &str| {
+        Script::default()
+            .answer(
+                &format!("launchctl print gui/501/{}", former.name()),
+                true,
+                former_state,
+            )
+            .answer(
+                &format!("launchctl print gui/501/{}", t.name()),
+                true,
+                "\tstate = running\n",
+            )
+    };
+    // Through the alias the new entry did not start this host: wait.
+    let alias = script("\tstate = not running\n");
+    assert_eq!(migrate(&t, false, &alias), Migration::Unchanged);
+    assert!(alias.changes().is_empty());
+    // A former agent that runs a host is never booted out or removed.
+    let busy = script("\tstate = running\n");
+    assert_eq!(migrate(&t, true, &busy), Migration::Unchanged);
+    assert!(busy.changes().is_empty());
+    let idle = script("\tstate = not running\n");
+    assert_eq!(migrate(&t, true, &idle), Migration::Retired);
+    assert_eq!(
+        idle.changes(),
+        [format!("launchctl bootout gui/501/{}", former.name())]
+    );
+    assert!(!former.file().unwrap().exists());
+    assert_eq!(
+        fs::read_to_string(t.file().unwrap()).unwrap(),
+        t.definition()
+    );
+    // Nothing is left to do.
+    assert_eq!(
+        migrate(&t, true, &script("\tstate = not running\n")),
+        Migration::Unchanged
+    );
+}
+
+#[test]
+fn a_host_its_former_unit_started_renames_it_without_stopping_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Systemd, root.path(), false);
+    let former = t.former();
+    place(&former);
+    let (unit, old) = (t.name(), former.name());
+    let (new_file, old_file) = (t.file().unwrap(), former.file().unwrap());
+    let script = || {
+        Script::default()
+            .answer(&format!("systemctl --user show {old}"), true, SHOW_RUNNING)
+            .answer(&format!("systemctl --user show {unit}"), true, SHOW_STOPPED)
+    };
+    let running = script();
+    assert_eq!(migrate(&t, false, &running), Migration::Renamed);
+    assert_eq!(
+        running.changes(),
+        [
+            "systemctl --user daemon-reload".to_owned(),
+            format!("systemctl --user enable {unit}"),
+            format!("systemctl --user disable {old}"),
+        ]
+    );
+    assert_eq!(fs::read_to_string(&new_file).unwrap(), t.definition());
+    assert_eq!(fs::read_to_string(&old_file).unwrap(), former.definition());
+
+    // The new unit cannot be enabled: it is removed, the former one is not touched.
+    fs::remove_file(&new_file).unwrap();
+    let refused = script().answer(&format!("systemctl --user enable {unit}"), false, "");
+    assert_eq!(migrate(&t, false, &refused), Migration::Failed);
+    assert_eq!(
+        refused.changes(),
+        [
+            "systemctl --user daemon-reload".to_owned(),
+            format!("systemctl --user enable {unit}"),
+            format!("systemctl --user disable {unit}"),
+            "systemctl --user daemon-reload".to_owned(),
+        ]
+    );
+    assert!(!new_file.exists());
+    assert_eq!(fs::read_to_string(&old_file).unwrap(), former.definition());
+
+    // The former unit cannot be disabled: the new one is removed again.
+    let kept = script().answer(&format!("systemctl --user disable {old}"), false, "");
+    assert_eq!(migrate(&t, false, &kept), Migration::Failed);
+    assert_eq!(
+        kept.changes()[2..],
+        [
+            format!("systemctl --user disable {old}"),
+            format!("systemctl --user disable {unit}"),
+            "systemctl --user daemon-reload".to_owned(),
+        ]
+    );
+    assert!(!new_file.exists());
+    assert!(old_file.exists());
+    for script in [&running, &refused, &kept] {
+        assert!(starts_or_stops(script).is_empty());
+    }
+
+    // Without a user manager nothing is written.
+    let absent = Script::default()
+        .answer(&format!("systemctl --user show {old}"), true, SHOW_RUNNING)
+        .answer("systemctl", false, "");
+    assert_eq!(migrate(&t, false, &absent), Migration::Failed);
+    assert!(!new_file.exists());
+}
+
+#[test]
+fn a_host_the_new_unit_started_removes_the_former_one() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Systemd, root.path(), false);
+    let former = t.former();
+    place(&t);
+    place(&former);
+    let old = former.name();
+    let disabled = SHOW_STOPPED.replace("UnitFileState=enabled", "UnitFileState=disabled");
+    let script = Script::default()
+        .answer(&format!("systemctl --user show {old}"), true, &disabled)
+        .answer(
+            &format!("systemctl --user show {}", t.name()),
+            true,
+            SHOW_RUNNING,
+        );
+    let shown = report(&t, &script);
+    assert_eq!(
+        shown["former"],
+        json!({"name": old, "installed": true, "enabled": false})
+    );
+    assert_eq!(migrate(&t, true, &script), Migration::Retired);
+    assert_eq!(
+        script.changes(),
+        [
+            format!("systemctl --user disable {old}"),
+            "systemctl --user daemon-reload".to_owned(),
+        ]
+    );
+    assert!(!former.file().unwrap().exists());
+    assert!(t.file().unwrap().exists());
+    assert!(report(&t, &script).get("former").is_none());
+}
+
+#[test]
+fn a_host_its_former_task_started_renames_it_without_ending_itself() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::TaskScheduler, root.path(), false);
+    let former = t.former();
+    let (new, old) = (t.name(), former.name());
+    // The new task is absent until it is created (the migration and the install each ask once).
+    let script = |absent: usize| {
+        Script::default()
+            .answer(
+                &format!("schtasks /Query /TN {old} /XML"),
+                true,
+                &former.definition(),
+            )
+            .answer(
+                &format!("schtasks /Query /TN {old} /FO CSV"),
+                true,
+                &task_csv(&old, TASK_RUNNING),
+            )
+            .answer_times(&format!("schtasks /Query /TN {new} "), absent, false, "")
+            .answer(
+                &format!("schtasks /Query /TN {new} /XML"),
+                true,
+                &t.definition(),
+            )
+    };
+    let running = script(2);
+    assert_eq!(migrate(&t, false, &running), Migration::Renamed);
+    let changes = running.changes();
+    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert!(changes[0].starts_with(&format!("schtasks /Create /TN {new} /XML ")));
+    assert_eq!(changes[1], format!("schtasks /Change /TN {old} /DISABLE"));
+    assert_eq!(fs::read_dir(t.profile.join("service")).unwrap().count(), 0);
+
+    // The former task cannot be disabled: the new one is deleted again.
+    let kept = script(2).answer("schtasks /Change", false, "");
+    assert_eq!(migrate(&t, false, &kept), Migration::Failed);
+    assert_eq!(
+        kept.changes()[1..],
+        [
+            format!("schtasks /Change /TN {old} /DISABLE"),
+            format!("schtasks /Delete /TN {new} /F"),
+        ]
+    );
+    // The new task cannot be created: nothing else happens.
+    let refused = script(3).answer("schtasks /Create", false, "");
+    assert_eq!(migrate(&t, false, &refused), Migration::Failed);
+    assert_eq!(refused.changes().len(), 1);
+    for script in [&running, &kept, &refused] {
+        assert!(starts_or_stops(script).is_empty());
+        assert!(
+            !script
+                .changes()
+                .iter()
+                .any(|c| c.contains(&old) && c.contains("/Delete"))
+        );
+    }
+}
+
+#[test]
+fn a_host_the_new_task_started_removes_the_former_one() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::TaskScheduler, root.path(), false);
+    let former = t.former();
+    let (new, old) = (t.name(), former.name());
+    // `/Change /DISABLE` turned the task's own setting off; its trigger stays enabled.
+    let disabled = former.definition().replace(
+        "<Enabled>true</Enabled>\n    <Hidden>",
+        "<Enabled>false</Enabled>\n    <Hidden>",
+    );
+    assert_ne!(disabled, former.definition());
+    let script = |result: &str| {
+        Script::default()
+            .answer(&format!("schtasks /Query /TN {old} /XML"), true, &disabled)
+            .answer(
+                &format!("schtasks /Query /TN {old} /FO CSV"),
+                true,
+                &task_csv(&old, result),
+            )
+            .answer(
+                &format!("schtasks /Query /TN {new} /XML"),
+                true,
+                &t.definition(),
+            )
+            .answer(
+                &format!("schtasks /Query /TN {new} /FO CSV"),
+                true,
+                &task_csv(&new, TASK_RUNNING),
+            )
+    };
+    let idle = script("0");
+    let shown = report(&t, &idle);
+    assert_eq!(shown["name"], new);
+    assert_eq!(shown["running"], true);
+    assert_eq!(
+        shown["former"],
+        json!({"name": old, "installed": true, "enabled": false})
+    );
+    assert_eq!(migrate(&t, false, &idle), Migration::Unchanged);
+    assert_eq!(migrate(&t, true, &idle), Migration::Retired);
+    assert_eq!(idle.changes(), [format!("schtasks /Delete /TN {old} /F")]);
+    // A former task that runs is never deleted.
+    let busy = script(TASK_RUNNING);
+    assert_eq!(migrate(&t, true, &busy), Migration::Unchanged);
+    assert!(busy.changes().is_empty());
+}
+
+#[test]
+fn installing_again_retires_the_former_entry_and_uninstall_removes_both() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Systemd, root.path(), false);
+    let former = t.former();
+    let (unit, old) = (t.name(), former.name());
+    let (new_file, old_file) = (t.file().unwrap(), former.file().unwrap());
+    place(&former);
+    // The former unit runs nothing: it is removed once the new one is installed.
+    let stopped = Script::default()
+        .answer(&format!("systemctl --user show {old}"), true, SHOW_STOPPED)
+        .answer_times(
+            &format!("systemctl --user show {unit}"),
+            1,
+            true,
+            SHOW_ABSENT,
+        )
+        .answer(&format!("systemctl --user show {unit}"), true, SHOW_STOPPED);
+    assert_eq!(repair(&t, &stopped), Ok(true));
+    assert_eq!(
+        stopped.changes(),
+        [
+            "systemctl --user daemon-reload".to_owned(),
+            format!("systemctl --user enable {unit}"),
+            format!("systemctl --user disable {old}"),
+            "systemctl --user daemon-reload".to_owned(),
+        ]
+    );
+    assert!(new_file.exists() && !old_file.exists());
+    // The former unit runs this host: it is only disabled, never stopped.
+    place(&former);
+    let running = Script::default()
+        .answer(&format!("systemctl --user show {old}"), true, SHOW_RUNNING)
+        .answer(&format!("systemctl --user show {unit}"), true, SHOW_STOPPED);
+    assert_eq!(repair(&t, &running), Ok(true));
+    assert_eq!(
+        running.changes(),
+        [format!("systemctl --user disable {old}")]
+    );
+    assert!(old_file.exists());
+    // Once disabled, installing again changes nothing.
+    let disabled = Script::default()
+        .answer(
+            &format!("systemctl --user show {old}"),
+            true,
+            &SHOW_RUNNING.replace("UnitFileState=enabled", "UnitFileState=disabled"),
+        )
+        .answer(&format!("systemctl --user show {unit}"), true, SHOW_STOPPED);
+    assert_eq!(repair(&t, &disabled), Ok(false));
+    assert!(disabled.changes().is_empty());
+    // Uninstall removes both entries and stops neither.
+    let removing = Script::default()
+        .answer(&format!("systemctl --user show {old}"), true, SHOW_RUNNING)
+        .answer(&format!("systemctl --user show {unit}"), true, SHOW_STOPPED);
+    assert_eq!(remove(&t, &removing), Ok(true));
+    assert_eq!(
+        removing.changes(),
+        [
+            format!("systemctl --user disable {unit}"),
+            "systemctl --user daemon-reload".to_owned(),
+            format!("systemctl --user disable {old}"),
+            "systemctl --user daemon-reload".to_owned(),
+        ]
+    );
+    assert!(!new_file.exists() && !old_file.exists());
+    assert_eq!(remove(&t, &removing), Ok(false));
+    // Only a former entry left: uninstall removes it too.
+    place(&former);
+    let only_former = Script::default().answer("systemctl --user show", true, SHOW_STOPPED);
+    assert_eq!(remove(&t, &only_former), Ok(true));
+    assert!(!old_file.exists());
+}
+
+#[test]
+fn installing_again_while_the_former_launch_agent_runs_this_host_only_disables_it() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Launchd, root.path(), false);
+    let former = t.former();
+    place(&former);
+    let script = Script::default()
+        .answer(
+            &format!("launchctl print gui/501/{}", former.name()),
+            true,
+            "\tstate = running\n",
+        )
+        .answer("launchctl print gui/501/", false, "");
+    assert_eq!(repair(&t, &script), Ok(true));
+    let file = t.file().unwrap();
+    assert_eq!(
+        script.changes(),
+        [
+            format!("launchctl bootstrap gui/501 {}", file.display()),
+            format!("launchctl disable gui/501/{}", former.name()),
+        ]
+    );
+    assert!(former.file().unwrap().exists());
+}
+
+#[test]
+fn a_status_with_only_the_former_entry_names_it() {
+    let root = tempfile::tempdir().unwrap();
+    let t = target(Manager::Systemd, root.path(), false);
+    place(&t.former());
+    let script = Script::default().answer("systemctl --user show", true, SHOW_RUNNING);
+    let shown = report(&t, &script);
+    assert_eq!(shown["name"], t.former().name());
+    assert_eq!(shown["installed"], true);
+    assert_eq!(shown["current"], true);
+    assert!(shown.get("former").is_none());
+    assert!(
+        shown["notes"][0]
+            .as_str()
+            .unwrap()
+            .contains("before Kuroko")
+    );
 }

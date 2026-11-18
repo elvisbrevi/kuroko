@@ -444,11 +444,13 @@ pub(crate) fn run_helper() -> i32 {
         return 2;
     };
     let exe = entry.bin().join(core::exe_name(core::OWN.host));
+    // The entry that exists: the new one, or the former one a host before Kuroko installed.
     let service = entry
         .intent
         .service
         .then(|| super::super::service::Target::detect(&profile, &exe).ok())
-        .flatten();
+        .flatten()
+        .map(|t| super::super::service::entry(&t, &super::super::service::System));
     let platform = Local {
         profile,
         root: entry.root.clone(),

@@ -361,3 +361,13 @@ through its own updater. The Mac has it prepared and waits for a person to choos
 - **Deferred to 0.18.x:** service entry names (`kuroko-<id>.service`,
   `cl.elvisbrevi.kuroko.host.<id>`, `Kuroko-<id>`), the CLI's text by invocation name and its
   deprecation notices (phase 3).
+
+## 8. 0.18.1: service entries and command names
+
+- **Service entries** are named `cl.elvisbrevi.kuroko.host.<id>`, `kuroko-<id>.service` and
+  `Kuroko-<id>`, and start `kuroko-host`. Entries written before migrate by themselves: a host
+  started by the former entry adds the new one and disables the former one without stopping
+  anything, and the next host started by the new entry removes the former one (architecture,
+  "Start at login").
+- **The CLI** names itself as invoked in `--version`. `pta` and `personal-teams-assistant` print a
+  note on a terminal's stderr that they are former names, removed in 0.21.0.
