@@ -4,203 +4,314 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Personal Teams Assistant — answers in Teams as you</title>
-  <meta name="description" content="Self-hosted personal assistant for Microsoft Teams: owner-only web access, locally approved machines, authorized sources and code checks before sending.">
-  <meta property="og:title" content="Personal Teams Assistant">
-  <meta property="og:description" content="Answers in Teams as you, and only with what you authorize. A web interface in your browser and on your phone, a CLI and an MCP server in a single Cargo package.">
+  <title>Kuroko — You on stage. Kuroko handles the rest.</title>
+  <meta name="description" content="Kuroko, the Personal Teams Assistant: it answers in Microsoft Teams as you, keeps a daily record of your Azure DevOps tasks and implements your work items with coding agents on your own computers, only with what you authorize.">
+  <meta property="og:site_name" content="Kuroko">
+  <meta property="og:title" content="Kuroko — You on stage. Kuroko handles the rest.">
+  <meta property="og:description" content="Answers in Teams as you, keeps your activity records and implements your work behind the scenes. Self-hosted and open source: a web interface, a CLI and an MCP server in one Cargo package.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://teams-assistant.elvisbrevi.cl/">
-  <meta property="og:image" content="https://teams-assistant.elvisbrevi.cl/assets/app-overview-light.jpg">
+  <meta property="og:image" content="https://teams-assistant.elvisbrevi.cl/assets/og-banner.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="800">
+  <meta property="og:image:alt" content="Kuroko, a small stagehand in a black hood and robe, waves next to the wordmark and the line: You on stage. Kuroko handles the rest.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Kuroko — You on stage. Kuroko handles the rest.">
+  <meta name="twitter:description" content="Answers in Teams as you, keeps your activity records and implements your work behind the scenes. Self-hosted and open source.">
+  <meta name="twitter:image" content="https://teams-assistant.elvisbrevi.cl/assets/og-banner.jpg">
+  <meta name="twitter:image:alt" content="Kuroko, a small stagehand in a black hood and robe, waves next to the wordmark and the line: You on stage. Kuroko handles the rest.">
   <meta name="theme-color" content="#fff6e5" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17151f" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://teams-assistant.elvisbrevi.cl/">
   <link rel="icon" href="assets/icon.png" type="image/png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <svg class="sprite" aria-hidden="true">
-    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></symbol>
-    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></symbol>
-    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
-    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
-    <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13h5l1.5 3h5L16 13h5"/><path d="M5.5 5h13L21 13v6H3v-6z"/></symbol>
-    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/></symbol>
-    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></symbol>
-  </svg>
+  <a class="skip" href="#top">Skip to content</a>
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <a class="brand" href="#top"><img src="assets/icon.png" alt="" width="36" height="36"><span>Personal Teams Assistant</span></a>
+      <a class="brand" href="#top"><img src="assets/mark-96.webp" alt="" width="40" height="40"><span>Kuroko</span></a>
       <nav aria-label="Sections">
-        <a href="#how-it-works">How it works</a>
+        <a href="#acts">What it does</a>
         <a href="#security">Security</a>
+        <a href="#agents">Agents</a>
         <a href="#install">Install</a>
         <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant">GitHub</a>
       </nav>
     </div>
+    <div class="curtain" aria-hidden="true"></div>
   </header>
 
   <main id="top">
-    <section class="hero">
-      <div class="wrap hero-inner">
-        <div class="hero-copy">
-          <img class="hero-icon" src="assets/icon.png" alt="" width="112" height="112">
-          <h1>Answers in Teams as you, and only with what you authorize.</h1>
-          <p class="lead">It replies for you when someone messages you directly, mentions you, or when you ask it in your chat with yourself. It gathers evidence from your sources, drafts with Codex, Claude Code, OpenCode 2 or DeepSeek, checks references and known sensitive data in code, and never automatically retries a send.</p>
-          <div class="install"><span class="prompt" aria-hidden="true">$</span><code class="cmd">cargo install personal-teams-assistant --locked</code></div>
-          <div class="cta">
-            <a class="button" href="#install">Get started</a>
-            <a class="button secondary" href="https://github.com/elvisbrevi/personal-teams-assistant">View the code</a>
-            <a class="button secondary" href="https://crates.io/crates/personal-teams-assistant">crates.io</a>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="wrap">
+        <div class="stage">
+          <div class="stage-copy">
+            <p class="kicker">Your personal assistant for Microsoft Teams</p>
+            <h1 id="hero-title">You on stage. <span>Kuroko handles the rest.</span></h1>
+            <p class="lead">Kuroko answers in Teams as you, keeps a daily record of your Azure DevOps tasks and implements your work items with coding agents on your own computers. Only with what you authorize, and with code checking every step.</p>
+            <div class="cta">
+              <a class="button" href="#install">Get started</a>
+              <a class="button secondary" href="https://github.com/elvisbrevi/personal-teams-assistant">View the code</a>
+            </div>
+            <p class="fine">Open source (MIT) · Self-hosted · macOS, Windows and Linux · Replies in English or Spanish</p>
           </div>
-          <p class="fine">Open source (MIT) · macOS, Windows and Linux · Opens in your browser · Web portal for your phone · Replies in English or Spanish</p>
+          <img class="stage-art" src="assets/stage-1536.webp" srcset="assets/stage-900.webp 900w, assets/stage-1536.webp 1536w" sizes="(max-width: 1208px) 100vw, 1160px" width="1536" height="1024" fetchpriority="high" alt="A kabuki stage with its striped curtain. On an empty chair sits a laptop, and a small stagehand dressed in black slides a chat bubble onto its screen.">
         </div>
-        <div class="hero-shots">
+      </div>
+    </section>
+
+    <section class="playbill" aria-label="At a glance">
+      <div class="wrap playbill-inner">
+        <p class="ticket"><strong>As you, not a bot</strong><span>delegated Microsoft sign-in with PKCE</span></p>
+        <p class="ticket"><strong>4 permissions</strong><span>the Microsoft Graph minimum, no new scopes</span></p>
+        <p class="ticket"><strong>0 retries</strong><span>when sending to Teams: when in doubt, you review</span></p>
+        <p class="ticket"><strong>Read-only</strong><span>daily activity records never change your tasks</span></p>
+      </div>
+    </section>
+
+    <section class="story" aria-labelledby="story-title">
+      <div class="wrap story-inner">
+        <h2 id="story-title">Why <span lang="ja">黒子</span> Kuroko?</h2>
+        <p>In kabuki theatre, <em>kuroko</em> are the stagehands dressed in black who move the props and help the actor in plain sight. By convention, the audience treats them as invisible. Kuroko does the same for you: it answers your messages, keeps your records and moves your work forward behind the scenes, so you stay on stage.</p>
+      </div>
+    </section>
+
+    <div id="acts">
+      <section id="teams" class="act" aria-labelledby="teams-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-teams.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 1 · Microsoft Teams</p>
+            <h2 id="teams-title">Answers in Teams as you, only with what you authorize</h2>
+            <p class="lead">When someone writes to you directly, mentions you in a group or asks in your personal chat, Kuroko reads only the sources open to that conversation, writes with the models you choose (Codex, Claude Code, OpenCode 2 or DeepSeek, in your order, with fallback) and replies as you.</p>
+            <ul class="points">
+              <li><strong>Your own identity.</strong> Delegated Microsoft sign-in with PKCE and four permissions: <code>User.Read</code>, <code>Chat.Read</code>, <code>ChatMessage.Send</code> and <code>offline_access</code>.</li>
+              <li><strong>Checked in code.</strong> References, links and sensitive data are verified before sending. If something can't be verified, nothing is sent and you get a note in your personal chat.</li>
+              <li><strong>Sent once.</strong> A send is never retried: an uncertain one is left for your review.</li>
+              <li><strong>Observation mode.</strong> Start with drafts that are never sent. Rate them, keep good ones as examples, improve one with your context and send it by hand, then turn sending on when you trust it.</li>
+              <li><strong>Cards in your style.</strong> Every message is a card with a colored stripe and a band saying it was written with AI. Choose its text, position, colors and sizes, or sign it “Message generated by Kuroko” with the app's icon and a link back here.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="wrap shots one">
           <figure class="window">
             <picture>
-              <source srcset="assets/app-overview-dark.jpg" media="(prefers-color-scheme: dark)">
-              <img src="assets/app-overview-light.jpg" width="1280" height="800" alt="The app's home screen: the assistant's face shows it is running in observation mode, with recent outcomes, setup and the status of each part.">
+              <source srcset="assets/app-message-style-dark.jpg" media="(prefers-color-scheme: dark)">
+              <img src="assets/app-message-style-light.jpg" width="966" height="495" loading="lazy" alt="Settings, message style in Teams: the band is signed as Kuroko, and the preview card ends with the app's icon and “Message generated by Kuroko”.">
             </picture>
-          </figure>
-          <figure class="phone">
-            <picture>
-              <source srcset="assets/app-phone-home-dark.jpg" media="(prefers-color-scheme: dark)">
-              <img src="assets/app-phone-home-light.jpg" width="786" height="1704" alt="The same home screen on a phone, with the floating tab bar.">
-            </picture>
+            <figcaption>The message style in Settings, with a preview of the card. Synthetic data.</figcaption>
           </figure>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="strip" aria-label="At a glance">
-      <div class="wrap strip-inner">
-        <div class="stat lime"><strong>No bot</strong><span>delegated OAuth with PKCE</span></div>
-        <div class="stat sky"><strong>4 permissions</strong><span>the Graph minimum</span></div>
-        <div class="stat orange"><strong>4 providers</strong><span>of models, with fallback</span></div>
-        <div class="stat lilac"><strong>0 retries</strong><span>when sending to Teams</span></div>
-      </div>
-    </section>
-
-    <section id="how-it-works" class="section">
-      <div class="wrap">
-        <header class="section-head">
-          <h2>From message to reply, with a check at every step</h2>
-          <p>Models propose; code decides what can be read, what can be cited and what gets sent.</p>
-        </header>
-        <ol class="pipeline">
-          <li><span class="num">1</span><h3>Receives</h3><p>Microsoft Graph notifies it of every new message through a webhook. Your chat with yourself is also checked every 10 s.</p></li>
-          <li><span class="num">2</span><h3>Decides whether to answer</h3><p>Only direct messages, real mentions or your chat with yourself. Calls, meetings and “got a minute?” are left to you.</p></li>
-          <li><span class="num">3</span><h3>Gathers evidence</h3><p>It reads only the sources open to that conversation: Git repositories, URLs, Azure DevOps wikis and activity, verified notes and your own Teams messages.</p></li>
-          <li><span class="num">4</span><h3>Drafts</h3><p>Your configured order of Codex, Claude Code, OpenCode 2 and DeepSeek. If one fails or runs out of credits, the next active provider answers; the following call starts again from your default.</p></li>
-          <li><span class="num">5</span><h3>Verifies in code</h3><p>References, IDs, URLs and sensitive data. If something can't be checked, the reply is held back and you get a note in your chat with yourself.</p></li>
-          <li><span class="num">6</span><h3>Sends once</h3><p>As Teams HTML, logged before it goes out. It never retries: when in doubt, the message is left for human review.</p></li>
-        </ol>
-      </div>
-    </section>
-
-    <section class="section alt">
-      <div class="wrap">
-        <header class="section-head">
-          <h2>Built for people who answer the same questions again and again</h2>
-        </header>
-        <div class="features">
-          <article><span class="tile lime"><svg class="icon"><use href="#i-user"/></svg></span><h3>Your own identity</h3><p>It replies as you, not as a bot. A public Entra client with PKCE and only <code>User.Read</code>, <code>Chat.Read</code>, <code>ChatMessage.Send</code> and <code>offline_access</code>.</p></article>
-          <article><span class="tile lilac"><svg class="icon"><use href="#i-book"/></svg></span><h3>Sources with audiences</h3><p>Every source starts disabled, with no audiences and no external processing. You decide which conversation can use what. Answers link the Wiki pages, work items and pipelines they cite.</p></article>
-          <article><span class="tile sky"><svg class="icon"><use href="#i-search"/></svg></span><h3>Work you didn't log</h3><p>Review your activity against existing work items, using the sources you authorize and verified links. Daily activity runs never create, link or change provider work items.</p></article>
-          <article><span class="tile orange"><svg class="icon"><use href="#i-check"/></svg></span><h3>Daily activity records</h3><p>Save existing Azure tasks by day, with verified links and registered hours. Schedule read-only snapshots and review saved days in Activities or with <code>pta activity</code>.</p></article>
-          <article><span class="tile yellow"><svg class="icon"><use href="#i-eye"/></svg></span><h3>Observation mode</h3><p>Start with drafts that are never sent. Review them in the app, rate them, keep the good ones as examples, and turn on sending once you trust them.</p></article>
-          <article><span class="tile pink"><svg class="icon"><use href="#i-inbox"/></svg></span><h3>Every message, explained</h3><p>What it decided, how it read the question, which model answered, what failed first and a log of every step, in the Messages tab or with <code>pta audit</code>.</p></article>
-          <article><span class="tile sky"><svg class="icon"><use href="#i-phone"/></svg></span><h3>On your desk and in your pocket</h3><p>On your computer it opens in your browser; your own private portal behind Cloudflare Access serves the same interface everywhere else: add it to your phone's home screen and use it in light or dark.</p></article>
-          <article><span class="tile lime"><svg class="icon"><use href="#i-chip"/></svg></span><h3>App, CLI and agents</h3><p>The <code>pta</code> CLI with stable JSON output, a built-in skill, and <code>pta mcp</code>: an MCP server so Claude Code, Codex or any client can operate it. Sending, access changes and implementation actions are marked for confirmation.</p></article>
+      <section id="activity" class="act alt flip" aria-labelledby="activity-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-activity.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 2 · Activity records</p>
+            <h2 id="activity-title">A daily record of your work, without touching your tasks</h2>
+            <p class="lead">Activities saves your existing Azure DevOps tasks by day, on a schedule or when you ask, with verified links, descriptions, their HU and the hours against your daily target. “What did I do yesterday?” is then answered from that record.</p>
+            <ul class="points">
+              <li><strong>Read-only.</strong> Daily activity runs never create, link or change work items.</li>
+              <li><strong>Activity review.</strong> Ask which work no task records: Kuroko compares your commits, pull requests, pipeline runs, releases, Wiki edits and, if you allow it, your Teams messages with your work items, and lists each piece with its verified link and where it could go.</li>
+              <li><strong>Status rounds.</strong> Progress, commitments and blockers, read from the work item itself and your own recent Wiki pages.</li>
+              <li><strong>History.</strong> Every saved day between two dates, in the app or with <code>pta activity history</code>.</li>
+            </ul>
+          </div>
         </div>
-        <div class="screens">
+        <div class="wrap shots">
           <figure class="window">
             <picture>
               <source srcset="assets/app-chat-dark.jpg" media="(prefers-color-scheme: dark)">
-              <img src="assets/app-chat-light.jpg" width="1280" height="800" loading="lazy" alt="Test chat: a review of the work done in the last two weeks that no task records, with the user story each piece could go under.">
+              <img src="assets/app-chat-light.jpg" width="1280" height="800" loading="lazy" alt="Test chat: a review of the last two weeks lists two pieces of work no task records, each with the HU it could go under and its verified link.">
             </picture>
-            <figcaption>Illustrative interface with synthetic data. Current activity records are read-only.</figcaption>
+            <figcaption>An activity review in the test chat. Synthetic data.</figcaption>
           </figure>
           <figure class="phone">
             <picture>
               <source srcset="assets/app-phone-activities-dark.jpg" media="(prefers-color-scheme: dark)">
-              <img src="assets/app-phone-activities-light.jpg" width="786" height="1704" loading="lazy" alt="Activities on a phone: review a day, the hours registered against the daily target and the activities that need your input.">
+              <img src="assets/app-phone-activities-light.jpg" width="786" height="1704" loading="lazy" alt="Activities on a phone: one saved day with its task, its HU and 3 of 9 hours against the advisory daily target.">
             </picture>
-            <figcaption>Activities on a phone.</figcaption>
+            <figcaption>A saved day on a phone.</figcaption>
           </figure>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section id="security" class="section">
-      <div class="wrap split">
-        <header class="section-head left">
-          <h2>A private installation you control</h2>
-          <p>Run it on your own computer or server, with your own accounts, credentials and HTTPS address. Each portal accepts only the GitHub owner you configure. The maintainer's portal is private.</p>
-          <div class="cta">
-            <a class="button secondary" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/SECURITY.md">Security policy</a>
-            <a class="button secondary" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/desktop/skills/personal-teams-assistant/references/web-access.md">Set up your portal</a>
+      <section id="workflows" class="act" aria-labelledby="workflows-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-workflows.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 3 · Implementation and workflows</p>
+            <h2 id="workflows-title">Implements your work items on your own machines</h2>
+            <p class="lead">From To-Do or a work item, <em>Implement</em> picks one of your computers, its directories and an installed coding agent (Codex, Claude Code or OpenCode) with its model and effort. HUs, bugs and GitHub epics get a plan of children that you review, edit and confirm before anything is created; tasks and issues go straight to coding.</p>
+            <ul class="points">
+              <li><strong>Workflows.</strong> A saved recipe per Azure DevOps project: its repositories, the machine and checkouts, the agent and its instructions. A director picks the workflow that fits each item, and a watcher can start runs for items that reach a ready state. The plan review always waits for you.</li>
+              <li><strong>Dependencies and limits.</strong> A run waits for its predecessors' pull requests or stacks on their branch, and a workflow can cap how many pull requests it keeps open.</li>
+              <li><strong>Review rounds.</strong> When a reviewer rejects a pull request or asks for changes, the agent corrects the same branch, answers each thread and sends it back. Past the workflow's limit, a person decides.</li>
+              <li><strong>A supervisor, if you want one.</strong> It reads what the agents did, checks their reports against facts, drafts handover notes and summaries, and proposes the next step for you to confirm.</li>
+              <li><strong>Every session on record.</strong> Each agent session keeps its state and times; progress summaries go to Teams only with the text you approved.</li>
+            </ul>
+            <p class="fine">Coding runs are autonomous, with full permissions on the computer you choose: that trusted machine and its allowed directories are the boundary.</p>
           </div>
-          <p class="fine">You configure Cloudflare Access, TLS and edge HSTS, SSH keys and a firewall for your host. Profiles share your OS account; selected coding directories are not OS isolation for untrusted code. The security policy tracks these limits and upstream dependency notices.</p>
-        </header>
-        <ul class="checks">
-          <li><strong>Owner-only sign-in.</strong> Your Cloudflare Access configuration and a locally bound GitHub identity protect your portal. There is no public registration.</li>
-          <li><strong>Machines you approve.</strong> Authorize each new machine locally on your coordinator. Its private pairing file expires in ten minutes and works once, for that machine and installation.</li>
-          <li><strong>Protected web sessions.</strong> Signed identity assertions, expiring and revocable sessions, protected cookies and Origin/CSRF checks guard browser operations. HTTPS origin responses include HSTS.</li>
-          <li><strong>Credentials under your control.</strong> Use macOS Keychain, Windows Credential Manager or private profile files on Linux. Stored Microsoft OAuth tokens are encrypted.</li>
-          <li><strong>Model decisions grant no access.</strong> Code checks audiences, paths and URLs. Answer generation runs without tools, with configured redaction for known secrets and sensitive patterns. Coding agents use their selected implementation permissions.</li>
-          <li><strong>Activity records are read-only.</strong> Creating work items uses separate workflows that need your confirmation. An uncertain Teams send is left for review and never automatically retried.</li>
-          <li><strong>Checks before delivery.</strong> Source and history secret scans, RustSec and GitHub dependency advisories, required CI checks and weekly audits support the public repository.</li>
-        </ul>
-      </div>
-    </section>
+        </div>
+      </section>
 
-    <section id="install" class="section alt">
+      <section id="knowledge" class="act alt flip" aria-labelledby="knowledge-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-knowledge.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 4 · Knowledge</p>
+            <h2 id="knowledge-title">Knows only what you let it know</h2>
+            <p class="lead">Sources are what Kuroko may read: files and whole repositories, exact URLs, Azure DevOps activity and Wiki, your verified notes, the activity record, your own Teams messages and your recent coding-agent sessions. Each one starts disabled, with no audience, and you choose the conversations that may use it.</p>
+            <ul class="points">
+              <li><strong>Contexts.</strong> The words, sources and instructions of one subject. They narrow and guide; they never authorize.</li>
+              <li><strong>Verified notes and questions.</strong> Facts you confirmed, and the questions you configure with their sources. Your ratings guide later answers to the same question, never its facts.</li>
+              <li><strong>Knowledge index.</strong> Full-text search over repositories, notes and questions, and search by meaning with an optional embeddings endpoint.</li>
+              <li><strong>The Wiki, credited.</strong> Answers link the pages they used and say who documented them.</li>
+              <li><strong>Your organization.</strong> Optional work item guides, norms and conventions, kept in your own account. They inform answers and agents and grant nothing.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="machines" class="act" aria-labelledby="machines-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-machines.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 5 · Machines</p>
+            <h2 id="machines-title">One account, on all your computers</h2>
+            <p class="lead">Connect the computers you own, on macOS, Windows or Linux: copy one command from your portal, run it and choose <em>Trust this machine</em> in the browser. Your account's configuration follows you; folders, credentials and sign-ins stay on each computer.</p>
+            <ul class="points">
+              <li><strong>Your private portal.</strong> The same interface from any device, behind your own Cloudflare Access. Only the GitHub owner you configure gets in.</li>
+              <li><strong>In your pocket.</strong> Add the portal to your iPhone's home screen: its own icon, a floating tab bar, light or dark.</li>
+              <li><strong>A role for each.</strong> One machine answers Teams; any trusted one can run coding agents in the directories you allow.</li>
+              <li><strong>Updates from the app.</strong> Checked against the release's SHA-256. Unattended updates are per computer and off until you turn them on.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="wrap shots">
+          <figure class="window">
+            <picture>
+              <source srcset="assets/app-overview-dark.jpg" media="(prefers-color-scheme: dark)">
+              <img src="assets/app-overview-light.jpg" width="1280" height="800" loading="lazy" alt="Home in the browser: Kuroko running in observation mode, the recent outcomes, the workflow runs waiting for you and the setup.">
+            </picture>
+            <figcaption>Home, in your browser. Synthetic data.</figcaption>
+          </figure>
+          <figure class="phone">
+            <picture>
+              <source srcset="assets/app-phone-home-dark.jpg" media="(prefers-color-scheme: dark)">
+              <img src="assets/app-phone-home-light.jpg" width="786" height="1704" loading="lazy" alt="The same Home on a phone, with the floating tab bar.">
+            </picture>
+            <figcaption>The portal on a phone.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="security" class="act alt flip" aria-labelledby="security-title">
+        <div class="wrap act-inner">
+          <figure class="art"><img src="assets/act-security.webp" width="720" height="720" loading="lazy" alt=""></figure>
+          <div class="act-copy">
+            <p class="kicker">Act 6 · Security and privacy</p>
+            <h2 id="security-title">Your secrets stay behind the curtain</h2>
+            <p class="lead">A private installation you control: your accounts, your credentials, your computers. Models propose; code decides what can be read, cited and sent.</p>
+            <ul class="points">
+              <li><strong>Credentials in the system store.</strong> macOS Keychain, Windows Credential Manager or private profile files on Linux. Stored Microsoft tokens are encrypted.</li>
+              <li><strong>Variables by reference.</strong> Your account's variables are encrypted. Agents find them by name and description but never see a value: they use them through launchers and destinations you approve, and the host passes the value itself.</li>
+              <li><strong>Model decisions grant nothing.</strong> Code checks audiences, paths, URLs and limits. Answers are written without tools, with known secrets redacted. No new Graph scopes, ever.</li>
+              <li><strong>You confirm what leaves.</strong> Sending to Teams, granting access and implementation need your confirmation.</li>
+              <li><strong>Optional cloud store.</strong> Keep your account's records on Cloudflare, sealed on your computer with a key Cloudflare never receives.</li>
+            </ul>
+            <div class="cta">
+              <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/SECURITY.md">Security policy</a>
+              <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/desktop/skills/personal-teams-assistant/references/web-access.md">Set up your portal</a>
+            </div>
+            <p class="fine">You configure Cloudflare Access, TLS, SSH keys and a firewall for your host. Profiles share your OS account, and coding agents are not isolated from it. The security policy tracks these limits.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section id="agents" class="section" aria-labelledby="agents-title">
       <div class="wrap">
         <header class="section-head">
-          <h2>A single Cargo package</h2>
-          <p>It installs the host with its web interface and the <code>pta</code> CLI on your own machine. You supply the accounts, credentials and hosting; your profile carries over between versions.</p>
+          <p class="kicker">Backstage</p>
+          <h2 id="agents-title">For agents and power users</h2>
+          <p>Everything the app does is also a command and a tool, so your own agents can work the stage too.</p>
+        </header>
+        <div class="cards">
+          <article class="card">
+            <h3>The <code>pta</code> CLI</h3>
+            <p>Every operation from the terminal, with stable JSON output (<code>--json</code>) and every command described in <code>pta help</code>.</p>
+          </article>
+          <article class="card">
+            <h3>An MCP server</h3>
+            <p><code>pta mcp</code> serves the app's tools to Claude Code, Codex or any MCP client; your portal also serves them at <code>/mcp</code> for agents with nothing installed. Actions outside the app ask you first.</p>
+          </article>
+          <article class="card">
+            <h3>A built-in skill</h3>
+            <p>The operating manual for agents ships inside the binary: <code>pta skill show</code>.</p>
+          </article>
+        </div>
+        <pre class="terminal" tabindex="0" aria-label="Example commands"><code><span class="comment"># what is running, as JSON</span>
+<span class="cmd">pta status --json</span>
+<span class="comment"># the activity record of a range of days</span>
+<span class="cmd">pta activity history 2026-10-01..2026-10-15</span>
+<span class="comment"># add the MCP server to Claude Code</span>
+<span class="cmd">claude mcp add --scope user personal-teams-assistant -- pta mcp</span></code></pre>
+      </div>
+    </section>
+
+    <section id="install" class="section alt" aria-labelledby="install-title">
+      <div class="wrap">
+        <header class="section-head">
+          <h2 id="install-title">Install</h2>
+          <p>Kuroko is the Personal Teams Assistant: one package, <a href="https://crates.io/crates/personal-teams-assistant">personal-teams-assistant on crates.io</a>, installs the host with its web interface and the <code>pta</code> CLI. Self-hosted: you bring the accounts, credentials and hosting, and your profile carries over between versions.</p>
         </header>
         <div class="platforms">
+          <article class="platform wide">
+            <h3>One command</h3>
+            <p>Copy it from your portal (Settings › Machines › Connect this computer). It checks the release archive's SHA-256, installs for your user and starts the host at login. Without <code>--origin</code> it only installs.</p>
+            <pre tabindex="0" aria-label="One-command install"><code><span class="comment"># macOS and Linux</span>
+<span class="cmd">curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.sh \
+  | sh -s -- --origin https://your-portal.example</span>
+<span class="comment"># Windows: install.ps1 from the same release, in PowerShell</span></code></pre>
+          </article>
           <article class="platform">
-            <h3>macOS, Windows and Linux</h3>
-            <p>The same build everywhere, with no window or system GUI libraries. <a href="https://github.com/cargo-bins/cargo-binstall">cargo binstall</a> downloads the prebuilt release in seconds; <code>cargo install</code> compiles it. Both need Rust and Git.</p>
-            <pre tabindex="0"><code><span class="comment"># prebuilt, in seconds</span>
-<span class="cmd">cargo binstall personal-teams-assistant</span>
+            <h3>With Cargo</h3>
+            <p><a href="https://github.com/cargo-bins/cargo-binstall">cargo binstall</a> downloads the prebuilt release in seconds; <code>cargo install</code> compiles it. The same build on macOS, Windows and Linux.</p>
+            <pre tabindex="0" aria-label="Install with Cargo"><code><span class="cmd">cargo binstall personal-teams-assistant</span>
 <span class="comment"># or compiled here</span>
 <span class="cmd">cargo install personal-teams-assistant --locked</span>
 <span class="cmd">personal-teams-assistant</span>  <span class="comment"># opens it in your browser</span></code></pre>
           </article>
           <article class="platform">
-            <h3>Servers</h3>
-            <p>The same install, operated with <code>pta</code>: it runs as a systemd service and can serve the web portal for your phone.</p>
-            <pre tabindex="0"><code><span class="cmd">cargo install personal-teams-assistant --locked</span>
-<span class="cmd">personal-teams-assistant --start</span></code></pre>
+            <h3>On a server</h3>
+            <p>The same install, run in the foreground as a service and operated with <code>pta</code> or the portal.</p>
+            <pre tabindex="0" aria-label="Run on a server"><code><span class="cmd">personal-teams-assistant --start</span>
+<span class="comment"># fits a systemd service</span></code></pre>
           </article>
         </div>
         <ol class="steps">
-          <li><span class="num">1</span><h3>Configure</h3><p>Save your own provider credentials, pick the reply language and model order, and register your own Entra app. Its Home tab tells you what's missing.</p><code>pta status</code></li>
-          <li><span class="num">2</span><h3>Connect</h3><p>Sign in with your Microsoft account and expose the local port through your own stable HTTPS URL, for example with your own Cloudflare Tunnel.</p><code>pta auth microsoft login</code></li>
+          <li><span class="num">1</span><h3>Configure</h3><p>Save your provider credentials, choose the reply language and model order, and register your own Entra app. Home tells you what's missing.</p><code>pta status</code></li>
+          <li><span class="num">2</span><h3>Connect</h3><p>Sign in with your Microsoft account and give the host a stable HTTPS address, for example your own Cloudflare Tunnel.</p><code>pta auth microsoft login</code></li>
           <li><span class="num">3</span><h3>Observe</h3><p>Authorize your sources, start the assistant and review its drafts without sending anything.</p><code>pta start</code></li>
           <li><span class="num">4</span><h3>Go live</h3><p>Once you trust the drafts, turn off observation mode.</p><code>pta mode active</code></li>
         </ol>
-        <p class="note">To receive messages, the machine running the assistant must be on and reachable through a public HTTPS URL. Use your own Cloudflare Access configuration for the private web portal. Don't run two active instances for the same account.</p>
+        <p class="note">To receive messages, the machine that answers Teams must be on and reachable at a public HTTPS address. Don't run two active instances for the same account.</p>
       </div>
     </section>
 
-    <section class="section closing">
+    <section class="closing" aria-labelledby="closing-title">
       <div class="wrap">
         <div class="closing-card">
-          <!-- The assistant's face, as in the app's Home: awake and ready. -->
-          <svg class="face" viewBox="0 0 96 64" aria-hidden="true">
-            <circle class="sclera" cx="28" cy="28" r="17"/><circle class="sclera" cx="68" cy="28" r="17"/>
-            <circle class="pupil" cx="30" cy="30" r="7.5"/><circle class="pupil" cx="70" cy="30" r="7.5"/>
-            <circle class="glint" cx="27" cy="26" r="2.4"/><circle class="glint" cx="67" cy="26" r="2.4"/>
-            <path class="mouth" d="M40 54q8 6 16 0"/>
-          </svg>
+          <img class="mascot" src="assets/mascot-wave.webp" width="560" height="560" loading="lazy" alt="">
           <div class="closing-copy">
-            <h2>Start in observation mode.</h2>
-            <p>Nothing is sent until you decide.</p>
+            <h2 id="closing-title">Start in observation mode.</h2>
+            <p>Nothing is sent until you decide. Kuroko waits in the wings.</p>
             <div class="install"><span class="prompt" aria-hidden="true">$</span><code class="cmd">cargo install personal-teams-assistant --locked</code></div>
           </div>
         </div>
@@ -209,14 +320,17 @@
   </main>
 
   <footer class="footer">
+    <div class="curtain" aria-hidden="true"></div>
     <div class="wrap footer-inner">
-      <div class="brand"><img src="assets/icon.png" alt="" width="28" height="28"><span>Personal Teams Assistant</span></div>
+      <div class="brand"><img src="assets/mark-96.webp" alt="" width="32" height="32"><span>Kuroko</span></div>
+      <p class="fine">Kuroko is the Personal Teams Assistant: <code>personal-teams-assistant</code> on crates.io, operated with the <code>pta</code> CLI.</p>
       <nav aria-label="Documentation">
         <a href="https://github.com/elvisbrevi/personal-teams-assistant#readme">README</a>
         <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/SECURITY.md">Security policy</a>
         <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/docs/architecture.md">Architecture</a>
         <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/desktop/skills/personal-teams-assistant/SKILL.md">Agent skill</a>
         <a href="https://github.com/elvisbrevi/personal-teams-assistant/releases">Releases</a>
+        <a href="https://crates.io/crates/personal-teams-assistant">crates.io</a>
         <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/LICENSE">MIT license</a>
       </nav>
       <p class="fine">Independent project, not affiliated with Microsoft. Microsoft Teams is a trademark of Microsoft Corporation.</p>
