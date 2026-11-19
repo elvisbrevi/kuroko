@@ -421,7 +421,8 @@ A documentation-only pass (no code, no version):
 Remaining, optional or tied to 0.21.0:
 
 - Retiring the aliases in 0.21.0 once every machine's service entry and MCP configuration has
-  migrated (architecture §15).
+  migrated (architecture §15). That needs its own bridge release first: today's updaters reject a
+  package with fewer executables and do not remove the retired ones.
 
 ## 12. 0.18.4: installers register `kuroko`
 
