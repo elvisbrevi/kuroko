@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A development host for GUI work: a debug build on a disposable profile with synthetic data that
-# serves desktop/ui from this checkout on every request (PTA_DEV_UI_DIR), so editing a GUI file and
+# serves desktop/ui from this checkout on every request (KUROKO_DEV_UI_DIR), so editing a GUI file and
 # refreshing the browser is the whole loop. See docs/ui-design-conventions.md (verification).
 #
 #   scripts/dev-host.sh            build, start the host, print where to open it; Ctrl-C stops it
@@ -103,7 +103,7 @@ for opener in xdg-open open; do
   chmod 700 "$root/bin/$opener"
 done
 
-in_profile PTA_DEV_UI_DIR="$repo/desktop/ui" "$bin/kuroko-host" --host > "$root/host.log" 2>&1 &
+in_profile KUROKO_DEV_UI_DIR="$repo/desktop/ui" "$bin/kuroko-host" --host > "$root/host.log" 2>&1 &
 host=$!
 for _ in $(seq 100); do
   [ -f "$root/profile/control.json" ] && break

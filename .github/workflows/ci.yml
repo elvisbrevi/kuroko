@@ -173,7 +173,7 @@ jobs:
           sudo loginctl enable-linger "$USER"
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           for _ in $(seq 1 30); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
-          PTA_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
+          KUROKO_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
       # Builds the .crate exactly as crates.io receives it; the release publishes it without
       # building again.
       - name: Package as crates.io receives it
@@ -337,7 +337,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - name: Start at login through launchd (temporary profile)
-        run: PTA_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
+        run: KUROKO_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
 
   windows:
     name: Windows (informative)
@@ -392,7 +392,7 @@ jobs:
       - name: Start at login through the Task Scheduler (temporary profile)
         run: |
           cargo test --locked --lib service
-          PTA_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
+          KUROKO_SERVICE_LIVE_TEST=1 cargo test --locked --test service -- --nocapture
 
   security:
     name: Security

@@ -27,8 +27,12 @@ use std::{
     sync::OnceLock,
 };
 
-/// Development builds only: serve `desktop/ui` from this absolute directory, uncached.
-pub const DEV_DIR_VARIABLE: &str = "PTA_DEV_UI_DIR";
+/// Development builds only: serve `desktop/ui` from this absolute directory, uncached. The former
+/// name `PTA_DEV_UI_DIR` is still read (`env_names`).
+pub const DEV_DIR_VARIABLE: &str = "KUROKO_DEV_UI_DIR";
+/// [`DEV_DIR_VARIABLE`] without its prefix, as `env_names` reads it. A release build never reads it.
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+const DEV_DIR_NAME: &str = "DEV_UI_DIR";
 
 pub(super) struct Asset {
     /// The file's name directly under `desktop/ui` (the GUI is flat); it is served at `/<file>`.
@@ -189,13 +193,13 @@ fn source() -> Option<PathBuf> {
     SOURCE
         .get_or_init(|| {
             #[cfg(debug_assertions)]
-            let value = std::env::var_os(DEV_DIR_VARIABLE);
+            let value = crate::env_names::var_os(DEV_DIR_NAME);
             #[cfg(not(debug_assertions))]
             let value: Option<std::ffi::OsString> = None;
             let dir = development_dir(cfg!(debug_assertions), value.as_deref());
             match &dir {
-                Some(dir) => tracing::warn!(event = "gui_from_disk", dir = %dir.display()),
-                None if value.is_some() => tracing::warn!(event = "gui_dir_ignored"),
+                Some(dir) => tracing::warn!(event = "gui_from_disk", variable = DEV_DIR_VARIABLE, dir = %dir.display()),
+                None if value.is_some() => tracing::warn!(event = "gui_dir_ignored", variable = DEV_DIR_VARIABLE),
                 None => {}
             }
             dir

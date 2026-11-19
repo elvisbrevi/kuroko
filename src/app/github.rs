@@ -202,7 +202,7 @@ fn client() -> Result<Client> {
     Ok(Client::builder()
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent("personal-teams-assistant-desktop")
+        .user_agent("kuroko")
         .build()?)
 }
 

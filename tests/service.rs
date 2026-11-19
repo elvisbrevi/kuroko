@@ -16,7 +16,9 @@ use std::{
 };
 
 fn live() -> bool {
-    std::env::var_os("PTA_SERVICE_LIVE_TEST").is_some_and(|v| v == "1")
+    std::env::var_os("KUROKO_SERVICE_LIVE_TEST")
+        .or_else(|| std::env::var_os("PTA_SERVICE_LIVE_TEST"))
+        .is_some_and(|v| v == "1")
 }
 
 struct Profile {

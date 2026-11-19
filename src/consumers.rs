@@ -247,6 +247,8 @@ const RESERVED_PREFIXES: &[&str] = &[
     "SSH_",
     "GPG_",
     "BASH_FUNC_",
+    // The product's own variables, under its current and its former prefix (env_names).
+    "KUROKO_",
     "PTA_",
     "TUNNEL_",
     "NPM_CONFIG_",
