@@ -12,16 +12,16 @@ and Worker names come from cloud/wrangler.jsonc. Every run writes a report witho
               origin, erasure, rebinding, secret rotation, the shared plan, revocation); the temporary tokens are
               removed afterwards.
   production  Access applications and Worker secrets for the production Worker, then one service
-              token for this account, whose client ID and secret go only to `pta cloud connect` on
+              token for this account, whose client ID and secret go only to `kuroko cloud connect` on
               standard input. With --portal-user USER the token is that portal account's instead:
-              it goes only to `pta web users cloud enable USER` on standard input (a token that
+              it goes only to `kuroko web users cloud enable USER` on standard input (a token that
               account already had is replaced; the account moves to the new one when it connects).
               With --rotate the account's existing token gets a new secret instead (same client ID,
               so the account store needs no rebinding; the previous secret stops working at once),
               which goes to the same command; the account's other computers then receive it from
               their coordinator, sealed to the key each one signed in with.
               With --portal-user USER --retire that portal account's token is taken out of the Access
-              policy and deleted, after `pta web users cloud disable USER` (refused while the account
+              policy and deleted, after `kuroko web users cloud disable USER` (refused while the account
               store is still enabled for it). The portal account, its binding and its sign-in policy stay.
 
 Each hostname gets a self-hosted application whose only policy is Service Auth for the listed service
@@ -64,6 +64,11 @@ APP_WRITE = "Access: Apps and Policies Write"
 class SetupError(Exception):
     pass
 
+
+
+def kuroko_cli():
+    """The CLI: `kuroko`, or its former name `pta` (an alias until 0.21.0) on an older installation."""
+    return shutil.which("kuroko") or shutil.which("pta") or str(Path.home() / ".cargo" / "bin" / "kuroko")
 
 def secret(name):
     file = os.environ.get(name + "_FILE")
@@ -503,8 +508,8 @@ def verify(access, report):
 
 
 def connect(access, label, report):
-    """One service token for this installation's account; its secret goes only to `pta cloud connect`."""
-    pta = shutil.which("pta") or str(Path.home() / ".cargo" / "bin" / "pta")
+    """One service token for this installation's account; its secret goes only to `kuroko cloud connect`."""
+    pta = kuroko_cli()
     status = subprocess.run([pta, "--json", "cloud", "status"], capture_output=True, text=True, timeout=60)
     current = json.loads(status.stdout or "{}").get("data") or {}
     endpoint = f"https://{access.hostname}"
@@ -519,7 +524,7 @@ def connect(access, label, report):
     report["connect"] = {"exit_code": completed.returncode, "code": outcome.get("code"),
                          "installation": (outcome.get("data") or {}).get("installation")}
     if completed.returncode != 0:
-        raise SetupError("`pta cloud connect` did not complete; see the report.")
+        raise SetupError("`kuroko cloud connect` did not complete; see the report.")
 
 
 def replace_token(access, label):
@@ -537,9 +542,9 @@ def replace_token(access, label):
 def rotate(access, label, user, report):
     """Replace this account's service token (or a portal account's) by rotating its secret: the client
     ID stays, so the account store keeps the account; the previous secret stops working at once. The
-    new secret goes only to `pta cloud connect` (or `pta web users cloud enable USER`) on standard
+    new secret goes only to `kuroko cloud connect` (or `kuroko web users cloud enable USER`) on standard
     input, and the account's other computers then receive it from their coordinator."""
-    pta = shutil.which("pta") or str(Path.home() / ".cargo" / "bin" / "pta")
+    pta = kuroko_cli()
     name = f"{APP_PREFIX} {access.environment} " + (f"portal {user}" if user else label)
     found = [t for t in access.tokens() if t.get("name") == name]
     if len(found) != 1:
@@ -566,14 +571,14 @@ def rotate(access, label, user, report):
 def retire_portal_user(access, user, report):
     """Delete a portal account's service token once its account store is disabled; the portal account,
     its Access binding and its sign-in policy stay, so it can be enabled again with a new token."""
-    pta = shutil.which("pta") or str(Path.home() / ".cargo" / "bin" / "pta")
+    pta = kuroko_cli()
     completed = subprocess.run([pta, "--json", "web", "users", "list"], capture_output=True, text=True, timeout=120)
     accounts = json.loads(completed.stdout or "{}").get("data") or []
     account = next((a for a in accounts if a.get("username") == user), None)
     if completed.returncode != 0 or account is None:
         raise SetupError("The portal account could not be found; nothing was changed.")
     if account.get("cloud_enabled"):
-        raise SetupError("The account store is still enabled for this portal account; run `pta web users cloud disable USER` first.")
+        raise SetupError("The account store is still enabled for this portal account; run `kuroko web users cloud disable USER` first.")
     name = f"{APP_PREFIX} {access.environment} portal {user}"
     found = [t["id"] for t in access.tokens() if t.get("name") == name]
     if found:
@@ -585,8 +590,8 @@ def retire_portal_user(access, user, report):
 
 
 def enable_portal_user(access, user, report):
-    """A service token for a portal account; its secret goes only to `pta web users cloud enable`."""
-    pta = shutil.which("pta") or str(Path.home() / ".cargo" / "bin" / "pta")
+    """A service token for a portal account; its secret goes only to `kuroko web users cloud enable`."""
+    pta = kuroko_cli()
     token, replaced = replace_token(access, f"portal {user}")
     expires = time.strftime("%Y-%m-%d", time.gmtime(time.time() + TOKEN_SECONDS))
     payload = json.dumps({"client_id": token["client_id"], "client_secret": token["client_secret"]})
@@ -597,7 +602,7 @@ def enable_portal_user(access, user, report):
     report["portal_user"] = {"exit_code": completed.returncode, "code": outcome.get("code"),
                              "replaced": replaced, "token_expires": expires}
     if completed.returncode != 0:
-        raise SetupError("`pta web users cloud enable` did not complete; see the report.")
+        raise SetupError("`kuroko web users cloud enable` did not complete; see the report.")
 
 
 def private_json(path, value):

@@ -55,7 +55,7 @@ check_root() {
 # Asks the host for a new single-use sign-in and prints its address.
 sign_in() {
   rm -f "$root/opened"
-  in_profile "$bin/pta" app open > /dev/null || fail "the host refused to open its page; see $root/host.log."
+  in_profile "$bin/kuroko" app open > /dev/null || fail "the host refused to open its page; see $root/host.log."
   for _ in $(seq 50); do [ -s "$root/opened" ] && break; sleep 0.1; done
   [ -s "$root/opened" ] || fail "the host did not hand over a sign-in; see $root/host.log."
   local handoff
@@ -76,7 +76,7 @@ fi
 [ "${1:-start}" = start ] || fail "usage: scripts/dev-host.sh [open]"
 
 (cd "$repo" && cargo build --bins --quiet)
-[ -x "$bin/personal-teams-assistant" ] && [ -x "$bin/pta" ] || fail "debug binaries missing in $bin."
+[ -x "$bin/kuroko-host" ] && [ -x "$bin/kuroko" ] || fail "debug binaries missing in $bin."
 
 root=$(mktemp -d "${TMPDIR:-/tmp}/pta-dev-host.XXXXXX")
 root=$(cd "$root" && pwd -P)
@@ -87,7 +87,7 @@ chmod 700 "$root"
 host=
 cleanup() {
   if [ -n "$host" ] && kill -0 "$host" 2> /dev/null; then
-    in_profile "$bin/pta" app quit > /dev/null 2>&1 || kill "$host" 2> /dev/null || true
+    in_profile "$bin/kuroko" app quit > /dev/null 2>&1 || kill "$host" 2> /dev/null || true
     wait "$host" 2> /dev/null || true
   fi
   [ "$(cat "$state" 2> /dev/null)" != "$root" ] || rm -f "$state"
@@ -103,7 +103,7 @@ for opener in xdg-open open; do
   chmod 700 "$root/bin/$opener"
 done
 
-in_profile PTA_DEV_UI_DIR="$repo/desktop/ui" "$bin/personal-teams-assistant" --host > "$root/host.log" 2>&1 &
+in_profile PTA_DEV_UI_DIR="$repo/desktop/ui" "$bin/kuroko-host" --host > "$root/host.log" 2>&1 &
 host=$!
 for _ in $(seq 100); do
   [ -f "$root/profile/control.json" ] && break
@@ -117,7 +117,7 @@ grep -q 'gui_from_disk' "$root/host.log" || fail "the host is not serving deskto
 for note in \
   '{"title":"Synthetic release window","text":"Releases of the example service go out on Tuesdays after the demo review.","keywords":["release","example"],"contexts":[]}' \
   '{"title":"Synthetic on-call rotation","text":"The example team rotates on-call weekly; the handover happens on Monday mornings.","keywords":["on-call","example"],"contexts":[]}'; do
-  printf '%s' "$note" | in_profile "$bin/pta" notes add > /dev/null || fail "could not add synthetic notes."
+  printf '%s' "$note" | in_profile "$bin/kuroko" notes add > /dev/null || fail "could not add synthetic notes."
 done
 
 mkdir -p "$(dirname "$state")"

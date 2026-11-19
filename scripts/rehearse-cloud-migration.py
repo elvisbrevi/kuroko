@@ -3,7 +3,8 @@
 
   python3 scripts/rehearse-cloud-migration.py --bin DIR --report PATH [--profile DIR]
 
-DIR holds the `personal-teams-assistant` and `pta` executables to rehearse (a branch build). The
+DIR holds the `kuroko-host` and `kuroko` executables to rehearse (a branch build; the former names
+`personal-teams-assistant` and `pta` are used when the current ones are missing). The
 profile (by default this user's, `${XDG_CONFIG_HOME:-~/.config}/dev.personalteams.assistant`) is
 copied into a private temporary directory and never changed: databases through SQLite's online
 backup, the settings files as they are, and nothing else. The copy leaves out credentials, keys,
@@ -184,8 +185,9 @@ class Rehearsal:
         self.steps = []
         self.host = None
 
-    def pta(self, *args, stdin=None, timeout=900):
-        done = subprocess.run([str(self.binaries / "pta"), "--json", *args], input=stdin, capture_output=True,
+    def cli(self, *args, stdin=None, timeout=900):
+        program = next((self.binaries / n for n in ("kuroko", "pta") if (self.binaries / n).is_file()), self.binaries / "kuroko")
+        done = subprocess.run([str(program), "--json", *args], input=stdin, capture_output=True,
                               text=True, env=self.env, timeout=timeout)
         try:
             return json.loads(done.stdout)
@@ -205,7 +207,9 @@ class Rehearsal:
             raise RuntimeError("Check failed: " + name)
 
     def start(self):
-        self.host = subprocess.Popen([str(self.binaries / "personal-teams-assistant"), "--headless"], env=self.env,
+        host = next((self.binaries / n for n in ("kuroko-host", "personal-teams-assistant") if (self.binaries / n).is_file()),
+                    self.binaries / "kuroko-host")
+        self.host = subprocess.Popen([str(host), "--headless"], env=self.env,
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         STARTED.append(self)
         for _ in range(600):
@@ -217,16 +221,16 @@ class Rehearsal:
     def stop(self):
         if self.host and self.host.poll() is not None:
             # A restore restarted the host as a successor this process did not start: quit it too.
-            if self.pta("status", timeout=30).get("ok"):
-                self.pta("app", "quit", timeout=60)
+            if self.cli("status", timeout=30).get("ok"):
+                self.cli("app", "quit", timeout=60)
                 for _ in range(60):
-                    if not self.pta("status", timeout=30).get("ok"):
+                    if not self.cli("status", timeout=30).get("ok"):
                         break
                     time.sleep(0.5)
             return
         if not self.host:
             return
-        self.pta("app", "quit", timeout=60)
+        self.cli("app", "quit", timeout=60)
         try:
             self.host.wait(30)
         except subprocess.TimeoutExpired:
@@ -251,16 +255,16 @@ def second_installation(run, endpoint, service, label, greeting):
     other = Rehearsal(run.binaries, root, profile)
     other.steps = run.steps
     other.start()
-    r = other.pta("cloud", "connect", "--endpoint", endpoint, "--label", label + " b", "--confirmed", stdin=payload)
+    r = other.cli("cloud", "connect", "--endpoint", endpoint, "--label", label + " b", "--confirmed", stdin=payload)
     other.step("second: connect", r)
     run.expect(r.get("ok"), "a second computer of the account enrolls")
-    r = other.pta("cloud", "status").get("data") or {}
+    r = other.cli("cloud", "status").get("data") or {}
     run.expect(r.get("adopt") is True, "the second computer is told to adopt the account's configuration")
-    r = other.pta("cloud", "migrate", "--confirmed", timeout=1800)
+    r = other.cli("cloud", "migrate", "--confirmed", timeout=1800)
     other.step("second: migrate without adopting", r)
     run.expect(r.get("code") == "state_conflict", "a second computer never uploads its configuration over the account's")
-    bind = other.pta("config", "get", "server.bind").get("data")
-    r = other.pta("cloud", "migrate", "--adopt", "--confirmed", timeout=1800)
+    bind = other.cli("config", "get", "server.bind").get("data")
+    r = other.cli("cloud", "migrate", "--adopt", "--confirmed", timeout=1800)
     data = r.get("data") or {}
     differing = [{k: c.get(k) for k in ("name", "local", "remote", "pending", "missing_remote", "unknown_remote",
                                         "differing", "undecryptable", "content_differs", "others")}
@@ -268,27 +272,27 @@ def second_installation(run, endpoint, service, label, greeting):
     other.step("second: migrate --adopt", r, applied=(data.get("adopted") or {}).get("applied"), mode=data.get("mode"),
                differing=differing)
     run.expect(r.get("ok") and data.get("mode") == "mirror", "the second computer adopts and migrates")
-    r = other.pta("config", "get", "policy.greeting")
+    r = other.cli("config", "get", "policy.greeting")
     run.expect(json.dumps(greeting) in json.dumps(r.get("data")), "the second computer has the account's configuration")
-    run.expect(other.pta("config", "get", "server.bind").get("data") == bind, "the second computer keeps its own settings")
+    run.expect(other.cli("config", "get", "server.bind").get("data") == bind, "the second computer keeps its own settings")
     for who, installation in (("second", other), ("first", run)):
-        r = installation.pta("cloud", "verify", timeout=1800)
+        r = installation.cli("cloud", "verify", timeout=1800)
         verify = (r.get("data") or {}).get("verify") or {}
         others = sum(c.get("others", 0) for c in verify.get("collections", []))
         installation.step(f"{who}: verify", r, verified=verify.get("ok"), others=others)
         run.expect(verify.get("ok") is True and others > 0, f"the {who} computer verifies, counting the other's records apart")
-    r = run.pta("cloud", "installations")
+    r = run.cli("cloud", "installations")
     run.expect((r.get("data") or {}).get("active") == 2, "the account lists both computers")
-    r = other.pta("cloud", "promote", "--confirmed", timeout=1800)
+    r = other.cli("cloud", "promote", "--confirmed", timeout=1800)
     other.step("second: promote", r, mode=(r.get("data") or {}).get("mode"))
     run.expect(r.get("ok") and (r.get("data") or {}).get("mode") == "primary", "the second computer uses the store as its source")
     second = f"Rehearsal b {secrets.token_hex(3)}"
-    r = other.pta("config", "set", "policy.greeting", json.dumps(second))
+    r = other.cli("config", "set", "policy.greeting", json.dumps(second))
     other.step("second: config set (through the store)", r)
     run.expect(r.get("ok"), "the second computer edits the configuration through the store")
-    r = run.pta("cloud", "pull")
+    r = run.cli("cloud", "pull")
     run.step("first: pull", r, applied=((r.get("data") or {}).get("pulled") or {}).get("applied"))
-    r = run.pta("config", "get", "policy.greeting")
+    r = run.cli("config", "get", "policy.greeting")
     run.expect(r.get("ok") and json.dumps(second) in json.dumps(r.get("data")), "the first computer receives the second's edit")
     return other, conflict(run, other)
 
@@ -298,15 +302,15 @@ def conflict(run, other):
     acknowledged). The first sees which field differs, keeps its own, and the second receives it."""
     theirs = f"Rehearsal theirs {secrets.token_hex(3)}"
     mine = f"Rehearsal mine {secrets.token_hex(3)}"
-    r = other.pta("config", "set", "policy.greeting", json.dumps(theirs))
+    r = other.cli("config", "set", "policy.greeting", json.dumps(theirs))
     run.expect(r.get("ok"), "the second computer edits the greeting again through the store")
     config = run.profile / "config.toml"
     text, n = re.subn(r'(?m)^greeting = .*$', "greeting = " + json.dumps(mine), config.read_text(), count=1)
     run.expect(n == 1, "the first computer's greeting is edited by hand")
     config.write_text(text)
-    r = run.pta("cloud", "pull")
+    r = run.cli("cloud", "pull")
     run.step("first: pull with a hand edit", r, conflicts=(r.get("data") or {}).get("conflicts"))
-    r = run.pta("cloud", "conflicts")
+    r = run.cli("cloud", "conflicts")
     found = (r.get("data") or {}).get("conflicts") or []
     fields = {f.get("path"): f for c in found for f in c.get("fields", [])}
     run.step("cloud conflicts", r, records=len(found), fields=len(fields))
@@ -314,11 +318,11 @@ def conflict(run, other):
     run.expect(r.get("ok") and len(found) == 1 and greeting.get("here") == mine and greeting.get("store") == theirs,
                "the conflict shows the field that differs on each side")
     record = found[0]
-    r = run.pta("cloud", "resolve", record["collection"], record["record"], "--keep", "here", "--confirmed")
+    r = run.cli("cloud", "resolve", record["collection"], record["record"], "--keep", "here", "--confirmed")
     run.step("cloud resolve --keep here", r, remaining=(r.get("data") or {}).get("remaining"))
     run.expect(r.get("ok") and (r.get("data") or {}).get("remaining") == 0, "keeping this computer's version settles the conflict")
-    r = other.pta("cloud", "pull")
-    r = other.pta("config", "get", "policy.greeting")
+    r = other.cli("cloud", "pull")
+    r = other.cli("config", "get", "policy.greeting")
     run.expect(r.get("ok") and json.dumps(mine) in json.dumps(r.get("data")), "the second computer receives the version kept")
     return mine
 
@@ -331,31 +335,31 @@ def second_account(binaries, root, endpoint, service, label, first_records):
     other = Rehearsal(binaries, base, profile)
     other.start()
     try:
-        r = other.pta("cloud", "connect", "--endpoint", endpoint, "--label", label + " c", "--confirmed", stdin=payload)
+        r = other.cli("cloud", "connect", "--endpoint", endpoint, "--label", label + " c", "--confirmed", stdin=payload)
         other.step("other account: connect", r)
-        status = other.pta("cloud", "status").get("data") or {}
+        status = other.cli("cloud", "status").get("data") or {}
         held = sum(v.get("records", 0) for v in ((status.get("store") or {}).get("collections") or {}).values())
         steps = other.steps
         return r.get("ok"), held, status.get("adopt"), steps
     finally:
-        other.pta("cloud", "disconnect", "--forget-service-token", "--confirmed")
+        other.cli("cloud", "disconnect", "--forget-service-token", "--confirmed")
         other.stop()
 
 
 def restore(run, greeting, local):
     """Restore the backup the migration took: the host restarts, keeps the current data first and
     comes back with the configuration it had before migrating and the same account store link."""
-    listed = run.pta("cloud", "backups").get("data") or {}
+    listed = run.cli("cloud", "backups").get("data") or {}
     backup = next((b["name"] for b in listed.get("backups", []) if b.get("reason") == "migrate" and b.get("restorable")), None)
     run.expect(backup, "the migration's backup can be restored")
-    link = (run.pta("cloud", "status").get("data") or {}).get("installation")
-    r = run.pta("cloud", "restore", backup, "--confirmed")
+    link = (run.cli("cloud", "status").get("data") or {}).get("installation")
+    r = run.cli("cloud", "restore", backup, "--confirmed")
     run.step("restore", r, restarting=(r.get("data") or {}).get("restarting"))
     run.expect(r.get("ok") and (r.get("data") or {}).get("restarting"), "the restore restarts the host")
     outcome = {}
     for _ in range(240):
         time.sleep(0.5)
-        listed = run.pta("cloud", "backups", timeout=30)
+        listed = run.cli("cloud", "backups", timeout=30)
         data = listed.get("data") or {}
         if listed.get("ok") and not data.get("pending") and data.get("last_restore"):
             outcome = data["last_restore"]
@@ -363,61 +367,61 @@ def restore(run, greeting, local):
     run.step("restore outcome", {"ok": outcome.get("ok")}, files=outcome.get("files"), before=bool(outcome.get("before")))
     run.expect(outcome.get("ok") and outcome.get("backup") == backup, "the restarted host restored the backup")
     run.expect(outcome.get("before") in data.get("before_restore", []), "the data from just before the restore is kept")
-    r = run.pta("config", "get", "policy.greeting")
+    r = run.cli("config", "get", "policy.greeting")
     run.expect(r.get("ok") and json.dumps(greeting) not in json.dumps(r.get("data")),
                "the configuration is back as it was before migrating")
-    run.expect((run.pta("cloud", "status").get("data") or {}).get("installation") == link,
+    run.expect((run.cli("cloud", "status").get("data") or {}).get("installation") == link,
                "the restore keeps this computer's account store link")
-    after = counts(run.pta("cloud", "migrate", "--dry-run"))
+    after = counts(run.cli("cloud", "migrate", "--dry-run"))
     run.expect(all(after.get(name, 0) >= number for name, number in local.items()), "the restore lost no record")
 
 
 def rehearse(run, endpoint, service, label, second_service=None):
     """The sequence on the copy; raises on the first failed check."""
     payload = json.dumps({"client_id": service["client_id"], "client_secret": service["client_secret"]})
-    r = run.pta("cloud", "connect", "--endpoint", endpoint, "--label", label, "--confirmed", stdin=payload)
+    r = run.cli("cloud", "connect", "--endpoint", endpoint, "--label", label, "--confirmed", stdin=payload)
     run.step("connect", r)
     run.expect(r.get("ok"), "the copy enrolls with the staging store")
-    r = run.pta("cloud", "status")
+    r = run.cli("cloud", "status")
     run.expect((r.get("data") or {}).get("worker", {}).get("environment") == "staging", "the store is staging")
-    before = run.pta("cloud", "migrate", "--dry-run")
+    before = run.cli("cloud", "migrate", "--dry-run")
     local = counts(before)
     run.step("migrate --dry-run", before, records=sum(local.values()),
              stays_local=len((before.get("data") or {}).get("stays_local") or []))
     run.expect(before.get("ok") and sum(local.values()) > 0, "the dry run lists the records")
-    r = run.pta("cloud", "migrate", "--confirmed", timeout=1800)
+    r = run.cli("cloud", "migrate", "--confirmed", timeout=1800)
     data = r.get("data") or {}
     run.step("migrate", r, complete=data.get("complete"), uploaded=data.get("uploaded"),
              backup_files=(data.get("backup") or {}).get("files"), mode=data.get("mode"))
     run.expect(r.get("ok") and data.get("complete") and data.get("mode") == "mirror", "the migration completes in mirror")
     run.expect(Path((data.get("backup") or {}).get("path", "/missing")).is_dir(), "the migration backed up first")
-    r = run.pta("cloud", "verify", timeout=1800)
+    r = run.cli("cloud", "verify", timeout=1800)
     run.step("verify", r, verified=(r.get("data") or {}).get("ok"), elapsed_ms=(r.get("data") or {}).get("elapsed_ms"))
     run.expect((r.get("data") or {}).get("ok") is True, "the copy verifies")
-    r = run.pta("cloud", "repair", "--confirmed", timeout=1800)
+    r = run.cli("cloud", "repair", "--confirmed", timeout=1800)
     data = r.get("data") or {}
     run.step("repair (nothing differs)", r, requeued=data.get("requeued"), verified=data.get("ok"))
     run.expect(r.get("ok") and data.get("requeued") == 0 and data.get("ok") is True,
                "a repair of a matching copy sends nothing and still verifies")
-    r = run.pta("cloud", "promote", "--confirmed", timeout=1800)
+    r = run.cli("cloud", "promote", "--confirmed", timeout=1800)
     run.step("promote", r, mode=(r.get("data") or {}).get("mode"))
     run.expect(r.get("ok") and (r.get("data") or {}).get("mode") == "primary", "the store becomes the source")
     greeting = f"Rehearsal {secrets.token_hex(3)}"
-    r = run.pta("config", "set", "policy.greeting", json.dumps(greeting))
+    r = run.cli("config", "set", "policy.greeting", json.dumps(greeting))
     run.step("config set (through the store)", r)
     run.expect(r.get("ok"), "a configuration edit goes through the store")
-    r = run.pta("notes", "add", stdin=json.dumps({"title": "Rehearsal", "text": "A synthetic note for the rehearsal."}))
+    r = run.cli("notes", "add", stdin=json.dumps({"title": "Rehearsal", "text": "A synthetic note for the rehearsal."}))
     run.step("note add (through the store)", r)
     note = (r.get("data") or {}).get("id")
     run.expect(r.get("ok") and note, "a note goes through the store")
-    r = run.pta("notes", "remove", note)
+    r = run.cli("notes", "remove", note)
     run.step("note remove (through the store)", r)
     run.expect(r.get("ok"), "a note removal goes through the store")
-    bind = run.pta("config", "get", "server.bind").get("data")
-    r = run.pta("cloud", "pull", "--replace", "--confirmed")
+    bind = run.cli("config", "get", "server.bind").get("data")
+    r = run.cli("cloud", "pull", "--replace", "--confirmed")
     run.step("pull --replace", r, conflicts=(r.get("data") or {}).get("conflicts"))
     run.expect(r.get("ok") and (r.get("data") or {}).get("conflicts") == 0, "the pull finds no conflict")
-    run.expect(run.pta("config", "get", "server.bind").get("data") == bind,
+    run.expect(run.cli("config", "get", "server.bind").get("data") == bind,
                "the account's configuration never replaces this installation's own settings")
     other, greeting = second_installation(run, endpoint, service, label, greeting)
     if second_service:
@@ -426,18 +430,18 @@ def rehearse(run, endpoint, service, label, second_service=None):
         run.expect(enrolled and held == 0 and adopt is False, "another account's store holds none of this account's records")
     # Both computers' outboxes empty first, so nothing they still send changes the counts below.
     for _ in range(120):
-        pending = [((i.pta("cloud", "status").get("data") or {}).get("mirror") or {}).get("outbox", {}).get("pending")
+        pending = [((i.cli("cloud", "status").get("data") or {}).get("mirror") or {}).get("outbox", {}).get("pending")
                    for i in (run, other)]
         if pending == [0, 0]:
             break
         time.sleep(1)
-    store_before = ((run.pta("cloud", "status").get("data") or {}).get("store") or {}).get("collections") or {}
-    r = run.pta("cloud", "rollback", "--confirmed", timeout=1800)
+    store_before = ((run.cli("cloud", "status").get("data") or {}).get("store") or {}).get("collections") or {}
+    r = run.cli("cloud", "rollback", "--confirmed", timeout=1800)
     data = r.get("data") or {}
     run.step("rollback", r, mode=data.get("mode"), only_in_store=data.get("only_in_store"),
              verified=(data.get("verify") or {}).get("ok"))
     run.expect(r.get("ok") and data.get("mode") == "off", "the rollback returns to off")
-    status = run.pta("cloud", "status").get("data") or {}
+    status = run.cli("cloud", "status").get("data") or {}
     store_after = (status.get("store") or {}).get("collections") or {}
     before_counts = {k: v.get("records") for k, v in store_before.items()}
     after_counts = {k: v.get("records") for k, v in store_after.items()}
@@ -447,33 +451,33 @@ def rehearse(run, endpoint, service, label, second_service=None):
     # History may still grow meanwhile (the copy's own scheduled activity review): nothing is removed.
     run.expect(all((after_counts.get(k) or 0) >= (n or 0) for k, n in before_counts.items()),
                "the rollback leaves the copy in the store")
-    after = counts(run.pta("cloud", "migrate", "--dry-run"))
+    after = counts(run.cli("cloud", "migrate", "--dry-run"))
     run.expect(all(after.get(name, 0) >= number for name, number in local.items()), "no local record was lost")
-    r = run.pta("config", "get", "policy.greeting")
+    r = run.cli("config", "get", "policy.greeting")
     run.expect(json.dumps(greeting) in json.dumps(r.get("data")), "the edit made through the store stays local")
-    r = run.pta("setup", "status")
+    r = run.cli("setup", "status")
     store = next((s for s in (r.get("data") or {}).get("steps", []) if s.get("id") == "account_store"), {})
     run.step("setup status", r, account_store=store.get("state"))
-    r = run.pta("cloud", "erase", "--confirmed", timeout=1800)
+    r = run.cli("cloud", "erase", "--confirmed", timeout=1800)
     run.step("erase while another computer is connected", r)
     run.expect(r.get("code") == "state_conflict", "the copy is never erased while another computer uses it")
-    installations = (run.pta("cloud", "installations").get("data") or {}).get("installations") or []
+    installations = (run.cli("cloud", "installations").get("data") or {}).get("installations") or []
     second_id = next((i["id"] for i in installations if not i.get("current") and not i.get("revoked_at")), None)
-    r = run.pta("cloud", "installations", "revoke", str(second_id), "--confirmed")
+    r = run.cli("cloud", "installations", "revoke", str(second_id), "--confirmed")
     run.step("revoke the second computer", r)
     run.expect(r.get("ok"), "the first computer revokes the second in the store")
     other.stop()
-    r = run.pta("cloud", "erase", "--confirmed", timeout=1800)
+    r = run.cli("cloud", "erase", "--confirmed", timeout=1800)
     data = r.get("data") or {}
     run.step("erase", r, erased=data.get("erased"), key_retired=bool(data.get("key_retired")))
     run.expect(r.get("ok") and data.get("erased", 0) > 0, "the erasure empties the copy")
-    status = run.pta("cloud", "status").get("data") or {}
+    status = run.cli("cloud", "status").get("data") or {}
     remaining = sum(v.get("records", 0) + v.get("tombstones", 0) for v in ((status.get("store") or {}).get("collections") or {}).values())
     run.expect(remaining == 0, "the store holds nothing afterwards")
-    after = counts(run.pta("cloud", "migrate", "--dry-run"))
+    after = counts(run.cli("cloud", "migrate", "--dry-run"))
     run.expect(all(after.get(name, 0) >= number for name, number in local.items()), "the erasure deleted nothing local")
     restore(run, greeting, local)
-    r = run.pta("cloud", "disconnect", "--forget-service-token", "--confirmed")
+    r = run.cli("cloud", "disconnect", "--forget-service-token", "--confirmed")
     run.step("disconnect", r, store_notified=(r.get("data") or {}).get("store_notified"))
 
 

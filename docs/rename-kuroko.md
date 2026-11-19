@@ -420,12 +420,8 @@ A documentation-only pass (no code, no version):
 
 Remaining, optional or tied to 0.21.0:
 
-- Renaming the server's units and updater to `kuroko-*` (decision 5), or at least pointing
-  `personal-teams-assistant-web.service` at `kuroko-host --web` and the updater at `kuroko`.
-- The scripts that still run the CLI or host by a former name (`configure-cloud-access.py`,
-  `rehearse-cloud-migration.py`, `dev-host.sh`, `vps-update.py`).
 - Renaming, or keeping on purpose, the `PTA_*` variables that have no `KUROKO_*` name yet
-  (development, tests and the server updater's `PTA_UPDATE_*`).
+  (development and tests; the server updater reads `KUROKO_UPDATE_*` first).
 - Retiring the aliases in 0.21.0 once every machine's service entry and MCP configuration has
   migrated (architecture §15).
 
@@ -434,3 +430,14 @@ Remaining, optional or tied to 0.21.0:
 With `--integrations`, `install.sh` and `install.ps1` install the skill into `~/.<cli>/skills/kuroko`
 and register the MCP server as `kuroko`. A registration under the former name is not duplicated:
 they say to run `kuroko mcp migrate --confirmed`.
+
+## 13. The server's units and updater (2026-11-19)
+
+The portal's units are `kuroko-web.service` (starting `kuroko-host --web`) and
+`kuroko-web-connector.service`, with their `oom.conf` drop-ins. The updater is
+`~/.local/bin/kuroko-update` with `kuroko-update.{service,timer}`, its state in
+`~/.local/state/kuroko-update` and its cache in `~/.cache/kuroko-update`. It reads `KUROKO_UPDATE_*`
+and falls back to `PTA_UPDATE_*`. The repository scripts (`dev-host.sh`, `rehearse-cloud-migration.py`,
+`configure-cloud-access.py`, `configure-web-access.py`) call `kuroko` and `kuroko-host`, and fall
+back to the former names where an older build is all there is. The Cloudflare tunnel and Access
+apps keep their names.
