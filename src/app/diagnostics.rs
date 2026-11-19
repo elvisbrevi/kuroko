@@ -21,9 +21,7 @@ pub(super) async fn capture<F: Future<Output = control::Reply>>(
 
 pub(super) fn capture_error(error: &anyhow::Error, location: &Location<'_>) {
     let chain = error.chain().take(8).map(|source| {
-        if let Some(error) = source.downcast_ref::<azure_cli::LoginError>() {
-            json!({"type":"azure_cli_login", "details":error})
-        } else if let Some(error) = source.downcast_ref::<std::io::Error>() {
+        if let Some(error) = source.downcast_ref::<std::io::Error>() {
             json!({"type":"io", "kind":format!("{:?}", error.kind()), "os_code":error.raw_os_error()})
         } else if let Some(error) = source.downcast_ref::<reqwest::Error>() {
             json!({"type":"http", "status":error.status().map(|s| s.as_u16()), "timeout":error.is_timeout(), "connect":error.is_connect(), "decode":error.is_decode()})
@@ -122,7 +120,7 @@ mod tests {
         })
         .await;
         let detail = detail(
-            "begin_azure_cli_login",
+            "implementation_request_start",
             &reply,
             Duration::from_millis(30000),
             causes,
@@ -131,7 +129,7 @@ mod tests {
         let rows = Store::inspect(&path, true, 10, None, false).unwrap();
         let saved = rows[0]["detail"].as_str().unwrap();
         assert!(saved.contains("PermissionDenied"));
-        assert!(saved.contains("begin_azure_cli_login"));
+        assert!(saved.contains("implementation_request_start"));
         assert!(saved.contains("30000"));
         for secret in [
             "synthetic-secret",

@@ -76,30 +76,34 @@ function tile(label, value, tone, detail, go, symbol) {
   return row;
 }
 
-let azureCliStatus = { state: 'checking', authenticated: false };
-let azureCliPending = null;
-function loadAzureCliStatus() {
+let azureDevopsStatus = { state: 'checking', authenticated: false };
+let azureDevopsPending = null;
+/** Whether Azure DevOps accepts the Azure source's personal access token; there is no Azure sign-in. */
+function loadAzureDevopsStatus() {
   if (live?.account?.local_execution === false) return Promise.resolve();
-  if (azureCliPending) return azureCliPending;
-  azureCliPending = invoke('azure_cli_status').then(result => { azureCliStatus = result; })
-    .catch(() => { azureCliStatus = { state: 'unavailable', authenticated: false }; })
-    .finally(() => { azureCliPending = null; if (live) renderTiles(live); });
-  return azureCliPending;
+  if (azureDevopsPending) return azureDevopsPending;
+  azureDevopsPending = invoke('azure_cli_status').then(result => { azureDevopsStatus = result; })
+    .catch(() => { azureDevopsStatus = { state: 'unavailable', authenticated: false }; })
+    .finally(() => { azureDevopsPending = null; if (live) renderTiles(live); });
+  return azureDevopsPending;
 }
-function azureCliTile() {
-  if (live?.account?.local_execution === false) return personalCliTile(t('Azure CLI'), 'azure-cli-status');
-  const state = azureCliStatus;
-  const value = { authenticated: t('Authenticated'), not_authenticated: t('Not authenticated'), not_installed: t('Not installed'), unavailable: t('Session unavailable'), checking: t('Checking…') }[state.state] || t('Session unavailable');
-  const hint = state.authenticated ? t('Azure DevOps session is valid. Select to refresh.')
-    : state.state === 'not_installed' ? t('Install Azure CLI on the machine running this app.')
-    : state.state === 'checking' ? t('Checking the Azure DevOps session on this machine…')
-    : t('Select to sign in with Microsoft in your browser.');
-  const row = tile(t('Azure CLI'), value, state.authenticated ? 'ok' : state.state === 'checking' ? 'muted' : 'warn',
+function azureDevopsTile() {
+  if (live?.account?.local_execution === false) return personalCliTile(t('Azure DevOps'), 'azure-devops-status');
+  const state = azureDevopsStatus;
+  const value = { authenticated: t('Authenticated'), rejected: t('Token rejected'), not_configured: t('No token'), unavailable: t('Unavailable'), checking: t('Checking…') }[state.state] || t('Unavailable');
+  const hint = state.authenticated ? t("Azure DevOps accepts the Azure source's personal access token. Select to refresh.")
+    : state.state === 'rejected' ? t("The personal access token expired or was revoked. Store a new one in the Azure source's variable.")
+    : state.state === 'not_configured' ? t("Store a personal access token with Work Items (Read & write) in the Azure source's variable.")
+    : state.state === 'checking' ? t('Checking the Azure DevOps token…')
+    : t('Azure DevOps could not be reached. Select to retry.');
+  const fix = ['rejected', 'not_configured'].includes(state.state);
+  const row = tile(t('Azure DevOps'), value, state.authenticated ? 'ok' : state.state === 'checking' ? 'muted' : 'warn',
     state.user ? `${state.user} · ${hint}` : hint, ['overview'], 'chip');
-  row.id = 'azure-cli-status';
+  row.id = 'azure-devops-status';
   row.onclick = async () => {
-    await busy(row, state.authenticated || ['checking', 'not_installed'].includes(state.state) ? loadAzureCliStatus : azureCliLogin);
-    if (tab === 'overview') $('#azure-cli-status')?.focus({ preventScroll: true });
+    if (fix) { showTab('settings', 'panel-variables'); return; }
+    await busy(row, loadAzureDevopsStatus);
+    if (tab === 'overview') $('#azure-devops-status')?.focus({ preventScroll: true });
   };
   return row;
 }
@@ -135,55 +139,7 @@ function personalCliTile(label, id) {
   row.id = id;
   return row;
 }
-setInterval(() => { if (current && tab === 'overview') { loadAzureCliStatus(); loadGithubCliStatus(); } }, 60000);
-
-async function azureCliLogin() {
-  const dialog = $('#azure-cli-dialog'), status = $('#azure-cli-login-status'), link = $('#azure-cli-link');
-  if (dialog.open) return;
-  let cancelled = false;
-  $('#azure-cli-code').textContent = '';
-  $('#azure-cli-copy').disabled = true;
-  link.hidden = true; link.removeAttribute('href');
-  status.textContent = t('Starting Microsoft sign-in…');
-  dialog.showModal();
-  const cancel = event => { event?.preventDefault(); cancelled = true; };
-  dialog.oncancel = cancel;
-  $('#azure-cli-cancel').onclick = cancel;
-  try {
-    const prompt = await invoke('begin_azure_cli_login');
-    if (cancelled) return;
-    if (prompt.verification_uri !== 'https://microsoft.com/devicelogin' || !/^[A-Z0-9-]{6,16}$/.test(prompt.user_code)) throw new Error(t('Invalid Microsoft sign-in address.'));
-    $('#azure-cli-code').textContent = prompt.user_code;
-    $('#azure-cli-copy').disabled = false;
-    $('#azure-cli-copy').onclick = () => busy($('#azure-cli-copy'), async () => {
-      if (await copy(prompt.user_code)) done(t('Code copied.'));
-    });
-    link.href = prompt.verification_uri; link.hidden = false;
-    link.onclick = event => {
-      if (!transport.browser) { event.preventDefault(); invoke('open_azure_cli_login').catch(fail); }
-    };
-    status.textContent = t('Waiting for Microsoft sign-in…');
-    link.focus();
-    const deadline = Date.now() + 600_000;
-    while (!cancelled && Date.now() < deadline) {
-      const result = await rawInvoke('command', { request: { method: 'finish_azure_cli_login', args: {}, revision: null, contract: 1 } });
-      if (cancelled) return;
-      if (result.ok) {
-        azureCliStatus = result.data;
-        done(t('Azure CLI connected.'));
-        return;
-      }
-      if (result.code !== 'authorization_pending') throw new Error(tx(result.message || result.code));
-      await sleep(2000);
-    }
-    if (!cancelled) throw new Error(t('Azure CLI sign-in failed or expired. Select Azure CLI to try again.'));
-  } finally {
-    await rawInvoke('command', { request: { method: 'cancel_azure_cli_login', args: {}, revision: null, contract: 1 } }).catch(() => {});
-    dialog.close();
-    link.removeAttribute('href'); $('#azure-cli-code').textContent = '';
-    await loadAzureCliStatus();
-  }
-}
+setInterval(() => { if (current && tab === 'overview') { loadAzureDevopsStatus(); loadGithubCliStatus(); } }, 60000);
 
 /** Workflows on Home: listed once some exist; a project that starts by itself needs a ready state. */
 function workflowTiles(s) {
@@ -226,7 +182,7 @@ function renderTiles(s) {
   const rows = [
     tile(t('Microsoft account'), s.microsoft_connected ? t('Connected') : t('Not connected'), s.microsoft_connected ? 'ok' : 'warn',
       s.microsoft_connected ? t('Reads and answers as you') : t('Connect it in Settings'), ['settings', 'panel-teams'], 'user'),
-    azureCliTile(), githubCliTile(),
+    azureDevopsTile(), githubCliTile(),
     tile(t('Mode'), config.policy.dry_run ? t('Observation') : t('Sending on'), config.policy.dry_run ? 'info' : 'ok',
       config.policy.dry_run ? t('Sends nothing to Teams') : t('Answers in Teams'), ['settings', 'panel-behavior'], 'eye'),
     tile(t('Reception'), config.graph.discover_all_chats ? t('All my chats') : t('{n} chat(s)', { n: config.graph.allowed_chats.length }),
@@ -338,6 +294,6 @@ function renderLive() {
 }
 
 export {
-  providerNames, urlReady, serverHost, readySources, loadAzureCliStatus, loadGithubCliStatus, renderSteps,
+  providerNames, urlReady, serverHost, readySources, loadAzureDevopsStatus, loadGithubCliStatus, renderSteps,
   renderLive,
 };

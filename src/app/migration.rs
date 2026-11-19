@@ -479,7 +479,7 @@ async fn inspect(host: &Arc<Host>) -> std::result::Result<Value, vault::Error> {
         "remains_local": [
             "Microsoft Teams sign-in",
             "Coding-provider sign-ins (Codex, Claude Code, OpenCode)",
-            "GitHub and Azure CLI sessions",
+            "GitHub CLI session",
             "Repository folders and allowed directories of this computer",
         ],
         "originals": "Nothing here changes or deletes the original credentials; they stay as the way back.",

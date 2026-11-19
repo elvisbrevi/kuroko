@@ -21,8 +21,6 @@ use Remote::{Denied, Offered};
 
 pub(super) const UNCLASSIFIED: &str =
     "This tool is not available to a remote agent until it is classified.";
-const HOST_SIGN_IN: &str =
-    "Command-line sign-ins of a computer are done by the person at that computer.";
 const HOST_DESKTOP: &str = "This tool opens something on the host's own desktop.";
 const HOST_MACHINE: &str =
     "This tool changes or enrolls the host computer itself; the person does it there.";
@@ -37,9 +35,6 @@ const PORTAL: &str = "The portal does not offer this operation to the account.";
 /// Every tool of the catalog, offered or denied. A test walks the catalog against this list.
 pub(super) const TOOLS: &[(&str, Remote)] = &[
     ("github_cli_status", Offered),
-    ("begin_azure_cli_login", Denied(HOST_SIGN_IN)),
-    ("finish_azure_cli_login", Denied(HOST_SIGN_IN)),
-    ("cancel_azure_cli_login", Denied(HOST_SIGN_IN)),
     ("azure_cli_status", Offered),
     ("implementation_request_catalog", Offered),
     ("implementation_request_start", Offered),

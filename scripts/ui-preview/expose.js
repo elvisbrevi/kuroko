@@ -11,7 +11,7 @@ import { markDirty, selectTab, showTab } from '/nav.js';
 import { todoRich } from '/markdown.js';
 import { showMobileSession } from '/sessions.js';
 import { loadJoinCommand, loadMachines } from '/settings-machines.js';
-import { loadAzureCliStatus, renderSteps } from '/home.js';
+import { loadAzureDevopsStatus, renderSteps } from '/home.js';
 import { pollLive, refreshLive } from '/profile.js';
 import * as account from '/settings-account.js';
 import { loadConsumers, loadVariables } from '/settings-variables.js';
@@ -22,7 +22,7 @@ import * as models from '/settings-models.js';
 window.ptaTransport = transport;
 Object.assign(window, {
   invoke, $, applyAppearance, markDirty, selectTab, showTab, todoRich, showMobileSession, loadMachines, loadJoinCommand,
-  loadAzureCliStatus, renderSteps, pollLive, refreshLive, loadConsumers, loadVariables, loadUpdates,
+  loadAzureDevopsStatus, renderSteps, pollLive, refreshLive, loadConsumers, loadVariables, loadUpdates,
   loadAgentEndpoint: account.loadAgentEndpoint, loadReadiness: account.loadReadiness, leaveAccount: account.leaveAccount,
   loadAccountConfig: account.loadAccountConfig, adoptAccount: account.adoptAccount, loadCloud: cloud.loadCloud,
   renderChain: models.renderChain,

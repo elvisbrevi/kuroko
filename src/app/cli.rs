@@ -115,8 +115,9 @@ Accounts
                            login [--no-browser]; finish [--wait] [--redirect URL]
                            (--redirect: the http://localhost:PORT/?code=... URL opened on another device)
   auth github status|login CLIENT_ID|finish|cancel|logout
-  auth azure status|login|finish|cancel
-                           login returns a Microsoft device code; finish [--wait] verifies the Azure DevOps session.
+  auth azure status        Whether Azure DevOps accepts the enabled Azure source's personal access token (its reads
+                           and the confirmed writes use it; there is no Azure sign-in). A rejected token: store a new
+                           PAT with Work Items (Read & write) in that source's variable.
   auth machine status|login [URL]|finish|cancel
                            Adds this computer to your account on your own coordinator (HTTPS origin; omitted reuses
                            the remembered one). login [--no-browser] returns the approval URL and code; sign in there
@@ -2683,7 +2684,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                 "status" | "login" | "finish" | "cancel" | "logout"
             ]
             | ["auth", "github", "status" | "finish" | "cancel" | "logout"]
-            | ["auth", "azure", "status" | "login" | "finish" | "cancel"]
+            | ["auth", "azure", "status"]
             | ["auth", "machine", "status" | "login" | "finish" | "cancel"]
             | ["auth", "machine", "login", _]
             | ["auth", "github", "login", _]
@@ -3619,9 +3620,6 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
             return Ok(s);
         }
         let method = match (provider, action) {
-            ("azure", "login") => "begin_azure_cli_login",
-            ("azure", "finish") => "finish_azure_cli_login",
-            ("azure", "cancel") => "cancel_azure_cli_login",
             ("github", "login") => "begin_github_login",
             ("github", "finish") => "finish_github_login",
             ("github", "cancel") => "cancel_github",
@@ -3645,7 +3643,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
             json!({"open":!non_interactive && !args.iter().any(|a|a=="--no-browser")})
         };
         let mut reply = call(method, value, None, true).await?;
-        if ["github", "azure"].contains(&provider) && action == "login" && reply.ok {
+        if provider == "github" && action == "login" && reply.ok {
             reply.ok = false;
             reply.code = "authorization_pending".into();
             reply.exit_code = 4;
@@ -4993,9 +4991,6 @@ mod help_tests {
             &["activity", "resolve", "activity-id"],
             &["credentials", "list"],
             &["auth", "azure", "status"],
-            &["auth", "azure", "login"],
-            &["auth", "azure", "finish"],
-            &["auth", "azure", "cancel"],
             &["auth", "microsoft", "status"],
             &["auth", "github", "login", "client"],
             &["github", "repos"],

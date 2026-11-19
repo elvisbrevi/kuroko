@@ -1159,7 +1159,7 @@ pub(in crate::app) fn stacked(base: &super::dependencies::Base) -> String {
 }
 
 /// How a coding run that may create work items declares that one needs another's code first.
-pub(in crate::app) const DEPENDENCY_LINKS: &str = "\nWhen a work item you create needs the code of another one first (one you created, or this run's work item), add a Predecessor link from it to that one in Azure DevOps (for example az boards work-item relation add --relation-type Predecessor), and only between work items of this project: workflow runs wait for those links before coding a work item.\n";
+pub(in crate::app) const DEPENDENCY_LINKS: &str = "\nWhen a work item you create needs the code of another one first (one you created, or this run's work item), add a Predecessor link from it to that one in Azure DevOps (for example az boards work-item relation add --relation-type Predecessor, which authenticates with AZURE_DEVOPS_EXT_PAT), and only between work items of this project: workflow runs wait for those links before coding a work item.\n";
 
 /// The longest item text a context is measured with: an item's kind, ID, title (a run keeps at
 /// most 500 characters of it) and links.

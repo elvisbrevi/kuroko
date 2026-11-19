@@ -332,7 +332,7 @@ pub(crate) async fn request_fields(
 
 pub(crate) async fn create_request(
     client: &Client,
-    write_token: &str,
+    key: &str,
     target: &Value,
     draft: &Value,
     fields: Vec<Value>,
@@ -366,7 +366,7 @@ pub(crate) async fn create_request(
     body.extend(fields);
     let response = client
         .post(url)
-        .bearer_auth(write_token)
+        .basic_auth("", Some(key))
         .header("Content-Type", "application/json-patch+json")
         .json(&body)
         .send()
@@ -531,14 +531,13 @@ pub(crate) async fn check_child(
 
 pub(crate) async fn create_child(
     client: &Client,
-    read_key: &str,
-    write_token: &str,
+    key: &str,
     catalog: &str,
     guides: &[Guide],
     parent: &Detail,
     child: &Value,
 ) -> Result<Value> {
-    let (source, kind, body) = child_body(client, read_key, catalog, guides, parent, child).await?;
+    let (source, kind, body) = child_body(client, key, catalog, guides, parent, child).await?;
     let url = project_url(
         &source,
         &parent.item.project,
@@ -549,7 +548,7 @@ pub(crate) async fn create_child(
     let url = super::test_url(url);
     let response = client
         .post(url)
-        .bearer_auth(write_token)
+        .basic_auth("", Some(key))
         .header("Content-Type", "application/json-patch+json")
         .json(&body)
         .send()
@@ -578,6 +577,45 @@ pub(crate) async fn create_child(
     Ok(
         json!({"id":id,"title":child["title"],"url":validate_link(url.as_str())?.as_str(),"kind":kind,"state":"created"}),
     )
+}
+
+/// Who the Azure source's personal access token authenticates as, from the first organization
+/// of its catalog. It proves the token is accepted, not that it may write to a project.
+pub(crate) enum Identity {
+    User(Option<String>),
+    /// Azure DevOps refused the token (expired, revoked or a sign-in page instead of data).
+    Rejected,
+    Unavailable,
+}
+
+pub(crate) async fn identity(client: &Client, key: &str, catalog: &str) -> Identity {
+    let Some(url) = Catalog::parse(catalog).ok().and_then(|catalog| {
+        let mut url =
+            organization_url(catalog.sources.first()?, &["_apis", "connectionData"]).ok()?;
+        url.set_query(None);
+        Some(url)
+    }) else {
+        return Identity::Unavailable;
+    };
+    #[cfg(test)]
+    let url = super::test_url(url);
+    let Ok(response) = client.get(url).basic_auth("", Some(key)).send().await else {
+        return Identity::Unavailable;
+    };
+    match response.status().as_u16() {
+        200 => match crate::adapters::bounded_json::<Value>(response, 200_000).await {
+            Ok(value) => Identity::User(
+                value["authenticatedUser"]["providerDisplayName"]
+                    .as_str()
+                    .filter(|s| s.len() <= 320 && !s.chars().any(char::is_control))
+                    .map(str::to_owned),
+            ),
+            // Azure DevOps answers an unaccepted token with its sign-in page.
+            Err(_) => Identity::Rejected,
+        },
+        203 | 302 | 401 | 403 => Identity::Rejected,
+        _ => Identity::Unavailable,
+    }
 }
 
 #[cfg(test)]
@@ -660,7 +698,8 @@ mod tests {
         let body: Value = serde_json::from_slice(&requests[5].body).unwrap();
         assert_eq!(body[1]["value"], "Escape &lt;script&gt;");
         assert_eq!(body[3]["path"], "/fields/Custom.Developer");
-        assert_eq!(requests[5].headers["authorization"], "Bearer write");
+        // Writes authenticate with the Azure source's personal access token, never a CLI session.
+        assert_eq!(requests[5].headers["authorization"], "Basic OndyaXRl");
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
     #[tokio::test]
@@ -705,12 +744,52 @@ mod tests {
         );
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
+    #[tokio::test]
+    async fn the_personal_access_token_status_names_its_account_or_says_it_was_refused() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method, path},
+        };
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        let catalog = "[[sources]]\norganization='https://dev.azure.com/example'\nprojects=['Payments']\nauthor_email='person@example.test'";
+        Mock::given(method("GET"))
+            .and(path("/example/_apis/connectionData"))
+            .and(header("authorization", "Basic OnN5bnRoZXRpYy1wYXQ="))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"authenticatedUser":{"providerDisplayName":"Ana Example"}}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/example/_apis/connectionData"))
+            .respond_with(ResponseTemplate::new(203).set_body_string("<html>Sign in</html>"))
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        assert!(matches!(
+            identity(&client, "synthetic-pat", catalog).await,
+            Identity::User(Some(name)) if name == "Ana Example"
+        ));
+        assert!(matches!(
+            identity(&client, "expired-pat", catalog).await,
+            Identity::Rejected
+        ));
+        assert!(matches!(
+            identity(&client, "synthetic-pat", "not a catalog").await,
+            Identity::Unavailable
+        ));
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
     #[test]
     fn descriptions_do_not_inject_provider_html() {
         assert_eq!(html("<script>&\n"), "&lt;script&gt;&amp;<br>");
     }
     #[tokio::test]
-    async fn reviewed_children_use_process_task_types_and_the_azure_cli_bearer_token() {
+    async fn reviewed_children_use_process_task_types_and_the_source_personal_access_token() {
         use wiremock::{
             Mock, MockServer, ResponseTemplate,
             matchers::{method, path},
@@ -724,8 +803,7 @@ mod tests {
         let catalog = "[[sources]]\norganization='https://dev.azure.com/example'\nprojects=['Payments']\nauthor_email='person@example.test'";
         let created = create_child(
             &Client::new(),
-            "synthetic-read",
-            "synthetic-write",
+            "synthetic-pat",
             catalog,
             &[],
             &parent,
@@ -737,10 +815,12 @@ mod tests {
         assert_eq!(created["id"], 88);
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 2);
-        assert_eq!(
-            requests[1].headers["authorization"],
-            "Bearer synthetic-write"
-        );
+        for request in &requests {
+            assert_eq!(
+                request.headers["authorization"],
+                "Basic OnN5bnRoZXRpYy1wYXQ="
+            );
+        }
         let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
         assert!(
             body.as_array()

@@ -60,7 +60,6 @@ fn a_remote_agent_is_refused_what_only_a_person_or_the_owners_computer_may_do() 
         "machine_login_finish",
         "machine_save",
         "machine_browse",
-        "begin_azure_cli_login",
         "open_work_item",
         "implementation_open_session",
     ] {

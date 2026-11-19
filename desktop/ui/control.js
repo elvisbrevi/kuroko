@@ -14,14 +14,14 @@ import { browserMicrosoftLogin } from './dialogs.js';
  * @typedef {(
  *   'account_sync' | 'activity_history' | 'activity_open' | 'activity_pending' | 'activity_run' |
  *   'activity_status' | 'answer_feedback' | 'answer_refine' | 'answer_send' | 'audit' |
- *   'azure_cli_status' | 'begin_azure_cli_login' | 'begin_github_login' |
- *   'cancel_azure_cli_login' | 'cancel_microsoft' | 'chat' | 'clone_github_repository' |
+ *   'azure_cli_status' | 'begin_github_login' |
+ *   'cancel_microsoft' | 'chat' | 'clone_github_repository' |
  *   'cloud_backups' | 'cloud_conflicts' | 'cloud_connect' | 'cloud_disconnect' | 'cloud_erase' |
  *   'cloud_installations' | 'cloud_lost' | 'cloud_migrate' | 'cloud_promote' | 'cloud_repair' |
  *   'cloud_resolve' | 'cloud_restore' | 'cloud_revoke' | 'cloud_rollback' | 'cloud_rotate_key' |
  *   'cloud_status' | 'cloud_token' | 'cloud_verify' | 'connect_microsoft' | 'crate_update_apply' |
  *   'crate_update_cancel' | 'crate_update_check' | 'crate_update_dismiss' | 'crate_update_stage' |
- *   'crate_update_status' | 'crate_update_unattended' | 'disconnect_github' | 'finish_azure_cli_login' |
+ *   'crate_update_status' | 'crate_update_unattended' | 'disconnect_github' |
  *   'finish_github_login' | 'finish_microsoft' | 'get_azure_hu' | 'get_azure_task' |
  *   'get_github_epic' | 'get_github_issue' | 'github_cli_status' | 'github_repositories' |
  *   'implementation_browse' | 'implementation_cancel' | 'implementation_catalog' |
@@ -35,7 +35,7 @@ import { browserMicrosoftLogin } from './dialogs.js';
  *   'machine_directories' | 'machine_disconnect' | 'machine_join_command' | 'machine_list' | 'machine_login' |
  *   'machine_login_cancel' | 'machine_login_finish' | 'machine_revoke' | 'machine_save' |
  *   'machine_settings' | 'machine_teams' | 'machine_update' | 'machine_upgrade' | 'notes_list' | 'notes_remove' |
- *   'notes_save' | 'open_azure_cli_login' | 'open_github_login' | 'open_work_item' |
+ *   'notes_save' | 'open_github_login' | 'open_work_item' |
  *   'portable_status' | 'question_associate' | 'restart' | 'save_settings' | 'self_chat_disable' |
  *   'self_chat_enable' | 'self_chat_status' | 'service_install' | 'service_status' | 'service_uninstall' | 'setup_readiness' | 'snapshot' | 'start_assistant' |
  *   'stop_assistant' | 'teams_chats' | 'test_self_chat' | 'update_github_repository' | 'variable_consumer_bind' |
@@ -87,7 +87,7 @@ const rawInvoke = transport.invoke;
 // Also the answer operations: they do not depend on the profile files, so they neither check
 // nor advance the form's revision.
 /** @type {Method[]} */
-const READS = ['snapshot', 'chat', 'github_repositories', 'self_chat_status', 'llm_providers', 'azure_cli_status', 'begin_azure_cli_login', 'open_azure_cli_login', 'finish_azure_cli_login', 'cancel_azure_cli_login', 'github_cli_status', 'audit', 'activity_status', 'activity_history', 'activity_pending', 'answer_refine', 'answer_send', 'list_azure_hus', 'list_github_epics', 'list_github_issues', 'get_azure_hu', 'get_azure_task', 'list_azure_tasks', 'get_github_epic', 'get_github_issue', 'open_work_item', 'teams_chats'];
+const READS = ['snapshot', 'chat', 'github_repositories', 'self_chat_status', 'llm_providers', 'azure_cli_status', 'github_cli_status', 'audit', 'activity_status', 'activity_history', 'activity_pending', 'answer_refine', 'answer_send', 'list_azure_hus', 'list_github_epics', 'list_github_issues', 'get_azure_hu', 'get_azure_task', 'list_azure_tasks', 'get_github_epic', 'get_github_issue', 'open_work_item', 'teams_chats'];
 // Revision of the profile files the last reply saw. The form's own revision (`current.revision`)
 // changes only when it reloads or writes, so saving a stale form fails instead of overwriting
 // changes made elsewhere (e.g. with `kuroko`).
