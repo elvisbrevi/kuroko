@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise a clean MSVC Cargo installation's headless host on a disposable Windows CI account.
 
-The host has no window: it must start without a console, answer `pta`, refuse to open its local
+The host has no window: it must start without a console, answer `kuroko`, refuse to open its local
 page where no browser session exists (the CI runner is a service), keep the profile when the
 application is launched a second time, quit cleanly and start again. `--headless` and
 `PTA_HEADLESS` are accepted and ignored.
@@ -37,15 +37,18 @@ def pe_header(binary):
 def main():
     assert sys.platform == "win32", "Run this check on Windows"
     binaries = Path(sys.argv[1]).resolve()
-    host = binaries / "personal-teams-assistant.exe"
-    cli = binaries / "pta.exe"
+    host = binaries / "kuroko-host.exe"
+    cli = binaries / "kuroko.exe"
     (host_stack, host_subsystem), (cli_stack, cli_subsystem) = pe_header(host), pe_header(cli)
     assert host_stack == (8388608, 4096), "Host needs an 8 MiB reserve and default commit"
     assert cli_stack == (1048576, 4096), "The CLI must keep the MSVC defaults"
-    # The host is a GUI-subsystem program, so starting it never opens a console window; pta is a
+    # The former names, kept as aliases until 0.21.0, are the same programs with the same headers.
+    for alias, expected in (("personal-teams-assistant.exe", (host_stack, host_subsystem)), ("pta.exe", (cli_stack, cli_subsystem))):
+        assert pe_header(binaries / alias) == expected, f"{alias} must match the program it stands for"
+    # The host is a GUI-subsystem program, so starting it never opens a console window; kuroko is a
     # console program.
     assert host_subsystem == GUI_SUBSYSTEM, f"The host must not open a console (subsystem {host_subsystem})"
-    assert cli_subsystem == CONSOLE_SUBSYSTEM, f"pta must be a console program (subsystem {cli_subsystem})"
+    assert cli_subsystem == CONSOLE_SUBSYSTEM, f"kuroko must be a console program (subsystem {cli_subsystem})"
     print("PE headers: host reserve=8388608 and GUI subsystem, CLI reserve=1048576 and console; commit=4096",
           flush=True)
 
@@ -62,7 +65,7 @@ def main():
 
     def call(*args):
         code, reply = run(*args)
-        assert code == 0 and reply["ok"], f"pta {args}: {code} {reply}"
+        assert code == 0 and reply["ok"], f"kuroko {args}: {code} {reply}"
         return reply["data"]
 
     version = call("--version")["cli_version"]
@@ -120,7 +123,7 @@ def main():
                 # open it in, and never hands out a sign-in.
                 code, reply = run("app", "open")
                 assert (code, reply["ok"], reply["code"]) == (3, False, "not_ready"), f"app open: {code} {reply}"
-                assert "pta app open" in reply["message"], reply["message"]
+                assert "kuroko app open" in reply["message"], reply["message"]
                 assert "code=" not in json.dumps(reply), "The page's sign-in code must never be returned"
                 # Launching the application again leaves the running host in place.
                 again = subprocess.run([str(host)], env=env, timeout=60, capture_output=True)

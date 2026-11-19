@@ -1,15 +1,24 @@
 {
-  // Landing page: static assets only (HTML, CSS and images in public/), no Worker code.
+  // Landing page: static assets (HTML, CSS and images in public/) and src/index.js, which only
+  // redirects the former host to the current one.
   // Deployed by Workers Builds (Cloudflare's Git integration) with root directory `site`;
-  // the Worker name in the dashboard must match `name`.
+  // the Worker name in the dashboard must match `name` (kept from before the rename).
   "name": "personal-teams-assistant",
+  "main": "src/index.js",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./public",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    // The script sees every request, so the former host is redirected for every path.
+    "run_worker_first": true
   },
-  // Served only on the custom domain (Cloudflare creates its DNS record and certificate);
-  // workers.dev stays off so the landing has a single canonical URL.
-  "routes": [{ "pattern": "teams-assistant.elvisbrevi.cl", "custom_domain": true }],
+  // Served only on the custom domains (Cloudflare creates their DNS records and certificates);
+  // workers.dev stays off so the landing has a single canonical URL. The former domain stays for
+  // good: Teams cards already sent link to it.
+  "routes": [
+    { "pattern": "kuroko.elvisbrevi.cl", "custom_domain": true },
+    { "pattern": "teams-assistant.elvisbrevi.cl", "custom_domain": true }
+  ],
   "workers_dev": false
 }

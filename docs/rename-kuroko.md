@@ -384,3 +384,15 @@ through its own updater. The Mac has it prepared and waits for a person to choos
   the former name.
 - Kept, as invariants: the card band id, cookies, headers, cryptographic labels, `PTA_*` credential
   and handover names, the service `MARKER`, OpenCode agent names and stored review tags.
+
+## 10. 0.18.3: phase 4, domains
+
+- The landing is `kuroko.elvisbrevi.cl`. The Worker (`site/src/index.js`, `run_worker_first`)
+  answers `teams-assistant.elvisbrevi.cl/<path>` with a permanent redirect to the same path on the
+  new host, and that domain stays, because Teams cards already sent link to it. Both are custom
+  domains of the same Worker (`site/wrangler.jsonc`), which keeps its name `personal-teams-assistant`.
+- The links in new Teams cards (`MessageStyle::KUROKO_URL`) point to `kuroko.elvisbrevi.cl`.
+- Not done, by the owner's decision on 2026-11-18: `kuroko-cloud.elvisbrevi.cl` (another Access app
+  for no visible gain) and a new portal hostname (the iPhone PWA would have to be added again).
+- Checked: Workers Builds kept deploying `site/` after the repository rename (the landing served
+  the phase 3 links).

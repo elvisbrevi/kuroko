@@ -10,8 +10,8 @@
   <meta property="og:title" content="Kuroko — You on stage. Kuroko handles the rest.">
   <meta property="og:description" content="Answers in Teams as you, keeps your activity records and implements your work behind the scenes. Self-hosted and open source: a web interface, a CLI and an MCP server in one Cargo package.">
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://teams-assistant.elvisbrevi.cl/">
-  <meta property="og:image" content="https://teams-assistant.elvisbrevi.cl/assets/og-banner.jpg">
+  <meta property="og:url" content="https://kuroko.elvisbrevi.cl/">
+  <meta property="og:image" content="https://kuroko.elvisbrevi.cl/assets/og-banner.jpg">
   <meta property="og:image:type" content="image/jpeg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="800">
@@ -19,11 +19,11 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Kuroko — You on stage. Kuroko handles the rest.">
   <meta name="twitter:description" content="Answers in Teams as you, keeps your activity records and implements your work behind the scenes. Self-hosted and open source.">
-  <meta name="twitter:image" content="https://teams-assistant.elvisbrevi.cl/assets/og-banner.jpg">
+  <meta name="twitter:image" content="https://kuroko.elvisbrevi.cl/assets/og-banner.jpg">
   <meta name="twitter:image:alt" content="Kuroko, a small stagehand in a black hood and robe, waves next to the wordmark and the line: You on stage. Kuroko handles the rest.">
   <meta name="theme-color" content="#fff6e5" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17151f" media="(prefers-color-scheme: dark)">
-  <link rel="canonical" href="https://teams-assistant.elvisbrevi.cl/">
+  <link rel="canonical" href="https://kuroko.elvisbrevi.cl/">
   <link rel="icon" href="assets/icon.png" type="image/png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
@@ -38,7 +38,7 @@
         <a href="#security">Security</a>
         <a href="#agents">Agents</a>
         <a href="#install">Install</a>
-        <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant">GitHub</a>
+        <a class="button secondary small" href="https://github.com/elvisbrevi/kuroko">GitHub</a>
       </nav>
     </div>
     <div class="curtain" aria-hidden="true"></div>
@@ -54,7 +54,7 @@
             <p class="lead">Kuroko answers in Teams as you, keeps a daily record of your Azure DevOps tasks and implements your work items with coding agents on your own computers. Only with what you authorize, and with code checking every step.</p>
             <div class="cta">
               <a class="button" href="#install">Get started</a>
-              <a class="button secondary" href="https://github.com/elvisbrevi/personal-teams-assistant">View the code</a>
+              <a class="button secondary" href="https://github.com/elvisbrevi/kuroko">View the code</a>
             </div>
             <p class="fine">Open source (MIT) · Self-hosted · macOS, Windows and Linux · Replies in English or Spanish</p>
           </div>
@@ -118,7 +118,7 @@
               <li><strong>Read-only.</strong> Daily activity runs never create, link or change work items.</li>
               <li><strong>Activity review.</strong> Ask which work no task records: Kuroko compares your commits, pull requests, pipeline runs, releases, Wiki edits and, if you allow it, your Teams messages with your work items, and lists each piece with its verified link and where it could go.</li>
               <li><strong>Status rounds.</strong> Progress, commitments and blockers, read from the work item itself and your own recent Wiki pages.</li>
-              <li><strong>History.</strong> Every saved day between two dates, in the app or with <code>pta activity history</code>.</li>
+              <li><strong>History.</strong> Every saved day between two dates, in the app or with <code>kuroko activity history</code>.</li>
             </ul>
           </div>
         </div>
@@ -225,8 +225,8 @@
               <li><strong>Optional cloud store.</strong> Keep your account's records on Cloudflare, sealed on your computer with a key Cloudflare never receives.</li>
             </ul>
             <div class="cta">
-              <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/SECURITY.md">Security policy</a>
-              <a class="button secondary small" href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/desktop/skills/kuroko/references/web-access.md">Set up your portal</a>
+              <a class="button secondary small" href="https://github.com/elvisbrevi/kuroko/blob/main/SECURITY.md">Security policy</a>
+              <a class="button secondary small" href="https://github.com/elvisbrevi/kuroko/blob/main/desktop/skills/kuroko/references/web-access.md">Set up your portal</a>
             </div>
             <p class="fine">You configure Cloudflare Access, TLS, SSH keys and a firewall for your host. Profiles share your OS account, and coding agents are not isolated from it. The security policy tracks these limits.</p>
           </div>
@@ -243,24 +243,24 @@
         </header>
         <div class="cards">
           <article class="card">
-            <h3>The <code>pta</code> CLI</h3>
-            <p>Every operation from the terminal, with stable JSON output (<code>--json</code>) and every command described in <code>pta help</code>.</p>
+            <h3>The <code>kuroko</code> CLI</h3>
+            <p>Every operation from the terminal, with stable JSON output (<code>--json</code>) and every command described in <code>kuroko help</code>.</p>
           </article>
           <article class="card">
             <h3>An MCP server</h3>
-            <p><code>pta mcp</code> serves the app's tools to Claude Code, Codex or any MCP client; your portal also serves them at <code>/mcp</code> for agents with nothing installed. Actions outside the app ask you first.</p>
+            <p><code>kuroko mcp</code> serves the app's tools to Claude Code, Codex or any MCP client; your portal also serves them at <code>/mcp</code> for agents with nothing installed. Actions outside the app ask you first.</p>
           </article>
           <article class="card">
             <h3>A built-in skill</h3>
-            <p>The operating manual for agents ships inside the binary: <code>pta skill show</code>.</p>
+            <p>The operating manual for agents ships inside the binary: <code>kuroko skill show</code>.</p>
           </article>
         </div>
         <pre class="terminal" tabindex="0" aria-label="Example commands"><code><span class="comment"># what is running, as JSON</span>
-<span class="cmd">pta status --json</span>
+<span class="cmd">kuroko status --json</span>
 <span class="comment"># the activity record of a range of days</span>
-<span class="cmd">pta activity history 2026-10-01..2026-10-15</span>
+<span class="cmd">kuroko activity history 2026-10-01..2026-10-15</span>
 <span class="comment"># add the MCP server to Claude Code</span>
-<span class="cmd">claude mcp add --scope user personal-teams-assistant -- pta mcp</span></code></pre>
+<span class="cmd">claude mcp add --scope user kuroko -- kuroko mcp</span></code></pre>
       </div>
     </section>
 
@@ -268,7 +268,7 @@
       <div class="wrap">
         <header class="section-head">
           <h2 id="install-title">Install</h2>
-          <p>Kuroko is the Personal Teams Assistant: one package, <a href="https://crates.io/crates/personal-teams-assistant">personal-teams-assistant on crates.io</a>, installs the host with its web interface and the <code>pta</code> CLI. Self-hosted: you bring the accounts, credentials and hosting, and your profile carries over between versions.</p>
+          <p>Kuroko (formerly Personal Teams Assistant) is one package, <a href="https://crates.io/crates/kuroko">kuroko on crates.io</a>, that installs the host with its web interface and the <code>kuroko</code> CLI. Self-hosted: you bring the accounts, credentials and hosting, and your profile carries over between versions.</p>
         </header>
         <div class="platforms">
           <article class="platform wide">
@@ -276,30 +276,30 @@
             <p>Copy it from your portal (Settings › Machines › Connect this computer). It checks the release archive's SHA-256, installs for your user and starts the host at login. Without <code>--origin</code> it only installs.</p>
             <pre tabindex="0" aria-label="One-command install"><code><span class="comment"># macOS and Linux</span>
 <span class="cmd">curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/elvisbrevi/personal-teams-assistant/releases/latest/download/install.sh \
+  https://github.com/elvisbrevi/kuroko/releases/latest/download/install.sh \
   | sh -s -- --origin https://your-portal.example</span>
 <span class="comment"># Windows: install.ps1 from the same release, in PowerShell</span></code></pre>
           </article>
           <article class="platform">
             <h3>With Cargo</h3>
             <p><a href="https://github.com/cargo-bins/cargo-binstall">cargo binstall</a> downloads the prebuilt release in seconds; <code>cargo install</code> compiles it. The same build on macOS, Windows and Linux.</p>
-            <pre tabindex="0" aria-label="Install with Cargo"><code><span class="cmd">cargo binstall personal-teams-assistant</span>
+            <pre tabindex="0" aria-label="Install with Cargo"><code><span class="cmd">cargo binstall kuroko</span>
 <span class="comment"># or compiled here</span>
-<span class="cmd">cargo install personal-teams-assistant --locked</span>
-<span class="cmd">personal-teams-assistant</span>  <span class="comment"># opens it in your browser</span></code></pre>
+<span class="cmd">cargo install kuroko --locked</span>
+<span class="cmd">kuroko-host</span>  <span class="comment"># opens it in your browser</span></code></pre>
           </article>
           <article class="platform">
             <h3>On a server</h3>
-            <p>The same install, run in the foreground as a service and operated with <code>pta</code> or the portal.</p>
-            <pre tabindex="0" aria-label="Run on a server"><code><span class="cmd">personal-teams-assistant --start</span>
+            <p>The same install, run in the foreground as a service and operated with <code>kuroko</code> or the portal.</p>
+            <pre tabindex="0" aria-label="Run on a server"><code><span class="cmd">kuroko-host --start</span>
 <span class="comment"># fits a systemd service</span></code></pre>
           </article>
         </div>
         <ol class="steps">
-          <li><span class="num">1</span><h3>Configure</h3><p>Save your provider credentials, choose the reply language and model order, and register your own Entra app. Home tells you what's missing.</p><code>pta status</code></li>
-          <li><span class="num">2</span><h3>Connect</h3><p>Sign in with your Microsoft account and give the host a stable HTTPS address, for example your own Cloudflare Tunnel.</p><code>pta auth microsoft login</code></li>
-          <li><span class="num">3</span><h3>Observe</h3><p>Authorize your sources, start the assistant and review its drafts without sending anything.</p><code>pta start</code></li>
-          <li><span class="num">4</span><h3>Go live</h3><p>Once you trust the drafts, turn off observation mode.</p><code>pta mode active</code></li>
+          <li><span class="num">1</span><h3>Configure</h3><p>Save your provider credentials, choose the reply language and model order, and register your own Entra app. Home tells you what's missing.</p><code>kuroko status</code></li>
+          <li><span class="num">2</span><h3>Connect</h3><p>Sign in with your Microsoft account and give the host a stable HTTPS address, for example your own Cloudflare Tunnel.</p><code>kuroko auth microsoft login</code></li>
+          <li><span class="num">3</span><h3>Observe</h3><p>Authorize your sources, start the assistant and review its drafts without sending anything.</p><code>kuroko start</code></li>
+          <li><span class="num">4</span><h3>Go live</h3><p>Once you trust the drafts, turn off observation mode.</p><code>kuroko mode active</code></li>
         </ol>
         <p class="note">To receive messages, the machine that answers Teams must be on and reachable at a public HTTPS address. Don't run two active instances for the same account.</p>
       </div>
@@ -312,7 +312,7 @@
           <div class="closing-copy">
             <h2 id="closing-title">Start in observation mode.</h2>
             <p>Nothing is sent until you decide. Kuroko waits in the wings.</p>
-            <div class="install"><span class="prompt" aria-hidden="true">$</span><code class="cmd">cargo install personal-teams-assistant --locked</code></div>
+            <div class="install"><span class="prompt" aria-hidden="true">$</span><code class="cmd">cargo install kuroko --locked</code></div>
           </div>
         </div>
       </div>
@@ -323,15 +323,15 @@
     <div class="curtain" aria-hidden="true"></div>
     <div class="wrap footer-inner">
       <div class="brand"><img src="assets/mark-96.webp" alt="" width="32" height="32"><span>Kuroko</span></div>
-      <p class="fine">Kuroko is the Personal Teams Assistant: <code>personal-teams-assistant</code> on crates.io, operated with the <code>pta</code> CLI.</p>
+      <p class="fine">Kuroko (formerly Personal Teams Assistant): <code>kuroko</code> on crates.io, operated with the <code>kuroko</code> CLI.</p>
       <nav aria-label="Documentation">
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant#readme">README</a>
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/SECURITY.md">Security policy</a>
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/docs/architecture.md">Architecture</a>
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/desktop/skills/kuroko/SKILL.md">Agent skill</a>
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant/releases">Releases</a>
-        <a href="https://crates.io/crates/personal-teams-assistant">crates.io</a>
-        <a href="https://github.com/elvisbrevi/personal-teams-assistant/blob/main/LICENSE">MIT license</a>
+        <a href="https://github.com/elvisbrevi/kuroko#readme">README</a>
+        <a href="https://github.com/elvisbrevi/kuroko/blob/main/SECURITY.md">Security policy</a>
+        <a href="https://github.com/elvisbrevi/kuroko/blob/main/docs/architecture.md">Architecture</a>
+        <a href="https://github.com/elvisbrevi/kuroko/blob/main/desktop/skills/kuroko/SKILL.md">Agent skill</a>
+        <a href="https://github.com/elvisbrevi/kuroko/releases">Releases</a>
+        <a href="https://crates.io/crates/kuroko">crates.io</a>
+        <a href="https://github.com/elvisbrevi/kuroko/blob/main/LICENSE">MIT license</a>
       </nav>
       <p class="fine">Independent project, not affiliated with Microsoft. Microsoft Teams is a trademark of Microsoft Corporation.</p>
     </div>
