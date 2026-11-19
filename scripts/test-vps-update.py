@@ -200,7 +200,7 @@ class Updater(unittest.TestCase):
         self.assertEqual(code, 0, output)
         calls = self.calls()
         self.assertIn("cargo install personal-teams-assistant --version 0.7.29 --locked --no-default-features --force", calls)
-        self.assertIn("systemctl --user restart personal-teams-assistant-web.service", calls)
+        self.assertIn("systemctl --user restart kuroko-web.service", calls)
         self.assertEqual((self.installed(), self.running()), ("0.7.29", "0.7.29"))
         self.assertIn("updated 0.7.28 -> 0.7.29", self.history())
         self.assertEqual(self.run_update()[0], 0)

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Keeps the web portal's server on the newest crates.io release of Kuroko.
 
-A systemd user timer runs it every five minutes (scripts/systemd/, docs/delivery.md). Each run
-compares `pta --version` with the newest version in the crates.io index: of `kuroko` once it is
-published (the product continues under that name; its package keeps the `pta` and
-`personal-teams-assistant` commands, so the portal's unit keeps working), otherwise of
-`personal-teams-assistant`. When a newer one exists,
-the portal service is active and nothing is in flight (an activity review, a task being written to
-Azure DevOps, a Teams message being answered or sent), it backs up the installed binaries, installs
-that version headless with `cargo install`, restarts the portal and waits until `pta --json status`
-reports the new host with the health it had before. If a step fails it restores the backup,
+A systemd user timer (kuroko-update.timer) runs it every five minutes (scripts/systemd/,
+docs/delivery.md). Each run compares `kuroko --version` (or `pta --version` on an installation from
+before the rename) with the newest version in the crates.io index: of `kuroko`, or of
+`personal-teams-assistant` for a server that has not moved yet. When a newer one exists,
+the portal service (kuroko-web.service) is active and nothing is in flight (an activity review, a
+task being written to Azure DevOps, a Teams message being answered or sent), it backs up the
+installed binaries, installs that version headless with `cargo install`, restarts the portal and
+waits until `kuroko --json status` reports the new host with the health it had before. If a step fails it restores the backup,
 restarts, and blocks that version until a newer one is published.
 
 The profile's state counts too: while the host reports that the Microsoft session needs renewal and
@@ -52,29 +51,34 @@ CRATES = ("kuroko", "personal-teams-assistant")
 BINARIES = ("personal-teams-assistant", "pta", "kuroko", "kuroko-host")
 # Cargo's record of installed packages, restored with the binaries so it matches them.
 TRACKING = (".crates.toml", ".crates2.json")
-USER_AGENT = "personal-teams-assistant-vps-update (github.com/elvisbrevi/personal-teams-assistant)"
+USER_AGENT = "kuroko-vps-update (github.com/elvisbrevi/kuroko)"
+
+
+def setting(name, default=None):
+    """KUROKO_UPDATE_<NAME>, or the former PTA_UPDATE_<NAME> when only that one is set."""
+    return os.environ.get(f"KUROKO_UPDATE_{name}", os.environ.get(f"PTA_UPDATE_{name}", default))
 MAX_INSTALL_ATTEMPTS = 3
 
 HOME = Path.home()
-SERVICE = os.environ.get("PTA_UPDATE_SERVICE", "personal-teams-assistant-web.service")
-INDEX = os.environ.get("PTA_UPDATE_INDEX", "https://index.crates.io").rstrip("/")
+SERVICE = setting("SERVICE", "kuroko-web.service")
+INDEX = setting("INDEX", "https://index.crates.io").rstrip("/")
 CARGO_HOME = Path(os.environ.get("CARGO_HOME") or HOME / ".cargo")
 BIN = CARGO_HOME / "bin"
-STATE = Path(os.environ.get("PTA_UPDATE_STATE_DIR") or HOME / ".local/state/personal-teams-assistant-update")
+STATE = Path(setting("STATE_DIR") or HOME / ".local/state/kuroko-update")
 BACKUP = STATE / "previous"
 # A build cache of its own, outside ~/src, so dependencies are not rebuilt on every release.
-TARGET = Path(os.environ.get("PTA_UPDATE_TARGET_DIR") or HOME / ".cache/personal-teams-assistant-update/target")
+TARGET = Path(setting("TARGET_DIR") or HOME / ".cache/kuroko-update/target")
 PROFILE = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "dev.personalteams.assistant"
 DEFAULT_DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "dev.personalteams.assistant"
 GIB = 2**30
-MIN_FREE = float(os.environ.get("PTA_UPDATE_MIN_FREE_GIB", "5")) * GIB
-MAX_TARGET = float(os.environ.get("PTA_UPDATE_MAX_TARGET_GIB", "10")) * GIB
+MIN_FREE = float(setting("MIN_FREE_GIB", "5")) * GIB
+MAX_TARGET = float(setting("MAX_TARGET_GIB", "10")) * GIB
 # Parallel compiler jobs. It overrides a global `jobs = 1` in Cargo's configuration, which made a
 # release build take three times as long; two jobs stay well inside the server's memory.
-JOBS = os.environ.get("PTA_UPDATE_JOBS", "2")
-HEALTH_SECONDS = float(os.environ.get("PTA_UPDATE_HEALTH_SECONDS", "300"))
-BUSY_SECONDS = float(os.environ.get("PTA_UPDATE_BUSY_SECONDS", "900"))
-POLL_SECONDS = float(os.environ.get("PTA_UPDATE_POLL_SECONDS", "5"))
+JOBS = setting("JOBS", "2")
+HEALTH_SECONDS = float(setting("HEALTH_SECONDS", "300"))
+BUSY_SECONDS = float(setting("BUSY_SECONDS", "900"))
+POLL_SECONDS = float(setting("POLL_SECONDS", "5"))
 INSTALL_SECONDS = 60 * 60
 
 # Work a restart would interrupt, per database of each profile's data directory.
@@ -151,9 +155,14 @@ def run(args, timeout=120):
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
 
 
+def cli():
+    """The installed CLI: `kuroko`, or `pta` on an installation from before the rename."""
+    return next((BIN / name for name in ("kuroko", "pta") if (BIN / name).is_file()), BIN / "kuroko")
+
+
 def installed_version():
     try:
-        words = run([str(BIN / "pta"), "--version"], timeout=30).stdout.split()
+        words = run([str(cli()), "--version"], timeout=30).stdout.split()
     except (OSError, subprocess.TimeoutExpired):
         return None
     return parse(words[1]) if len(words) >= 2 and words[0] in ("pta", "kuroko") else None
@@ -176,7 +185,7 @@ def restart():
 def health():
     """What `pta --json status` says about the host now; empty while it is not answering."""
     try:
-        data = json.loads(run([str(BIN / "pta"), "--json", "status"], timeout=150).stdout).get("data") or {}
+        data = json.loads(run([str(cli()), "--json", "status"], timeout=150).stdout).get("data") or {}
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
         data = {}
     subscriptions = data.get("active_subscriptions") or 0

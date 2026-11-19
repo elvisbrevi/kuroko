@@ -36,10 +36,7 @@ async fn registry(lines: &[String]) -> MockServer {
 
 #[cfg(unix)]
 fn script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_support::executable(path, &format!("#!/bin/sh\n{body}\n"));
 }
 #[cfg(not(unix))]
 fn script(path: &Path, body: &str) {

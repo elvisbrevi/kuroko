@@ -137,7 +137,7 @@ def callback_paths(file, hostname):
     if "data" in value:  # pta --json envelope
         value = value["data"]
     if value.get("hostname") != hostname or not isinstance(value.get("paths"), list):
-        raise SetupError("Callbacks must come from `pta --json web callbacks` on the production Mac, for this hostname.")
+        raise SetupError("Callbacks must come from `kuroko --json web callbacks` on the production Mac, for this hostname.")
     paths = value["paths"]
     if len(paths) > 200 or len(set(paths)) != len(paths):
         raise SetupError("Invalid or duplicate callback paths.")

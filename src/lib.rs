@@ -27,6 +27,8 @@ pub mod sessions;
 pub mod simulation;
 pub mod state;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod tools;
 pub mod variables;
 pub mod work_items;

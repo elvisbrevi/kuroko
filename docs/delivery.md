@@ -119,18 +119,18 @@ The GitHub environment `release` accepts deployments only from `main`. No crates
 
 ## Server updates (`scripts/vps-update.py`)
 
-The server that runs the web portal (`personal-teams-assistant-web.service`, a systemd user service with lingering; the unit, the updater and its state keep their former names, and the unit still starts the host through its alias `personal-teams-assistant --web`) updates itself from crates.io. A systemd user timer runs the updater five minutes after each check ends. Each run:
+The server that runs the web portal (`kuroko-web.service`, a systemd user service with lingering that starts `kuroko-host --web`, and `kuroko-web-connector.service`, its Cloudflare connector; both were named `personal-teams-assistant-web*` until 2026-11-19) updates itself from crates.io. A systemd user timer runs the updater five minutes after each check ends. Each run:
 
 1. compares `pta --version` (it still calls the CLI by its alias; [known limits](architecture.md#15-known-limits)) with the newest stable, not yanked version of `kuroko` in the crates.io sparse index (of the former crate `personal-teams-assistant` while the index does not list `kuroko`); when it is not newer, it stops;
 2. skips a version it blocked earlier, and does nothing while the portal service is not active (someone stopped it);
 3. defers while work is in flight, reading each profile's databases read-only (the profile and every isolated web portal profile): an activity review running (`runs.status = 'running'`), a task being written (`entries.state` `sending`/`refining`) or a Teams message being answered or sent (`jobs.status` `processing`/`sending`/`refining`);
 4. records the portal's health with `pta --json status` and defers, restarting nothing, while it reports `microsoft_session_needs_renewal` and the assistant still runs: Entra refused the saved Microsoft session, so the assistant answers nothing and a restart would leave it stopped until someone signs in again; `history.log` gets one line for the deferral (not one per run), and the next run after a sign-in updates (hosts before 0.11.7 do not report the field and read as not needing renewal);
 5. needs 5 GiB free (it removes only its own build cache to get them);
-6. backs up the installed binaries of both packages (`personal-teams-assistant`, `pta`, `kuroko`, `kuroko-host`) and Cargo's install records, then runs `cargo install <package> --version X --locked --no-default-features --force` (the flag the server was installed with; it builds the same package as the defaults) with `CARGO_INCREMENTAL=0`, two compiler jobs (`CARGO_BUILD_JOBS=2`, overriding the server's global `jobs = 1`; `PTA_UPDATE_JOBS` changes it) and its own build cache in `~/.cache/personal-teams-assistant-update/target` (outside `~/src`, removed above 10 GiB), at low CPU and I/O priority and with `MemoryHigh=3G` on the unit; the old portal keeps serving during the build;
+6. backs up the installed binaries of both packages (`personal-teams-assistant`, `pta`, `kuroko`, `kuroko-host`) and Cargo's install records, then runs `cargo install <package> --version X --locked --no-default-features --force` (the flag the server was installed with; it builds the same package as the defaults) with `CARGO_INCREMENTAL=0`, two compiler jobs (`CARGO_BUILD_JOBS=2`, overriding the server's global `jobs = 1`; `PTA_UPDATE_JOBS` changes it) and its own build cache in `~/.cache/kuroko-update/target` (outside `~/src`, removed above 10 GiB), at low CPU and I/O priority and with `MemoryHigh=3G` on the unit; the old portal keeps serving during the build;
 7. checks for in-flight work again (waiting up to 15 minutes), restarts the service and waits up to 5 minutes for `pta --json status` to report the new host version and the health it had before (assistant running, active subscriptions and tunnel, when they were). An assistant that ran only nominally before (its Microsoft session needed renewal, or it held no active subscription while its polls failed: `active_subscriptions` 0 with a `subscription_issue`) is not required to run again; only the host and its version are;
 8. on any failure restores the backup (instantly, without rebuilding), restarts and verifies the previous version, and blocks the failed version until a newer one is published. When the previous version fails the health check for the same reason the new one did, and that reason is the assistant's (not running, no subscription or no tunnel; never the host not answering or running another version), the cause is the profile's state, for example a Microsoft session that expired between the check and the restart: `history.log` says so, the version is not blocked and the run exits 2 so a person looks at the profile; the next run no longer counts the stopped assistant and installs the version. A failed build never restarts the portal and is retried up to three times.
 
-It opens no port and holds no token: it reads only public crates.io data. Everything it does goes to the journal (`journalctl --user -u personal-teams-assistant-update`) and one line per event to `~/.local/state/personal-teams-assistant-update/history.log`; `install.log` there keeps the last build's output. Exit status 1 means an update failed and was rolled back; 2 means the rollback failed too (or reproduced the failure, which puts it down to the profile's state) and the portal needs a person (`systemctl --user --failed` lists it).
+It opens no port and holds no token: it reads only public crates.io data. Everything it does goes to the journal (`journalctl --user -u kuroko-update`) and one line per event to `~/.local/state/kuroko-update/history.log`; `install.log` there keeps the last build's output. Exit status 1 means an update failed and was rolled back; 2 means the rollback failed too (or reproduced the failure, which puts it down to the profile's state) and the portal needs a person (`systemctl --user --failed` lists it).
 
 The updater is the **operator's** workflow and is independent of the update commands a person uses on their own computer (`kuroko update status|check|stage|apply|cancel|unattended`, the GUI's Update notice; [architecture](architecture.md#installation-updates-discovery-and-staging)). Those look at the registry, build a verified pair (or, for a computer installed with the one-command installer, download that release's archive from this repository's GitHub release and check its published SHA-256) under the profile's `maintenance/` directory and, when the owner asks or turned [unattended updating](architecture.md#unattended-updating) on for that computer, replace the installed pair and restart with rollback ([applying an update](architecture.md#applying-an-update-restart-and-rollback)); they never touch this updater's backup, state or build cache, and a host started by a systemd unit (this server's) is refused by `kuroko update apply` and cannot turn unattended updating on, so the two updaters cannot race. A portal session or an ordinary account cannot reach them: the portal shows only that the operator manages the server's updates, and its computers list shows each computer's reported version and update state without a way to start an update.
 
@@ -141,10 +141,10 @@ Archive installations depend on this pipeline's assets: a computer updates to a 
 From a checkout of `main` on the server:
 
 ```sh
-install -m 0755 scripts/vps-update.py ~/.local/bin/personal-teams-assistant-update
-install -m 0644 scripts/systemd/personal-teams-assistant-update.{service,timer} ~/.config/systemd/user/
+install -m 0755 scripts/vps-update.py ~/.local/bin/kuroko-update
+install -m 0644 scripts/systemd/kuroko-update.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now personal-teams-assistant-update.timer
+systemctl --user enable --now kuroko-update.timer
 ```
 
 The updater is not part of the crate, so a release does not update it: repeat the first command after it changes.
@@ -152,13 +152,13 @@ The updater is not part of the crate, so a release does not update it: repeat th
 ### Operate it
 
 ```sh
-systemctl --user list-timers personal-teams-assistant-update.timer   # next check
-~/.local/bin/personal-teams-assistant-update --check                   # what a run would do, changing nothing
-tail ~/.local/state/personal-teams-assistant-update/history.log        # updates, deferrals, rollbacks
-~/.local/bin/personal-teams-assistant-update --rollback-drill          # install, then roll back on purpose
+systemctl --user list-timers kuroko-update.timer   # next check
+~/.local/bin/kuroko-update --check                   # what a run would do, changing nothing
+tail ~/.local/state/kuroko-update/history.log        # updates, deferrals, rollbacks
+~/.local/bin/kuroko-update --rollback-drill          # install, then roll back on purpose
 ```
 
-`--rollback-drill` installs the newest release (or reinstalls the installed version when there is none newer), verifies it, rolls back to the backed-up binaries as if it had failed, restarts and verifies them; it blocks nothing, so the next timer run installs a newer release for good. It restarts the portal twice: run it when a short interruption is acceptable. To retry a blocked version, delete its entry from `blocked` in `~/.local/state/personal-teams-assistant-update/state.json`. To pause updates: `systemctl --user stop personal-teams-assistant-update.timer`.
+`--rollback-drill` installs the newest release (or reinstalls the installed version when there is none newer), verifies it, rolls back to the backed-up binaries as if it had failed, restarts and verifies them; it blocks nothing, so the next timer run installs a newer release for good. It restarts the portal twice: run it when a short interruption is acceptable. To retry a blocked version, delete its entry from `blocked` in `~/.local/state/kuroko-update/state.json`. To pause updates: `systemctl --user stop kuroko-update.timer`.
 
 ## Account store Worker (`cloud/`)
 
@@ -202,4 +202,4 @@ The Worker of the [cloud storage design](organization-and-cloud-storage.md) is T
 The local checks of `AGENTS.md` stay as fast feedback before pushing. Manual delivery is the fallback, only when the automatic path is broken (GitHub Actions down, a release job failing for reasons outside the code):
 
 - Publish: from a clean checkout of merged `main`, check the version is missing (`curl -s -A 'kuroko (manual)' -o /dev/null -w '%{http_code}' https://crates.io/api/v1/crates/kuroko/VERSION` → `404`) and run `cargo publish --locked` with a token from `cargo login`. The next run of `release.yml` (the next push to `main`, or `workflow_dispatch`) finds that version on crates.io without its GitHub release and still tags it, writes the release and attaches the archives; that is also how the first version of a new crate, which Trusted Publishing cannot publish, gets its release.
-- Server: once the version is on crates.io, run `~/.local/bin/personal-teams-assistant-update` by hand; it applies the same precautions and rollback. Without the updater: check the databases as in step 3, `cargo install kuroko --version X --locked --no-default-features --force`, `systemctl --user restart personal-teams-assistant-web.service`, and poll `kuroko status` until it shows the version, «Assistant: running» and «Teams: 1 active subscription(s); tunnel running» (it takes some seconds).
+- Server: once the version is on crates.io, run `~/.local/bin/kuroko-update` by hand; it applies the same precautions and rollback. Without the updater: check the databases as in step 3, `cargo install kuroko --version X --locked --no-default-features --force`, `systemctl --user restart kuroko-web.service`, and poll `kuroko status` until it shows the version, «Assistant: running» and «Teams: 1 active subscription(s); tunnel running» (it takes some seconds).
