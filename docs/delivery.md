@@ -51,7 +51,7 @@ On a pull request, macOS and Windows run when any changed path is platform-sensi
 - the dependency manifest, lock and toolchain: `Cargo.toml`, `Cargo.lock` (except a version-only bump), `rust-toolchain.toml`, `build.rs`;
 - the workflows: `.github/`;
 - host startup and the Windows startup check: `src/main.rs`, `src/bin/`, `src/app.rs`, `src/app/headless.rs`, `src/app/control.rs`, `scripts/test-windows-startup.py`, and the local page's browser opener: `src/app/page.rs`;
-- the credential store, process spawning and private-file permissions: `src/security/`, `src/consumers.rs`, `src/app/cloud/restore.rs`, `src/app/azure_cli.rs`, `src/app/github.rs`, `src/app/github_cli.rs`, `src/llm/agent.rs`, `src/llm/implementation.rs`, `src/llm/implementation/`;
+- the credential store, process spawning and private-file permissions: `src/security/`, `src/consumers.rs`, `src/app/cloud/restore.rs`, `src/app/github.rs`, `src/app/github_cli.rs`, `src/llm/agent.rs`, `src/llm/implementation.rs`, `src/llm/implementation/`;
 - update staging and apply: `src/maintenance.rs`, `src/maintenance/`, `src/app/maintenance.rs`, `src/app/maintenance/`, and the archive update with this build's own executables the Windows job runs: `tests/archive_update.rs`;
 - the operator admission fixture the Windows job runs: `tests/account_authority.rs`.
 

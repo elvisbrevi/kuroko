@@ -166,10 +166,50 @@ fn passed(name: &str, windows: bool) -> bool {
         })
 }
 
+tokio::task_local! {
+    /// The credentials the host hands to the processes of one coding or planning run: the Azure
+    /// source's personal access token (`azure_devops_env`). Set only around that run's session
+    /// (`app::implementation::run`); every other process gets none.
+    pub(crate) static RUN_CREDENTIALS: Vec<(&'static str, String)>;
+}
+
+/// What a coding agent needs to reach Azure DevOps with the user's personal access token and no
+/// interactive sign-in: the Azure DevOps CLI extension and `sag` read `AZURE_DEVOPS_EXT_PAT`, and
+/// git sends it as the authorization header to Azure DevOps hosts only.
+pub(crate) fn azure_devops_env(token: &str) -> Vec<(&'static str, String)> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let header = format!(
+        "AUTHORIZATION: Basic {}",
+        STANDARD.encode(format!(":{token}"))
+    );
+    vec![
+        ("AZURE_DEVOPS_EXT_PAT", token.to_owned()),
+        ("GIT_CONFIG_COUNT", "2".into()),
+        (
+            "GIT_CONFIG_KEY_0",
+            "http.https://dev.azure.com/.extraheader".into(),
+        ),
+        ("GIT_CONFIG_VALUE_0", header.clone()),
+        (
+            "GIT_CONFIG_KEY_1",
+            "http.https://*.visualstudio.com/.extraheader".into(),
+        ),
+        ("GIT_CONFIG_VALUE_1", header),
+    ]
+}
+
 pub(crate) fn child_env(binary: &Path) -> Vec<(OsString, OsString)> {
     let mut env: Vec<(OsString, OsString)> = std::env::vars_os()
         .filter(|(name, _)| name.to_str().is_some_and(|n| passed(n, cfg!(windows))))
         .collect();
+    // Inside a run, its own credentials; the host's environment never passes them.
+    let _ = RUN_CREDENTIALS.try_with(|credentials| {
+        env.extend(
+            credentials
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        )
+    });
     let mut path: Vec<PathBuf> = binary.parent().map(Path::to_path_buf).into_iter().collect();
     if let Some(inherited) = std::env::var_os("PATH") {
         path.extend(std::env::split_paths(&inherited).filter(|d| d.is_absolute()));
@@ -1018,6 +1058,37 @@ mod tests {
         ] {
             assert!(!passed(name, true) && !passed(name, false), "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_azure_devops_token_reaches_only_the_processes_of_its_run() {
+        let binary = Path::new("/usr/bin/true");
+        let named = |env: &[(OsString, OsString)], name: &str| {
+            env.iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+        };
+        assert_eq!(named(&child_env(binary), "AZURE_DEVOPS_EXT_PAT"), None);
+        let env = RUN_CREDENTIALS
+            .scope(azure_devops_env("synthetic-pat"), async {
+                child_env(binary)
+            })
+            .await;
+        assert_eq!(
+            named(&env, "AZURE_DEVOPS_EXT_PAT").as_deref(),
+            Some("synthetic-pat")
+        );
+        // git sends it only to Azure DevOps hosts, as Basic authentication.
+        assert_eq!(named(&env, "GIT_CONFIG_COUNT").as_deref(), Some("2"));
+        assert_eq!(
+            named(&env, "GIT_CONFIG_KEY_0").as_deref(),
+            Some("http.https://dev.azure.com/.extraheader")
+        );
+        assert_eq!(
+            named(&env, "GIT_CONFIG_VALUE_0").as_deref(),
+            Some("AUTHORIZATION: Basic OnN5bnRoZXRpYy1wYXQ=")
+        );
+        assert_eq!(named(&child_env(binary), "GIT_CONFIG_COUNT"), None);
     }
 
     #[test]

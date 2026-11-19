@@ -55,30 +55,9 @@ pub(super) const TOOLS: &[Tool] = &[
         schema: none,
     },
     Tool {
-        name: "begin_azure_cli_login",
-        title: "Start Azure CLI sign-in",
-        description: "Start Microsoft device-code sign-in on this profile's host. Return only the public verification page and user code; the user completes sign-in in their browser.",
-        effect: Effect::Local,
-        schema: none,
-    },
-    Tool {
-        name: "finish_azure_cli_login",
-        title: "Check Azure CLI sign-in",
-        description: "Check pending device-code sign-in and verify the resulting Azure DevOps session. Returns only account metadata, never tokens.",
-        effect: Effect::Local,
-        schema: none,
-    },
-    Tool {
-        name: "cancel_azure_cli_login",
-        title: "Cancel Azure CLI sign-in",
-        description: "Stop this profile's pending Azure CLI sign-in process. Does not log out an existing session.",
-        effect: Effect::Local,
-        schema: none,
-    },
-    Tool {
         name: "azure_cli_status",
-        title: "Azure CLI session",
-        description: "Read whether Azure CLI is installed and can obtain an Azure DevOps Entra session for this profile. Returns account and tenant metadata only, never tokens. Authentication does not prove project write permissions.",
+        title: "Azure DevOps access",
+        description: "Read whether Azure DevOps accepts the enabled Azure source's personal access token, which its reads and the confirmed writes (requests, reviewed child tasks) use; there is no interactive sign-in. state: authenticated, rejected (expired or revoked: store a new PAT in the source's variable), not_configured or unavailable. Returns the account name only, never the token. Authentication does not prove project write permissions.",
         effect: Effect::Read,
         schema: none,
     },
@@ -1085,7 +1064,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "implementation_create",
         title: "Create reviewed child work items",
-        description: "Create the explicitly selected and reviewed children of this new implementation plan, in their order, each with Predecessor links to the earlier children its depends_on names (GitHub: blocked by); a child may depend only on earlier children that are also created. Azure requires its authenticated Azure CLI session; GitHub requires Issues write access. Never replays a submitted or uncertain plan.",
+        description: "Create the explicitly selected and reviewed children of this new implementation plan, in their order, each with Predecessor links to the earlier children its depends_on names (GitHub: blocked by); a child may depend only on earlier children that are also created. Azure writes with the enabled Azure source's personal access token (Work Items Read & write); GitHub requires Issues write access. Never replays a submitted or uncertain plan.",
         effect: Effect::External,
         schema: || {
             object(
@@ -2249,7 +2228,7 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
     }
     match name {
         "list_azure_hus" | "list_azure_tasks" | "list_github_epics" | "list_github_issues" | "get_azure_hu" | "get_azure_task" | "get_github_epic" | "get_github_issue" | "open_work_item" => ipc(name, args.clone()).await,
-        "azure_cli_status" | "github_cli_status" | "begin_azure_cli_login" | "cancel_azure_cli_login" => ipc(name, args.clone()).await,
+        "azure_cli_status" | "github_cli_status" => ipc(name, args.clone()).await,
         "variable_list" | "variable_entry_status" | "variable_entry_cancel" | "variable_sync" | "variable_sync_status" | "portable_sync" | "portable_status" | "account_sync" => ipc(name, args.clone()).await,
         "setup_status" => ipc("setup_readiness", args.clone()).await,
         "account_records" => ipc("portable_records", args.clone()).await,
@@ -2329,10 +2308,6 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
             let mut args = args.clone();
             args.as_object_mut().unwrap().remove("confirmed");
             ipc(name, args).await
-        }
-        "finish_azure_cli_login" => {
-            let reply = call(name, args.clone(), None).await.map_err(|_| "The host could not be reached; check kuroko status.".to_string())?;
-            if reply.code == "authorization_pending" { Ok(reply.data) } else { data(Ok(reply)) }
         }
         "status" => {
             let s = ipc("snapshot", json!({})).await?;

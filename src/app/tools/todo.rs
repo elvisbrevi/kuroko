@@ -12,8 +12,9 @@ use crate::{
 };
 use serde_json::Value;
 
-/// The enabled Azure source the implementation writes through: its read key, catalog and the
-/// user's work item guides.
+/// The enabled Azure source the implementation reads and writes through: its personal access
+/// token (`read_key`, which also authorizes the confirmed writes), catalog and the user's work
+/// item guides.
 struct Azure {
     client: reqwest::Client,
     read_key: String,
@@ -53,6 +54,16 @@ fn azure(state: &DesktopState, source: Option<&str>) -> anyhow::Result<Azure> {
         catalog: tool.catalog(&map.repositories)?,
         guides: map.work_item_guides,
     })
+}
+
+/// The client, personal access token and catalog of the enabled Azure source (`source`, or the
+/// only one enabled), for checking whether Azure DevOps accepts the token.
+pub(in crate::app) fn azure_credential(
+    state: &DesktopState,
+    source: Option<&str>,
+) -> anyhow::Result<(reqwest::Client, String, String)> {
+    let azure = azure(state, source)?;
+    Ok((azure.client, azure.read_key, azure.catalog))
 }
 
 /// The enabled Azure source whose catalog names an organization (`https://dev.azure.com/NAME`):
@@ -248,11 +259,9 @@ pub(in crate::app) async fn create_child(
         return github::create_child(parent, child).await;
     }
     let azure = azure(state, source)?;
-    let write_session = super::super::azure_cli::require().await?;
     crate::ado::implementation::create_child(
         &azure.client,
         &azure.read_key,
-        write_session.token(),
         &azure.catalog,
         &azure.guides,
         parent,

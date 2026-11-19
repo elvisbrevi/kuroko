@@ -31,7 +31,7 @@ use tokio::sync::{Mutex, oneshot, watch};
 mod activity;
 mod agent;
 mod authority;
-mod azure_cli;
+mod azure_pat;
 pub mod cli;
 mod cloud;
 mod consumers;
@@ -112,7 +112,6 @@ pub(crate) struct DesktopState {
     phase: watch::Sender<AssistantPhase>,
     github_login: Mutex<Option<github::Pending>>,
     github_finish: Mutex<Option<tokio::task::JoinHandle<std::result::Result<(), String>>>>,
-    azure_login: Mutex<Option<azure_cli::Pending>>,
     microsoft_login: Mutex<Option<tokio::task::JoinHandle<std::result::Result<(), String>>>>,
     microsoft_redirect: Mutex<Option<String>>,
     github_api: Mutex<()>,
@@ -194,9 +193,6 @@ impl std::error::Error for Rejected {}
 fn fail<E: Into<anyhow::Error>>(error: E) -> String {
     let error = error.into();
     diagnostics::capture_error(&error, std::panic::Location::caller());
-    if let Some(error) = error.downcast_ref::<azure_cli::LoginError>() {
-        return format!("[not_ready] {error}");
-    }
     if let Some(message) = error.downcast_ref::<SetupError>() {
         return format!("[not_ready] {}", message.0);
     }
@@ -872,7 +868,6 @@ pub(crate) fn init_state(config_dir: &Path, data_dir: &Path) -> Result<DesktopSt
         phase: watch::Sender::new(AssistantPhase::Stopped),
         github_login: Mutex::new(None),
         github_finish: Mutex::new(None),
-        azure_login: Mutex::new(None),
         microsoft_login: Mutex::new(None),
         microsoft_redirect: Mutex::new(None),
         github_api: Mutex::new(()),

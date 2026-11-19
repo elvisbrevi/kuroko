@@ -10,7 +10,7 @@ import { todoTypes } from './todo.js';
 import { copy, link } from './markdown.js';
 import { openAgentSession, sessionDestination, sessionIsMobile, sessionLifeBadge } from './sessions.js';
 import { implementationEfforts, implementationModels, implementationReady } from './implementation.js';
-import { loadAzureCliStatus, loadGithubCliStatus, providerNames } from './home.js';
+import { loadAzureDevopsStatus, loadGithubCliStatus, providerNames } from './home.js';
 import { effortNames } from './settings-models.js';
 import { failureText } from './run-states.js';
 
@@ -81,13 +81,13 @@ async function openRequest(draft = null) {
         result.append(inspect);
       }
     });
-    const sessionStatus = el('button', { type: 'button', class: 'secondary', textContent: azure ? t('Check Azure CLI status') : t('Check GitHub CLI status') });
-    sessionStatus.onclick = () => { showTab('overview', azure ? 'azure-cli-status' : 'github-cli-status'); azure ? loadAzureCliStatus() : loadGithubCliStatus(); };
+    const sessionStatus = el('button', { type: 'button', class: 'secondary', textContent: azure ? t('Check Azure DevOps status') : t('Check GitHub CLI status') });
+    sessionStatus.onclick = () => { showTab('overview', azure ? 'azure-devops-status' : 'github-cli-status'); azure ? loadAzureDevopsStatus() : loadGithubCliStatus(); };
     $('#request-content').replaceChildren(el('div', { class: 'panel' },
       el('div', { class: 'field-block' }, el('label', { id: 'request-target-label', textContent: azure ? t('Project') : t('Repository') }), target), kind,
       el('label', {}, t('Request context'), context),
       el('div', { class: 'grid' }, el('label', {}, t('CLI'), provider), el('label', {}, t('Model'), model), el('label', {}, t('Effort'), effort)),
-      catalog.write_ready === false ? el('div', { class: 'callout warn' }, el('p', { textContent: azure ? t('Select Azure CLI on Home to sign in with Microsoft in your browser.') : t('Sign in with gh auth login on the machine running this app, then refresh GitHub CLI status.') }), sessionStatus) : null,
+      catalog.write_ready === false ? el('div', { class: 'callout warn' }, el('p', { textContent: azure ? t("Azure DevOps did not accept the Azure source's personal access token. Store a valid one with Work Items (Read & write) in that source's variable.") : t('Sign in with gh auth login on the machine running this app, then refresh GitHub CLI status.') }), sessionStatus) : null,
       !catalog.targets.length ? el('p', { class: 'callout warn', textContent: t('No destinations are available. Check the selected source or GitHub CLI session.') }) : null,
       !catalog.providers.length ? el('p', { class: 'callout warn', textContent: t('No coding CLI installed on this machine') }) : null),
       el('div', { class: 'actions request-footer' }, cancel, start), result);

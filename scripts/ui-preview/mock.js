@@ -180,9 +180,9 @@
     update: local ? { state: 'staged', pending: '0.11.6', failed: null, unattended: true }
       : window.__ptaMachineOlder ? { state: window.__ptaMachineUpgraded ? 'staging' : 'current', pending: null, failed: null, unattended: false } : null });
   let machineSettings = { id: machineId, name: 'Preview server', coordinator: null, roots: ['/work'] };
-  const azureCli = () => {
-    const state = window.__ptaAzureCliState || (scenario === 'fresh' ? 'not_authenticated' : 'authenticated');
-    return { state, authenticated: state === 'authenticated', user: state === 'not_installed' ? null : 'ana@contoso.example', tenant: '11111111-1111-4111-8111-111111111111' };
+  const azureDevops = () => {
+    const state = window.__ptaAzureDevopsState || (scenario === 'fresh' ? 'not_configured' : 'authenticated');
+    return { state, authenticated: state === 'authenticated', user: state === 'authenticated' ? 'Ana Example' : null, method: 'personal_access_token' };
   };
   const githubCli = () => {
     const state = window.__ptaGithubCliState || (scenario === 'fresh' ? 'not_authenticated' : 'authenticated');
@@ -715,15 +715,7 @@
   };
   const handlers = {
     github_cli_status: () => githubCli(),
-    azure_cli_status: () => { window.__ptaAzureCliChecks = (window.__ptaAzureCliChecks || 0) + 1; return azureCli(); },
-    begin_azure_cli_login: async () => { await delay(window.__ptaAzureLoginDelay || 0); window.__ptaAzureLoginPending = true; return { verification_uri: 'https://microsoft.com/devicelogin', user_code: 'ABCD12345' }; },
-    finish_azure_cli_login: () => {
-      if (window.__ptaAzureLoginError) throw new Error('Azure CLI sign-in failed or expired. Select Azure CLI to try again.');
-      if (window.__ptaAzureCliState === 'authenticated') return azureCli();
-      return { pending: true, provider: 'azure_cli' };
-    },
-    cancel_azure_cli_login: () => { window.__ptaAzureLoginPending = false; return { cancelled: true }; },
-    open_azure_cli_login: () => ({ url: 'https://microsoft.com/devicelogin' }),
+    azure_cli_status: () => { window.__ptaAzureDevopsChecks = (window.__ptaAzureDevopsChecks || 0) + 1; return azureDevops(); },
     machine_browse: async args => {
       window.__ptaLastMachineBrowse = args.path;
       await delay(window.__ptaBrowseDelay || 0);
@@ -791,7 +783,7 @@
       return { outcome: 'staging', target: '0.11.6', ...(window.__ptaMachineUpgradeWaits ? { waiting_for_archive: { version: '0.11.6' } } : {}) };
     },
     machine_teams: args => { if (window.__ptaTeamsMachineError) throw new Error('Machine selection failed.'); teamsMachine = args.machine; window.__ptaTeamsMachine = args.machine; return { handover_pending: true }; },
-    implementation_request_catalog: args => ({ write_ready: args.provider === 'azure' ? azureCli().authenticated : githubCli().authenticated, azure_cli: args.provider === 'azure' ? azureCli() : null, github_cli: args.provider === 'github' ? githubCli() : null, targets: requestTargets(args), recent: requestTargets(args).slice(0, 3).reverse(), providers: providers.providers.filter(p => p.transport === 'cli' && p.available) }),
+    implementation_request_catalog: args => ({ write_ready: args.provider === 'azure' ? azureDevops().authenticated : githubCli().authenticated, azure_cli: args.provider === 'azure' ? azureDevops() : null, github_cli: args.provider === 'github' ? githubCli() : null, targets: requestTargets(args), recent: requestTargets(args).slice(0, 3).reverse(), providers: providers.providers.filter(p => p.transport === 'cli' && p.available) }),
     implementation_request_start: args => {
       window.__ptaLastRequestCreation = structuredClone(args);
       const existing = requestRuns.find(r => r.id === args.id);
@@ -1238,7 +1230,7 @@
       ],
       variables: structuredClone(variables),
       settings: { mode: 'replica', state: 'synced', local_changes: false },
-      remains_local: ['Microsoft Teams sign-in', 'Coding-provider sign-ins (Codex, Claude Code, OpenCode)', 'GitHub and Azure CLI sessions', 'Repository folders and allowed directories of this computer'],
+      remains_local: ['Microsoft Teams sign-in', 'Coding-provider sign-ins (Codex, Claude Code, OpenCode)', 'GitHub CLI session', 'Repository folders and allowed directories of this computer'],
       limits: { items: 8 },
     }),
     variable_migration_run: args => {
@@ -1304,7 +1296,7 @@
     const handler = handlers[request.method];
     if (!handler) return { ok: false, code: 'not_ready', message: `mock: ${request.method} not implemented` };
     const data = await handler(request.args || {});
-    return reply(data, ['finish_azure_cli_login', 'machine_login_finish'].includes(request.method) && data.pending ? { ok: false, code: 'authorization_pending' } : {});
+    return reply(data, ['machine_login_finish'].includes(request.method) && data.pending ? { ok: false, code: 'authorization_pending' } : {});
   };
   {
     // The owner's local page (src/app/page.rs): the control contract over fetch with a session

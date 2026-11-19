@@ -1043,7 +1043,6 @@ fn browser_allows_shared_implementation_tools_but_rejects_internal_worker_operat
         (super::super::implementation::handles(tool.name)
             && !tool.name.starts_with("machine_login"))
             || matches!(tool.name, "azure_cli_status" | "github_cli_status")
-            || tool.name.ends_with("azure_cli_login")
     }) {
         assert!(
             portal

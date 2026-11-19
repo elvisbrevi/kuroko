@@ -311,6 +311,13 @@ pub(crate) struct Launch {
     pub(crate) round: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) resume: Option<String>,
+    /// The ID (never the value) of the variable holding the Azure source's personal access
+    /// token, for an Azure work item. The machine that runs the agent resolves it there, from its
+    /// own store or the coordinator's, and hands it to that run's coding process only
+    /// (`AZURE_DEVOPS_EXT_PAT` and git's header for Azure DevOps), so agents never need an
+    /// interactive Azure sign-in. A worker that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    azure_token: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Run {
@@ -915,6 +922,11 @@ fn build_launch(
             .into_iter()
             .collect()
     };
+    let azure_token = if request.item.provider == "azure" {
+        azure_token(host, request.item.source.as_deref())
+    } else {
+        None
+    };
     Ok(Launch {
         id,
         planning,
@@ -937,7 +949,47 @@ fn build_launch(
         allow: Vec::new(),
         round: false,
         resume: None,
+        azure_token,
     })
+}
+
+/// The variable that holds the enabled Azure source's personal access token (`source`, or the
+/// first enabled one), by ID: the `[secrets]` name its reference maps to, found in this
+/// installation's catalog of the account's variables.
+fn azure_token(host: &Host, source: Option<&str>) -> Option<String> {
+    let config = host.state.settings.config().ok()?;
+    let map = host.state.settings.map().ok()?;
+    let name = map
+        .resources
+        .iter()
+        .filter(|r| r.enabled && source.is_none_or(|id| r.id == id))
+        .find_map(|r| match &r.access {
+            crate::knowledge::Access::Tool {
+                tool: crate::tools::ToolSpec::AzureDevopsStatus { secret_ref, .. },
+            } => config.secrets.get(secret_ref).cloned(),
+            _ => None,
+        })?;
+    let entries = match link(&host.state).ok()? {
+        Some(link) => super::variables::cached(host, &link),
+        None => host.state.variables.store(host).ok()?.list(None).ok()?,
+    };
+    entries
+        .into_iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(&name))
+        .map(|entry| entry.id)
+}
+
+/// The Azure source's personal access token for this run's coding process, resolved on this
+/// machine now by the variable ID the launch names. A launch without one, or a token that cannot
+/// be resolved, gives the run none: the agent then has only its machine's own credentials.
+async fn run_credentials(host: &Host, launch: &Launch) -> Vec<(&'static str, String)> {
+    let Some(entry) = launch.azure_token.as_deref() else {
+        return Vec::new();
+    };
+    match super::consumers::resolve_entry(host, entry, None).await {
+        Ok((_, value)) => crate::llm::agent::azure_devops_env(value.expose()),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// An implementation run the workflow engine asks for: an ID it chose and recorded before
@@ -1480,75 +1532,80 @@ async fn run(host: &Arc<Host>, launch: Launch) {
     };
     let remote = remote_observer(host, &launch.id);
     let name = run_name(&launch);
-    let result = if launch.planning {
-        async {
-            let plan = crate::llm::implementation::plan(
-                (&request.provider, &request.model, &request.effort),
-                &request.directories,
-                &instructions,
-                &input,
-                &name,
-                &observer,
-                remote.clone(),
-            )
-            .await?;
-            let children = plan["children"].as_array().context("Invalid child plan.")?;
-            ensure!(
-                (1..=20).contains(&children.len()),
-                "Invalid child plan size."
-            );
-            for child in children {
-                validate_child(child)?;
+    let credentials = run_credentials(host, &launch).await;
+    let result = crate::llm::agent::RUN_CREDENTIALS
+        .scope(credentials, async {
+            if launch.planning {
+                async {
+                    let plan = crate::llm::implementation::plan(
+                        (&request.provider, &request.model, &request.effort),
+                        &request.directories,
+                        &instructions,
+                        &input,
+                        &name,
+                        &observer,
+                        remote.clone(),
+                    )
+                    .await?;
+                    let children = plan["children"].as_array().context("Invalid child plan.")?;
+                    ensure!(
+                        (1..=20).contains(&children.len()),
+                        "Invalid child plan size."
+                    );
+                    for child in children {
+                        validate_child(child)?;
+                    }
+                    validate_order(children)?;
+                    Ok((true, String::new(), Some(plan), Vec::new(), None))
+                }
+                .await
+            } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
+                // One more turn of the session that coded the child: it has the item, the
+                // instructions and its earlier work; this turn gets the fixed rules and the round.
+                let prompt = format!(
+                    "{}\n{}",
+                    crate::llm::implementation::code_rules(&launch.allow),
+                    request.context
+                );
+                crate::llm::implementation::execute_resumed(
+                    &request.provider,
+                    &request.model,
+                    &request.effort,
+                    &request.directories,
+                    &prompt,
+                    &launch.allow,
+                    session,
+                    &name,
+                    &observer,
+                    remote,
+                )
+                .await
+                .map(|outcome| {
+                    let failure = outcome.failure;
+                    (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                })
+            } else {
+                let prompt =
+                    crate::llm::implementation::coding_prompt(&instructions, &input, &launch.allow);
+                crate::llm::implementation::execute(
+                    &request.provider,
+                    &request.model,
+                    &request.effort,
+                    &request.directories,
+                    &prompt,
+                    &launch.allow,
+                    &name,
+                    &observer,
+                    remote,
+                )
+                .await
+                .map(|outcome| {
+                    let failure = outcome.failure;
+                    (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                })
             }
-            validate_order(children)?;
-            Ok((true, String::new(), Some(plan), Vec::new(), None))
-        }
-        .await
-    } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
-        // One more turn of the session that coded the child: it has the item, the
-        // instructions and its earlier work; this turn gets the fixed rules and the round.
-        let prompt = format!(
-            "{}\n{}",
-            crate::llm::implementation::code_rules(&launch.allow),
-            request.context
-        );
-        crate::llm::implementation::execute_resumed(
-            &request.provider,
-            &request.model,
-            &request.effort,
-            &request.directories,
-            &prompt,
-            &launch.allow,
-            session,
-            &name,
-            &observer,
-            remote,
-        )
-        .await
-        .map(|outcome| {
-            let failure = outcome.failure;
-            (outcome.ok, outcome.text, None, outcome.prompts, failure)
         })
-    } else {
-        let prompt =
-            crate::llm::implementation::coding_prompt(&instructions, &input, &launch.allow);
-        crate::llm::implementation::execute(
-            &request.provider,
-            &request.model,
-            &request.effort,
-            &request.directories,
-            &prompt,
-            &launch.allow,
-            &name,
-            &observer,
-            remote,
-        )
-        .await
-        .map(|outcome| {
-            let failure = outcome.failure;
-            (outcome.ok, outcome.text, None, outcome.prompts, failure)
-        })
-    };
+        .await;
     use crate::llm::implementation::{Cause, Failure};
     let (status, output, plan, prompts, failure) = match result {
         Ok((ok, output, plan, prompts, failure)) => {
@@ -1753,7 +1810,7 @@ async fn create(host: &Arc<Host>, args: &Value) -> Result<Value> {
     }
     validate_order(children)?;
     if selection.provider == "azure" {
-        super::azure_cli::require().await?;
+        super::azure_pat::require(&host.state, selection.source.as_deref()).await?;
     }
     // Every type and field value is checked against the live definition before the first write.
     for child in children {

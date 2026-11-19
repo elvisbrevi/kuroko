@@ -1118,7 +1118,8 @@ async fn execute_allowing(
             opencode_config(planning, allow).to_string(),
         );
     }
-    // A run gets the user's CLI login, never the assistant's Graph/ADO credentials.
+    // A run gets the user's CLI login and its own Azure DevOps token (`agent::RUN_CREDENTIALS`),
+    // never the assistant's Graph credentials.
     let mut child = command
         .spawn()
         .map_err(|_| Failed::with(Cause::CliMissing, "Coding process did not start."))?;

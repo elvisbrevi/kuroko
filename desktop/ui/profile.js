@@ -5,7 +5,7 @@ import { $, field, lines } from './dom.js';
 import { current, dirty, live, loadedProfile, setCurrent, setDirty, setLive, setLoadedProfile, tab } from './state.js';
 import { busy, done } from './notices.js';
 import { dirtyGroups, renderSavebar } from './nav.js';
-import { loadAzureCliStatus, loadGithubCliStatus, renderLive, serverHost, urlReady } from './home.js';
+import { loadAzureDevopsStatus, loadGithubCliStatus, renderLive, serverHost, urlReady } from './home.js';
 import { collectMessageStyle, renderChatList, renderMessageStyle } from './settings-general.js';
 import { collectEmbeddings, llmRows, loadChain, loadSelfChat, renderEmbeddings } from './settings-models.js';
 import { collectRegistrationSettings, renderRegistrationSettings } from './settings-daily.js';
@@ -85,7 +85,7 @@ async function reload() {
   renderLive();
   renderRepositories(); renderResources(); renderContexts(); renderQuestions(); renderPeople(); renderOrganization(); renderEntries(); renderGuides(); renderAgentPrompts(); renderNoteContexts(); renderChatSources();
   discardWorkflowSettings();
-  loadAzureCliStatus(); loadGithubCliStatus();
+  loadAzureDevopsStatus(); loadGithubCliStatus();
   await Promise.all([loadChain(), loadSelfChat()]);
 }
 

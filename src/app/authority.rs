@@ -204,10 +204,6 @@ pub(super) fn check_shared_operation(request: &control::Request) -> Result<()> {
             request.method.as_str(),
             "azure_cli_status"
                 | "github_cli_status"
-                | "begin_azure_cli_login"
-                | "open_azure_cli_login"
-                | "finish_azure_cli_login"
-                | "cancel_azure_cli_login"
                 | "clone_github_repository"
                 | "update_github_repository"
                 | "implementation_request_catalog"

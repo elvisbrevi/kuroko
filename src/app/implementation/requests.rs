@@ -91,8 +91,10 @@ pub(super) async fn operate(host: &Arc<Host>, method: &str, args: &Value) -> Res
             catalog
                 .providers
                 .retain(|p| p.transport == "cli" && p.available);
+            // `azure_cli` keeps its name for existing clients: whether Azure DevOps accepts the
+            // source's personal access token.
             let azure_cli = if provider == "azure" {
-                Some(super::super::azure_cli::status().await)
+                Some(super::super::azure_pat::status(&host.state, args["source"].as_str()).await)
             } else {
                 None
             };
@@ -188,11 +190,13 @@ pub(super) async fn operate(host: &Arc<Host>, method: &str, args: &Value) -> Res
                 &request.effort,
             )
             .await?;
-            // Resolve the process type and check the Azure CLI session before starting the model.
+            // Resolve the process type and check that Azure DevOps accepts the source's personal
+            // access token before starting the model.
             let prepared = if provider == "azure" {
                 let (client, key, catalog) =
                     azure(&host.state, request.target["source"].as_str().unwrap())?;
-                super::super::azure_cli::require().await?;
+                super::super::azure_pat::require(&host.state, request.target["source"].as_str())
+                    .await?;
                 crate::ado::implementation::request_target(
                     &client,
                     &key,
@@ -289,11 +293,10 @@ async fn run(host: &Arc<Host>, request: Request, prepared: Value, directory: Pat
             available.contains(&request.target),
             "The destination is no longer available."
         );
-        let write_session = if provider == "azure" {
-            Some(super::super::azure_cli::require().await?)
-        } else {
-            None
-        };
+        if provider == "azure" {
+            super::super::azure_pat::require(&host.state, request.target["source"].as_str())
+                .await?;
+        }
         // Field values are checked against the guide and the live type before anything is sent;
         // GitHub issues take none.
         let fields = if provider == "azure" {
@@ -320,10 +323,11 @@ async fn run(host: &Arc<Host>, request: Request, prepared: Value, directory: Pat
             let _guard = host.state.github_api.lock().await;
             github::create_request(request.target["project"].as_str().unwrap(), &draft).await?
         } else {
-            let (client, _, _) = azure(&host.state, request.target["source"].as_str().unwrap())?;
+            let (client, key, _) =
+                azure(&host.state, request.target["source"].as_str().unwrap())?;
             crate::ado::implementation::create_request(
                 &client,
-                write_session.as_ref().unwrap().token(),
+                &key,
                 &prepared,
                 &draft,
                 fields,

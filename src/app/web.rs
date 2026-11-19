@@ -796,11 +796,6 @@ async fn forward(
             )
         });
     }
-    if request.method == "open_azure_cli_login" {
-        return Ok(control::Reply::success(
-            json!({"url":"https://microsoft.com/devicelogin"}),
-        ));
-    }
     if request.method == "connect_microsoft" {
         request.args["open"] = json!(false);
     }
