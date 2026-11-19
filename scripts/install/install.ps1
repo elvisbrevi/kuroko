@@ -91,7 +91,7 @@ $Provenance = $Repository
 $RecordRepository = "https://github.com/$Repository"
 # The skill directory and the MCP server name registered with coding CLIs keep the former name
 # until a later release migrates the clients' configuration.
-$Integration = $Legacy
+$Integration = $Product
 $Record = 'install.json'
 $Target = 'x86_64-pc-windows-msvc'
 
@@ -518,8 +518,9 @@ function Remove-UserPath {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both keep
-# the name they had before the rename ($Integration).
+# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both are
+# named `kuroko` ($Integration); a registration under the former name is left for
+# `kuroko mcp migrate`, and installing the skill beside its former folder removes that copy.
 
 function Register-Integrations {
     $config = Get-CliReply 'mcp' 'config'
@@ -545,6 +546,8 @@ function Register-Integrations {
         }
         if ((Invoke-Native $tool mcp get $Integration).Code -eq 0) {
             Say "${tool}: $Integration is already registered as an MCP server."
+        } elseif ((Invoke-Native $tool mcp get $Legacy).Code -eq 0) {
+            Say "${tool}: the MCP server is registered under its former name $Legacy; run '$Cli mcp migrate --confirmed' to move it."
         } else {
             if ((Invoke-Native $tool @mcp).Code -eq 0) { Say "${tool}: registered '$command mcp' as the MCP server $Integration." } else { Warn "${tool}: registering the MCP server failed." }
         }
