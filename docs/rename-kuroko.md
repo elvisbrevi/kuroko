@@ -1,8 +1,10 @@
 # Renaming the product to Kuroko
 
-Status: the owner approved this inventory and the revised order (§2) on 2026-11-18. **Phase 1, the
-bridge release `personal-teams-assistant` 0.17.0**, is published (§6); **phase 2, `kuroko` 0.18.0**,
-is in progress (§7).
+Status: the owner approved this inventory and the revised order (§2) on 2026-11-18. Phases 0–4 are
+delivered: the bridge release `personal-teams-assistant` 0.17.0 (§6), the crate `kuroko` 0.18.0
+(§7), service entries and command names in 0.18.1 (§8), commands, MCP and skill in 0.18.2 (§9) and
+the domains in 0.18.3 (§10). **Phase 5** is the documentation pass (§11). The aliases retire in
+0.21.0.
 
 The visible brand has been Kuroko since 0.16.0 (#321). This plan renames the crate, the binaries,
 the CLI, MCP, the skill, the environment variables, the service entries, the URLs and the text, so
@@ -396,3 +398,35 @@ through its own updater. The Mac has it prepared and waits for a person to choos
   for no visible gain) and a new portal hostname (the iPhone PWA would have to be added again).
 - Checked: Workers Builds kept deploying `site/` after the repository rename (the landing served
   the phase 3 links).
+
+## 11. Phase 5: documentation
+
+A documentation-only pass (no code, no version):
+
+- `docs/architecture.md` describes the crate `kuroko`, the executables `kuroko` and `kuroko-host`
+  with their aliases, the commands, the archive names, the install scripts' roots, records and PATH
+  entries, `KUROKO_*` variables and `Kuroko - …` sessions; §15 «Former names» lists what is an alias,
+  what is kept for good and what must be true before 0.21.0; §13 adds the recipe for a new
+  environment variable.
+- `README.md`, `CONTEXT.md`, `AGENTS.md`, `SECURITY.md`, `docs/delivery.md`,
+  `docs/private-deployment.md`, `docs/organization-and-cloud-storage.md`, `docs/questions.md`,
+  `docs/ui-design-conventions.md` and `.agents/skills/save-knowledge/SKILL.md` name the commands
+  `kuroko` and `kuroko-host`, the crate `kuroko` and the repository `elvisbrevi/kuroko`.
+- Kept as written, because they are real names: the invariants of §3 (profile, Keychain service,
+  credential and handover names, cryptographic labels, the Worker and its Access apps, the cloud
+  User-Agent, `pta-band`, the service `MARKER`), the server's `personal-teams-assistant-web*.service`
+  and `~/.local/bin/personal-teams-assistant-update` (which still starts the alias and calls `pta`),
+  and the development and test variables that exist only as `PTA_*`.
+
+Remaining, optional or tied to 0.21.0:
+
+- Renaming the server's units and updater to `kuroko-*` (decision 5), or at least pointing
+  `personal-teams-assistant-web.service` at `kuroko-host --web` and the updater at `kuroko`.
+- The one-command installers still register the skill and the MCP server under
+  `personal-teams-assistant` (`INTEGRATION` in `install.sh`, `$Integration` in `install.ps1`).
+- The scripts that still run the CLI or host by a former name (`configure-cloud-access.py`,
+  `rehearse-cloud-migration.py`, `dev-host.sh`, `vps-update.py`).
+- Renaming, or keeping on purpose, the `PTA_*` variables that have no `KUROKO_*` name yet
+  (development, tests and the server updater's `PTA_UPDATE_*`).
+- Retiring the aliases in 0.21.0 once every machine's service entry and MCP configuration has
+  migrated (architecture §15).

@@ -59,10 +59,10 @@ not retrain model weights or change source audiences.
 
 ## CLI and tools
 
-- `pta questions list`, `show ID`, `add`, `edit ID`, `remove ID`; add/edit take JSON
+- `kuroko questions list`, `show ID`, `add`, `edit ID`, `remove ID`; add/edit take JSON
   `{ "id": "daily", "text": "What did you do today?", "sources": ["activity-record"] }`.
-- `pta questions associate RESOURCE` takes `question_id` (existing) or `text` (new), plus `sources`.
-- `pta answer feedback RESOURCE` takes `rating` (`good`, `bad`, or null) and optional `comment`.
+- `kuroko questions associate RESOURCE` takes `question_id` (existing) or `text` (new), plus `sources`.
+- `kuroko answer feedback RESOURCE` takes `rating` (`good`, `bad`, or null) and optional `comment`.
 - Shared tools/MCP expose `questions_list`, `question_save`, `question_remove`,
   `question_associate` and `answer_rate`, using the same host operations and profile revision checks.
 

@@ -1,4 +1,4 @@
-# Personal Teams Assistant
+# Kuroko
 
 An assistant that answers Microsoft Teams messages as the user, only from what the user authorized, and keeps daily records of the user's existing Azure DevOps tasks.
 
@@ -123,11 +123,11 @@ A source of the account that this computer cannot read because its repository ha
 _Avoid_: broken source, missing source
 
 **Prepared update**:
-A newer stable release of this package built (or, for an archive installation, downloaded from the release and checked against its published digest) next to the installed one and verified as a matched application and `pta` pair; it is not installed, and the installed version keeps running until it is applied.
+A newer stable release of this package built (or, for an archive installation, downloaded from the release and checked against its published digest) next to the installed one and verified as a matched host (`kuroko-host`) and CLI (`kuroko`) pair; it is not installed, and the installed version keeps running until it is applied.
 _Avoid_: downloaded update, installed update
 
 **Applied update**:
-A prepared update that was installed, restarted and found healthy; only the update journal's `committed` outcome says so, never the installed version alone. An unhealthy or interrupted one is rolled back to the previous matched application and `pta` pair.
+A prepared update that was installed, restarted and found healthy; only the update journal's `committed` outcome says so, never the installed version alone. An unhealthy or interrupted one is rolled back to the previous matched host and CLI pair.
 _Avoid_: finished update, upgrade
 
 **Archive installation**:
