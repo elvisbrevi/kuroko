@@ -1,6 +1,6 @@
 # Security policy
 
-Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/elvisbrevi/personal-teams-assistant/security/advisories/new). Do not put credentials, Access assertions, provider tokens, private work items or personal configuration in public issues, pull requests or screenshots.
+Report vulnerabilities privately through [GitHub Security Advisories](https://github.com/elvisbrevi/kuroko/security/advisories/new). Do not put credentials, Access assertions, provider tokens, private work items or personal configuration in public issues, pull requests or screenshots.
 
 ## Private installations
 

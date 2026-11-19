@@ -8,10 +8,10 @@ Keep actual account IDs, owner identity responses, tunnel/DNS identifiers, serve
 
 1. Install the same Cargo package and compatible CLI/host pair described in the [README](../README.md). Keep the existing profile, Keychain service, encryption key and Microsoft session. Do not replace a running installation before the new build and configuration are ready.
 2. Follow the web operating guide with your own HTTPS hostname, Cloudflare account, dedicated Tunnel/Access/GitHub OAuth application and verified numeric GitHub owner ID. Installing the crate does not grant access to the maintainer's server. Configure one owner; files for other profiles remain inert.
-3. On an existing portal, record the assistant's running state and stop the portal normally before changing its service/binary pair. Only a sole, explicitly associated legacy GitHub identity can be inferred as the owner; ambiguous legacy accounts need an explicit `owner_github_id` through `pta web configure`. A new install must be configured with its own owner and Access provider before it can start.
-4. Launch `personal-teams-assistant --web` from your user LaunchAgent, with the dedicated connector forwarding to loopback. Do not reuse another person's tunnel or credentials. Restore the recorded assistant state, then verify as below.
+3. On an existing portal, record the assistant's running state and stop the portal normally before changing its service/binary pair. Only a sole, explicitly associated legacy GitHub identity can be inferred as the owner; ambiguous legacy accounts need an explicit `owner_github_id` through `kuroko web configure`. A new install must be configured with its own owner and Access provider before it can start.
+4. Launch `kuroko-host --web` from your user LaunchAgent, with the dedicated connector forwarding to loopback. Do not reuse another person's tunnel or credentials. Restore the recorded assistant state, then verify as below.
 
-Connecting another computer you own is described in the web operating guide (browser sign-in, or a private pairing file from `pta web machines authorize`).
+Connecting another computer you own is described in the web operating guide (browser sign-in, or a private pairing file from `kuroko web machines authorize`).
 
 ## Verify a deployment
 

@@ -59,7 +59,7 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/elvisbrevi/kuroko/relea
 Invoke-RestMethod -UseBasicParsing https://github.com/elvisbrevi/kuroko/releases/latest/download/install.ps1 -OutFile "$env:TEMP\kuroko-install.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\kuroko-install.ps1" -Origin https://your-portal.example
 ```
 
-The script downloads the release's prebuilt archive for this computer, checks it against its published SHA-256 (and its build provenance when the GitHub CLI is signed in) before running anything, installs the binaries for your user (`~/.local/share/kuroko/bin`, or `%LOCALAPPDATA%\Programs\kuroko\bin`; an earlier installation in `personal-teams-assistant` is upgraded where it is), puts `kuroko` on the path of new terminals, starts the host at login (`pta service install`) and opens your portal's sign-in page, where you check the code and choose **Trust this machine**. The command holds no secret; trust grants no directories, Teams responsibility or assistant start. An existing profile is kept as it is, and running the command again repairs or upgrades the same installation. Such an installation also updates from the application (`pta update`, Settings › Advanced › Updates), which downloads the newer release's archive for that computer and checks its SHA-256; add `--unattended-updates` (`-UnattendedUpdates`), or later `pta update unattended on --confirmed`, to let that computer install new releases by itself when nothing would be interrupted (off by default, per computer, never synchronized). Without `--origin` it only installs. Add `--integrations` (`-Integrations`) to also install the skill and register `pta mcp` with Claude Code or Codex; otherwise it prints those commands. `--uninstall` (`-Uninstall`) removes the service, the binaries and the path entry and keeps the profile. If the computer already has a Cargo installation, the script stops and says how to switch. Details in the [architecture](docs/architecture.md#one-command-installation).
+The script downloads the release's prebuilt archive for this computer, checks it against its published SHA-256 (and its build provenance when the GitHub CLI is signed in) before running anything, installs the binaries for your user (`~/.local/share/kuroko/bin`, or `%LOCALAPPDATA%\Programs\kuroko\bin`; an earlier installation in `personal-teams-assistant` is upgraded where it is), puts `kuroko` on the path of new terminals, starts the host at login (`kuroko service install`) and opens your portal's sign-in page, where you check the code and choose **Trust this machine**. The command holds no secret; trust grants no directories, Teams responsibility or assistant start. An existing profile is kept as it is, and running the command again repairs or upgrades the same installation. Such an installation also updates from the application (`kuroko update`, Settings › Advanced › Updates), which downloads the newer release's archive for that computer and checks its SHA-256; add `--unattended-updates` (`-UnattendedUpdates`), or later `kuroko update unattended on --confirmed`, to let that computer install new releases by itself when nothing would be interrupted (off by default, per computer, never synchronized). Without `--origin` it only installs. Add `--integrations` (`-Integrations`) to also install the skill and register `kuroko mcp` with Claude Code or Codex; otherwise it prints those commands. `--uninstall` (`-Uninstall`) removes the service, the binaries and the path entry and keeps the profile. If the computer already has a Cargo installation, the script stops and says how to switch. Details in the [architecture](docs/architecture.md#one-command-installation).
 
 ### With Cargo
 
@@ -80,17 +80,17 @@ kuroko status
 
 Requirements: Rust (version pinned in `rust-toolchain.toml`, with a C compiler and linker to compile), Git and `~/.cargo/bin` in `PATH`. To receive Teams messages you also need a stable HTTPS URL that reaches the local port (e.g. `cloudflared` with a token) and the computer on.
 
-On a server, install it the same way, run the host in the foreground and operate it with `pta` or the portal:
+On a server, install it the same way, run the host in the foreground and operate it with `kuroko` or the portal:
 
 ```sh
 kuroko-host --start    # foreground; `--start` starts the assistant; fits a systemd service
 ```
 
-Its credentials are stored with `pta credentials set` in private profile files or come from `NAME`/`NAME_FILE` variables. The Microsoft login is completed from any device with `pta auth microsoft finish --redirect 'URL'`. Details in the [architecture](docs/architecture.md#headless-host). Never keep two instances of the same account active.
+Its credentials are stored with `kuroko credentials set` in private profile files or come from `NAME`/`NAME_FILE` variables. The Microsoft login is completed from any device with `kuroko auth microsoft finish --redirect 'URL'`. Details in the [architecture](docs/architecture.md#headless-host). Never keep two instances of the same account active.
 
-Each assistant account can also keep **stored variables** (a name, a description and an encrypted value) for its own use: add, edit, reveal, copy and delete them in Settings > Credentials > Variables (reveal and copy are human-only) or with `pta variables create NAME --description TEXT` / `pta variables update ID --expected-version N` (value on a protected stdin pipe), and let an agent discover them by name and description without ever seeing a value (`pta variables list|search`, MCP `variable_*`). A computer signed in to the account keeps a metadata-only copy of the catalog in step with the coordinator (`pta variables sync|status`, Synchronize now in the GUI); values are never copied. Operators back up and rotate their keys with `pta variables key backup|restore|rotate`; see the [architecture](docs/architecture.md#account-variables) and the [skill reference](desktop/skills/kuroko/references/variables.md).
+Each assistant account can also keep **stored variables** (a name, a description and an encrypted value) for its own use: add, edit, reveal, copy and delete them in Settings > Credentials > Variables (reveal and copy are human-only) or with `kuroko variables create NAME --description TEXT` / `kuroko variables update ID --expected-version N` (value on a protected stdin pipe), and let an agent discover them by name and description without ever seeing a value (`kuroko variables list|search`, MCP `variable_*`). A computer signed in to the account keeps a metadata-only copy of the catalog in step with the coordinator (`kuroko variables sync|status`, Synchronize now in the GUI); values are never copied. Operators back up and rotate their keys with `kuroko variables key backup|restore|rotate`; see the [architecture](docs/architecture.md#account-variables) and the [skill reference](desktop/skills/kuroko/references/variables.md).
 
-The account's **configuration** (preferences, model choices, sources with their audiences, contexts, questions and verified notes) also follows the account: a freshly installed computer that signs in restores it, and `pta account status|sync` shows which revision is loaded. Folders, credentials, sign-ins and tunnels stay on each computer, restoring starts nothing, and new sources still start disabled.
+The account's **configuration** (preferences, model choices, sources with their audiences, contexts, questions and verified notes) also follows the account: a freshly installed computer that signs in restores it, and `kuroko account status|sync` shows which revision is loaded. Folders, credentials, sign-ins and tunnels stay on each computer, restoring starts nothing, and new sources still start disabled.
 
 GUI and CLI share the same profile, Keychain/Credential Manager credentials and service. Reinstalling does not ask for credentials again: the `dev.personalteams.assistant` profile, the data directory and the connected Microsoft account are kept.
 
@@ -98,9 +98,9 @@ GUI and CLI share the same profile, Keychain/Credential Manager credentials and 
 
 This is self-hosted software, not a shared hosted service. Installing the crate gives you your own local installation. Configure your own Microsoft application, provider credentials and, for web access, your own domain, Cloudflare account, Access GitHub OAuth app, tunnel and always-on machine. No maintainer infrastructure, credentials or remote machine is included or selected by default. The maintainer's private portal is not a public login service.
 
-Each portal accepts only its locally configured GitHub owner (`owner_github_id`), verified through that installation's Cloudflare Access provider. Associate the owner's verified identity locally with `pta web users bind USER`; `--current-profile` preserves the existing desktop profile and Microsoft session. Legacy additional profiles are retained, but other identities cannot use the portal or its execution machines.
+Each portal accepts only its locally configured GitHub owner (`owner_github_id`), verified through that installation's Cloudflare Access provider. Associate the owner's verified identity locally with `kuroko web users bind USER`; `--current-profile` preserves the existing desktop profile and Microsoft session. Legacy additional profiles are retained, but other identities cannot use the portal or its execution machines.
 
-To connect another computer you own, enter your portal's HTTPS address on that computer (the sign-in screen the app shows at start, or Sign in in the sidebar; or `pta auth machine login URL`), sign in in the browser and choose Trust this machine once; the computer then finishes connecting with its own revocable credential. Alternatively, authorize its machine ID locally on your coordinator with `pta web machines authorize MACHINE_ID --output PRIVATE_FILE`, transfer that private file securely and feed it to `pta tools call machine_connect` on the intended machine's stdin within ten minutes. Both are single-use and tied to that machine and installation; a GitHub token cannot enroll a machine. See the [web setup guide](desktop/skills/kuroko/references/web-access.md) and [security policy](SECURITY.md).
+To connect another computer you own, enter your portal's HTTPS address on that computer (the sign-in screen the app shows at start, or Sign in in the sidebar; or `kuroko auth machine login URL`), sign in in the browser and choose Trust this machine once; the computer then finishes connecting with its own revocable credential. Alternatively, authorize its machine ID locally on your coordinator with `kuroko web machines authorize MACHINE_ID --output PRIVATE_FILE`, transfer that private file securely and feed it to `kuroko tools call machine_connect` on the intended machine's stdin within ten minutes. Both are single-use and tied to that machine and installation; a GitHub token cannot enroll a machine. See the [web setup guide](desktop/skills/kuroko/references/web-access.md) and [security policy](SECURITY.md).
 
 ### Security and privacy
 
@@ -145,7 +145,7 @@ the question is read even after it was handed over (its state, since when and
 who holds it now, its tasks, linked code and comments), and your own recent Wiki
 pages, such as a production deployment plan, give commitments and blockers. A
 withheld or observed answer can now be improved with your context and sent by
-hand from the Messages tab or with `pta answer refine|send`. Version 0.7.14 also
+hand from the Messages tab or with `kuroko answer refine|send`. Version 0.7.14 also
 recognizes «PAP» deployment pages and keeps their installation date and pending
 production items in the answer, describes a named HU only when you took part in
 it, never looks back more than five weeks, and adds the work recorded in the
@@ -156,13 +156,13 @@ item, pull request, pipeline, stage or Wiki page is linked on the words of the
 answer that name it («[#41477 — PR Pipeline Template](…)», «[PR !7348](…)»),
 and a pull request named in a status question is read so it can be linked. The
 full list of cited references and Wiki pages read stays in the message history
-(Messages tab and `pta audit show`).
+(Messages tab and `kuroko audit show`).
 
 Questions replace Cases in Knowledge. Add a question and choose its sources; the assistant recognizes equivalent requests by meaning while preserving the requested dates. The initial question is “What did you do today?”, using the activity record. Unknown messages remain unanswered for review, with an action to associate them to an existing question or create a new one with sources. Good and bad ratings guide future answers to the same question, using fresh evidence. Sources can also contain exact public URLs or selected authenticated Azure DevOps Wiki page URLs. See [Questions and evaluations](docs/questions.md).
 
-Version 0.7.23 adds an MCP server for agents: `pta mcp` exposes every operation of
+Version 0.7.23 adds an MCP server for agents: `kuroko mcp` exposes every operation of
 the app — messages, answers, sources, contexts, questions, notes, people, ratings and
-activity registration — to Claude Code, Codex or any MCP client (`pta mcp config`
+activity registration — to Claude Code, Codex or any MCP client (`kuroko mcp config`
 prints how to add it). Sending to Teams, writing to Azure DevOps, authorizing sources
 and changing the mode need your confirmation, asked by the client itself when it
 supports it.
@@ -171,11 +171,11 @@ Version 0.7.22 lets the assistant improve from what you approve. In Messages,
 rate an answer (good or needs work, with a comment), keep a good one as an example
 for similar requests (it guides structure and tone, never facts), or save it as a
 verified note. Knowledge › People says how you address each person; the assistant
-follows it only when answering them. Agents can do the same with `pta answer
-feedback` and `pta people`.
+follows it only when answering them. Agents can do the same with `kuroko answer
+feedback` and `kuroko people`.
 
 Version 0.7.21 makes the kinds of request configurable. In Knowledge › Cases (or
-`pta cases`), each built-in case — every answer, status round, what you did,
+`kuroko cases`), each built-in case — every answer, status round, what you did,
 activity review, documentation, request for you, informational message — shows how
 the model recognizes it and how it is answered; you can change those texts, add
 words that identify it, choose the sources it reads or turn it off. The rules on
@@ -184,7 +184,7 @@ recognized by meaning.
 
 Version 0.7.20 adds a knowledge index. A whole repository can be a source of its
 own, with its description: each answer reads the sections that best match the
-request. Verified notes (Knowledge › Notes, `pta notes`) are searched the same way,
+request. Verified notes (Knowledge › Notes, `kuroko notes`) are searched the same way,
 and contexts such as «billing» group the sources, keywords and instructions of one
 subject: a request that names it reads that context's sources. Search is full-text
 (SQLite FTS5), and also by meaning with an optional embeddings endpoint (Settings ›
@@ -202,13 +202,13 @@ Version 0.7.18 lets you answer what the assistant left unanswered: an informatio
 message or a request for you shows **Generate answer** in Messages. The assistant
 writes your reply from the conversation (and the sources you choose, or those of
 the chat); then you can add context and **Regenerate answer**, or **Send answer**
-once. Any held answer can use chosen sources too (`pta answer refine RESOURCE
+once. Any held answer can use chosen sources too (`kuroko answer refine RESOURCE
 --source ID`).
 
 Version 0.7.17 answers «¿qué hice ayer?», «del 5 al 9 de octubre» or "what did I
 do last week?" from the work you approved in Activities: a short day-by-day reply
 with each task, its HU and hours. Activities adds a History view of that record,
-grouped by day between two dates (`pta activity history FROM..TO`). On phones the
+grouped by day between two dates (`kuroko activity history FROM..TO`). On phones the
 page no longer scrolls sideways or bounces, Settings sections are a grid instead
 of a sideways strip, controls are at least 44 px and the colors were retuned for
 contrast in both themes.
@@ -239,38 +239,38 @@ cargo install kuroko --locked --force
 kuroko status
 ```
 
-Cargo runs nothing after installing, so the previous version keeps running until the new one is first used. The first `pta` command (any; `pta status` will do) or launching `personal-teams-assistant` detects that the installed binary changed, stops the previous host (assistant and tunnel) and, if the assistant was running, asks on the terminal whether to keep it running with the new version. Without an interactive terminal (`--non-interactive`, `--json`, systemd) it keeps the previous state.
+Cargo runs nothing after installing, so the previous version keeps running until the new one is first used. The first `kuroko` command (any; `kuroko status` will do) or launching `kuroko-host` detects that the installed binary changed, stops the previous host (assistant and tunnel) and, if the assistant was running, asks on the terminal whether to keep it running with the new version. Without an interactive terminal (`--non-interactive`, `--json`, systemd) it keeps the previous state.
 
 From 0.6.1 on, a profile saved by the app no longer has the `[jev]` section that older versions require: do not go back to an older version with the same profile.
 
 ## Quick use
 
 ```sh
-kuroko-host                       # starts the host and opens the GUI in the browser (or pta app open)
-pta help                          # every command, with its description
-pta status                        # running? host, assistant, mode, Teams and models
-pta start                         # starts the assistant
-pta stop                          # stops it
-pta auth microsoft login          # OAuth PKCE with the system browser
-pta auth microsoft finish --wait  # waits for you to finish the consent
-pta mode active                   # turns real sends on after reviewing the proposals
-pta test simulate <<< '{"session":"demo","text":"What work did I do that is not registered?","sources":["azure-devops-status","azure-devops-wikis"]}'
-pta activity status              # scheduled/manual activity process
-pta activity run                 # review today's work with the saved settings
-pta activity pending             # activities needing context or an HU
-pta activity history 2026-10-08   # completed tasks and process outcomes by day
-pta activity history 2026-10-01..2026-10-15   # the activities of every day in a range
+kuroko-host                       # starts the host and opens the GUI in the browser (or kuroko app open)
+kuroko help                       # every command, with its description
+kuroko status                     # running? host, assistant, mode, Teams and models
+kuroko start                      # starts the assistant
+kuroko stop                       # stops it
+kuroko auth microsoft login       # OAuth PKCE with the system browser
+kuroko auth microsoft finish --wait  # waits for you to finish the consent
+kuroko mode active                # turns real sends on after reviewing the proposals
+kuroko test simulate <<< '{"session":"demo","text":"What work did I do that is not registered?","sources":["azure-devops-status","azure-devops-wikis"]}'
+kuroko activity status            # scheduled/manual activity process
+kuroko activity run               # review today's work with the saved settings
+kuroko activity pending           # activities needing context or an HU
+kuroko activity history 2026-10-08   # completed tasks and process outcomes by day
+kuroko activity history 2026-10-01..2026-10-15   # the activities of every day in a range
 ```
 
-`pta help` (or `pta`, `pta --help`) lists every command with its description; `--json` returns the full result as JSON. `pta skill show` gives the operating manual for agents.
+`kuroko help` (or `kuroko`, `kuroko --help`) lists every command with its description; `--json` returns the full result as JSON. `kuroko skill show` gives the operating manual for agents.
 
 ## Minimal setup
 
-1. Credentials (on stdin, never as an argument): `DEEPSEEK_API_KEY` if you use DeepSeek and the ones your sources reference, e.g. `pta credentials set DEEPSEEK_API_KEY < file`. `GRAPH_WEBHOOK_SECRET` and `STATE_ENCRYPTION_KEY` are generated.
-2. Language models: in the GUI (Settings → Language models) add and order models from Codex, Claude Code, OpenCode 2 and DeepSeek (providers may repeat, up to 16 entries), with their model and effort. Codex, Claude and OpenCode use the installed CLI (`codex`, `claude`, `opencode` version 2) with its own login. Default: Codex `gpt-6.1-sol` (medium) → Claude `claude-opus-5-5` (medium) → DeepSeek `deepseek-flash` (maximum). Every call starts with the first and moves to the next only if it fails (e.g. out of credits). From the CLI: `pta llm providers` and `pta config set llm.chain JSON`.
+1. Credentials (on stdin, never as an argument): `DEEPSEEK_API_KEY` if you use DeepSeek and the ones your sources reference, e.g. `kuroko credentials set DEEPSEEK_API_KEY < file`. `GRAPH_WEBHOOK_SECRET` and `STATE_ENCRYPTION_KEY` are generated.
+2. Language models: in the GUI (Settings → Language models) add and order models from Codex, Claude Code, OpenCode 2 and DeepSeek (providers may repeat, up to 16 entries), with their model and effort. Codex, Claude and OpenCode use the installed CLI (`codex`, `claude`, `opencode` version 2) with its own login. Default: Codex `gpt-6.1-sol` (medium) → Claude `claude-opus-5-5` (medium) → DeepSeek `deepseek-flash` (maximum). Every call starts with the first and moves to the next only if it fails (e.g. out of credits). From the CLI: `kuroko llm providers` and `kuroko config set llm.chain JSON`.
 3. An Entra registration with the *Mobile and desktop* platform (`http://localhost`) and the delegated permissions `User.Read`, `Chat.Read`, `ChatMessage.Send`, `offline_access`. Set `graph.tenant_id` and `graph.client_id`.
-4. Public URL (`server.public_url`) and tunnel: `pta tunnel configure token|file PATH|external`.
-5. Knowledge: add repositories (`pta repos add`, or GitHub with `pta auth github login`), register sources with `pta sources add` (they start disabled and without audiences) and authorize them per conversation with `pta sources audience`.
+4. Public URL (`server.public_url`) and tunnel: `kuroko tunnel configure token|file PATH|external`.
+5. Knowledge: add repositories (`kuroko repos add`, or GitHub with `kuroko auth github login`), register sources with `kuroko sources add` (they start disabled and without audiences) and authorize them per conversation with `kuroko sources audience`.
 
 ## Documentation
 

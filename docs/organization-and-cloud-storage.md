@@ -9,7 +9,7 @@ Phase 1b (0.10.16) implemented the local organization layer: see §8 «Organizat
 architecture, and the skill's knowledge and account-configuration references. Phase 2 (0.10.17–0.10.22)
 put every account aggregate behind its own storage trait. Phase 3a is under way: the Worker under
 `cloud/` (0.10.23) and its delivery path ([delivery](delivery.md#account-store-worker-cloud)), then
-the host's `pta cloud status|connect` (0.10.25).
+the host's `kuroko cloud status|connect` (0.10.25).
 
 ## 1. Goals and non-goals
 
@@ -45,7 +45,7 @@ process or machine that wrote it).
 | `assistant.db` › `vault` | Microsoft OAuth tokens sealed with `STATE_ENCRYPTION_KEY` | small | OAuth adapter | S | local, never uploaded |
 | `assistant.db` › `subscriptions`, `outputs` | Graph subscriptions; send nonces (single-send guarantee) | small | runtime | R | local |
 | `assistant.db` › `conversation_context` | last question/answer per conversation | small | pipeline | U (sensitive) | local (short-lived context, regenerable from Teams) |
-| `assistant.db` › `events` | diagnostics event log (`pta logs`) | small | host | R | local |
+| `assistant.db` › `events` | diagnostics event log (`kuroko logs`) | small | host | R | local |
 | `assistant.db` › `activity_cache` | Azure DevOps repository/activity index cache | small | `ado` | C | local cache |
 | `knowledge-index.db` › `notes`, `question_feedback`, `examples` | verified notes, answer evaluations, approved examples | 72 KB total | GUI/CLI/MCP, pipeline (`NotesStore`) | U | cloud |
 | `knowledge-index.db` › `documents`, `chunks`, `chunks_fts`, embeddings | FTS5 passages of repository sources and notes, optional vectors | (same file) | index refresh | C | local derived cache, rebuilt from the cloud records and local checkouts |
@@ -304,26 +304,26 @@ client-side encryption, destroying the content key makes that window irrelevant.
 
 Optional, per account, reversible, with a prior backup and no loss of history.
 
-1. `pta cloud status` / `connect` (GUI: Settings › Advanced › Cloud storage; MCP `cloud_status`,
+1. `kuroko cloud status` / `connect` (GUI: Settings › Advanced › Cloud storage; MCP `cloud_status`,
    `cloud_connect`) enrolls the installation and shows the mode: `off` (default), `mirror` or
    `primary`, kept in an installation-local `[cloud]` section of `Config` (`#[serde(default)]`,
    not portable). Done in phase 3a (0.10.25); see «Account store link» in the architecture.
-2. `pta cloud migrate --dry-run` lists per collection what would be uploaded (counts, sizes),
+2. `kuroko cloud migrate --dry-run` lists per collection what would be uploaded (counts, sizes),
    what stays local and why, and the size of the backup. Done in phase 4a (0.10.31).
-3. `pta cloud migrate --confirmed` takes a **backup** first (SQLite online backup of each database
+3. `kuroko cloud migrate --confirmed` takes a **backup** first (SQLite online backup of each database
    plus the profile files into a private `backups/cloud-<time>/` with a manifest, reusing the
    data-safety copies of the updater; the newest three are kept), uploads every collection
    encrypted, then **verifies by reading back**: per collection, the record count and a digest over
    sorted `(id, revision, ciphertext digest)` computed on both sides, plus a full decryption and
    comparison of every record. Only then does the mode become `mirror`. Local stores are never
-   deleted. It replaces phase 3b's `pta cloud mirror` (decision 14).
-4. `mirror` keeps local as the source of truth and pushes every change. `pta cloud verify`
-   compares at any time. `pta cloud promote` switches to `primary` after a clean verification and a
-   new backup, and `pta cloud demote` back to `mirror` (phase 3c, 0.10.29).
-5. `pta cloud rollback` backs up, pulls the configuration once when the store is primary (refused
+   deleted. It replaces phase 3b's `kuroko cloud mirror` (decision 14).
+4. `mirror` keeps local as the source of truth and pushes every change. `kuroko cloud verify`
+   compares at any time. `kuroko cloud promote` switches to `primary` after a clean verification and a
+   new backup, and `kuroko cloud demote` back to `mirror` (phase 3c, 0.10.29).
+5. `kuroko cloud rollback` backs up, pulls the configuration once when the store is primary (refused
    on a conflict or without an answer, unless `--keep-local`), verifies that the store holds nothing
    the installation lacks, switches to `off` and leaves the cloud copy untouched (decision 15).
-6. `pta cloud erase`, only in `off` and with no other active installation, removes the copy from
+6. `kuroko cloud erase`, only in `off` and with no other active installation, removes the copy from
    the Worker (`DELETE /v1/store`: the records, then the account's R2 prefix), clears the ledger and
    sets the content key aside, so a new migration uses a new key; Cloudflare's 30-day point-in-time
    recovery is the only way back (decision 16).
@@ -410,7 +410,7 @@ parity, the `AGENTS.md` checks, and delivery verified on crates.io and on the se
 | Phase | Content | Risks |
 | --- | --- | --- |
 | 1a. Cleanup (0.10.15) | Synthetic names in tests, docs, README, prompts, the GUI placeholder and catalogs; To-Do items carry `category`; the GUI decides by category; the task type listed with bugs comes from its guide (`listed_with_bugs`); the production guide is updated as data in the same delivery. | The production To-Do stops listing that type until its guide carries the field: update it right after the install, verify the list. |
-| 1b. Organization (local) — done (0.10.16) | `[organization]` in the map (name, entries, source IDs); guides shown as entries; new `organization` source kind (disabled by default) and index documents; Settings › Organization replaces the current guides editor (no duplicate control); `pta organization …` with `pta guides …` kept as its guides subcommand; MCP `organization_*`; agents receive norms and architecture as untrusted input; skill, architecture and `CONTEXT.md`. The organization, guides included, joins the account configuration's allowlist and travels with the account. | Prompt size growth for agents (bound entries per run); a second place to edit guides if the old editor is not removed in the same PR. |
+| 1b. Organization (local) — done (0.10.16) | `[organization]` in the map (name, entries, source IDs); guides shown as entries; new `organization` source kind (disabled by default) and index documents; Settings › Organization replaces the current guides editor (no duplicate control); `kuroko organization …` with `kuroko guides …` kept as its guides subcommand; MCP `organization_*`; agents receive norms and architecture as untrusted input; skill, architecture and `CONTEXT.md`. The organization, guides included, joins the account configuration's allowlist and travels with the account. | Prompt size growth for agents (bound entries per run); a second place to edit guides if the old editor is not removed in the same PR. |
 | 2. Storage abstraction — done (0.10.17–0.10.22) | One trait per account aggregate under the crate's `store/` (at the crate root, because the message pipeline uses them too), each with its local implementation as the default and a shared `contract::run` suite; no behavior change. `SettingsStore` (`store/settings.rs`, `LocalSettings`): `Config`, `KnowledgeMap` and the tunnel path, committed together with the existing journal. `NotesStore` (`store/notes.rs`, `LocalNotes`): verified notes (by ID, `updated_at` as revision), answer evaluations and approved examples (by Teams message), in `knowledge-index.db` with each record's search document in the same transaction. `AuditStore` (`store/audit.rs`, `LocalAudit`): the finished messages' audits (by Teams message, audit as revision) in `assistant.db` › `jobs`; the worker's in-flight rows, state machine and send nonces stay local. `ActivityStore` (`store/activity.rs`, `LocalActivity`): daily task snapshots and summaries (by day), finished runs (by ID) and the legacy record, in `activity-registration.db`; running runs, slot claims and recovery stay local. `ImplementationStore` (`store/implementation.rs`, `LocalImplementation`, crate-private): finished agent runs (by launch ID) and request runs (by ID) in `implementation/runs.db`; in-flight runs and requests, the change feed, the session index, remote-session access and the machine files stay local. `OrganizationStore` (`store/organization.rs`, `LocalOrganization`): the organization (name, entries by ID with `updated_at` as revision, documenting sources) and its work item guides (by ID) as one unit with one revision, kept in the map's `[organization]` and `[[work_item_guides]]` through the settings store's journaled commit; the settings editors still save it with the rest of the map in one commit. Search and ranking stay in the local index, which reads the stores' records; the pipeline reads the local stores and never waits on the cloud, whose store will keep the local replica current. In-flight state is joined with each store's finished records where a listing shows both (`audit`, activity runs, implementation runs and requests). | Broad refactor of hot paths: done store by store, each PR behavior-neutral and fully tested. |
 | 3a. Worker and authentication — under way (Worker: 0.10.23; host link: 0.10.25) | `cloud/` Worker, `Registry`, `AccountStore` schema v1 (encrypted records with clear metadata), Access service token, installation credential, health; Workers Builds; host `cloud status/connect`. | Access/Workers configuration mistakes: staging Worker first, contract tests including cross-account attempts. |
 | 3b. Mirror — done (0.10.26) | Content key, sealing and blinded IDs; the ledger as outbox for every collection (finished records and configuration snapshots); `cloud mirror` (plan, verified initial upload, then mode `mirror`; stop) and `cloud verify`; key in the operator key backup; latency in `cloud status` (0.10.26). The link as a standing kind, the `account_store` step of `setup_status`, `cloud disconnect` and the service token's expiry (0.10.27). Local stays the source of truth. | Outbox growth while offline (bounded by the local records, visible in status); latency measured here (§5). |
@@ -471,7 +471,7 @@ Taken before phase 3c (2026-11-03):
 
 Taken before phase 4a (2026-11-03):
 
-14. **`migrate` replaces `mirror`.** `pta cloud migrate --dry-run|--confirmed` and `rollback` are the
+14. **`migrate` replaces `mirror`.** `kuroko cloud migrate --dry-run|--confirmed` and `rollback` are the
     only path in the CLI, the MCP, the GUI (one «Migrate» button) and the skill; the host keeps
     accepting `cloud_mirror` for older clients, routed to the migration (with its backup) and the
     rollback.
