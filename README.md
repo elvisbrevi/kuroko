@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/icon.png" width="120" height="120" alt=""></p>
+<p align="center"><img src="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/icon.png" width="120" height="120" alt=""></p>
 
 <h1 align="center">Kuroko</h1>
 
@@ -7,16 +7,16 @@
 > **Formerly `personal-teams-assistant`.** From 0.18.0 the product is the crate `kuroko`, with the commands `kuroko` and `kuroko-host`; `pta` and `personal-teams-assistant` stay as aliases of them. Copies of 0.17.0 move to it with their own updater, keeping the profile, the credentials and the Microsoft session. To move an older copy by hand, run `cargo install kuroko --locked --force` (`--force` lets it take over the two old command names). See [the rename plan](docs/rename-kuroko.md).
 
 <p align="center"><strong>Answers in Teams as you, and only with what you authorize.</strong><br>
-<a href="https://teams-assistant.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/kuroko">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/kuroko/SKILL.md">Agent skill</a></p>
+<a href="https://kuroko.elvisbrevi.cl/">Website</a> · <a href="https://crates.io/crates/kuroko">crates.io</a> · <a href="docs/architecture.md">Architecture</a> · <a href="#security-and-privacy">Security</a> · <a href="desktop/skills/kuroko/SKILL.md">Agent skill</a></p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-overview-dark.jpg">
-    <img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-overview-light.jpg" width="640" alt="Home: the assistant's face shows it is running in observation mode, with recent outcomes, setup and the status of each part.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-overview-dark.jpg">
+    <img src="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-overview-light.jpg" width="640" alt="Home: the assistant's face shows it is running in observation mode, with recent outcomes, setup and the status of each part.">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-phone-home-dark.jpg">
-    <img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-phone-home-light.jpg" width="190" alt="The same Home on a phone, with the floating tab bar.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-phone-home-dark.jpg">
+    <img src="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-phone-home-light.jpg" width="190" alt="The same Home on a phone, with the floating tab bar.">
   </picture>
 </p>
 
@@ -30,12 +30,12 @@ The app and its answers to Teams follow the configured language, Spanish or Engl
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-chat-dark.jpg">
-    <img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-chat-light.jpg" width="640" alt="Test chat: a review of the work done in the last two weeks that no task records, with the user story each piece could go under.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-chat-dark.jpg">
+    <img src="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-chat-light.jpg" width="640" alt="Test chat: a review of the work done in the last two weeks that no task records, with the user story each piece could go under.">
   </picture>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-phone-activities-dark.jpg">
-    <img src="https://raw.githubusercontent.com/elvisbrevi/personal-teams-assistant/main/site/public/assets/app-phone-activities-light.jpg" width="190" alt="Activities on a phone: review a day, the hours registered against the daily target and the activities that need your input.">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-phone-activities-dark.jpg">
+    <img src="https://raw.githubusercontent.com/elvisbrevi/kuroko/main/site/public/assets/app-phone-activities-light.jpg" width="190" alt="Activities on a phone: review a day, the hours registered against the daily target and the activities that need your input.">
   </picture>
 </p>
 
@@ -274,7 +274,7 @@ pta activity history 2026-10-01..2026-10-15   # the activities of every day in a
 
 ## Documentation
 
-- Project site: [teams-assistant.elvisbrevi.cl](https://teams-assistant.elvisbrevi.cl/), HTML and CSS in [`site/`](site/) published as a Cloudflare Worker.
+- Project site: [kuroko.elvisbrevi.cl](https://kuroko.elvisbrevi.cl/) (`teams-assistant.elvisbrevi.cl` redirects to it), HTML and CSS in [`site/`](site/) published as a Cloudflare Worker.
 - [Security policy](SECURITY.md): access boundaries, deployment responsibilities, upstream notices and private vulnerability reporting.
 - [Private portal](docs/private-deployment.md): running it on macOS and verifying a deployment.
 - [Architecture](docs/architecture.md): components, pipeline, data, security, CLI contract, change recipes, decisions and known limits.

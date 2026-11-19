@@ -338,7 +338,7 @@ impl Default for MessageStyle {
 impl MessageStyle {
     pub const MAX_LABEL_CHARS: usize = 80;
     /// Where «Kuroko» links in a signed band: the project site.
-    pub const KUROKO_URL: &str = "https://teams-assistant.elvisbrevi.cl/";
+    pub const KUROKO_URL: &str = "https://kuroko.elvisbrevi.cl/";
     pub const DEFAULT_EMOJI: &str = "🤖";
     /// Room for the longest emoji sequences (a family, a flag with its tag characters).
     pub const MAX_EMOJI_CHARS: usize = 16;
