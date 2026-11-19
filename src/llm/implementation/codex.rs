@@ -53,7 +53,12 @@ impl Client {
             socket: socket.into(),
             access,
         };
-        client.rpc("initialize", json!({"clientInfo":{"name":"personal-teams-assistant","version":env!("CARGO_PKG_VERSION")}})).await?;
+        client
+            .rpc(
+                "initialize",
+                json!({"clientInfo":{"name":"kuroko","version":env!("CARGO_PKG_VERSION")}}),
+            )
+            .await?;
         client.send(json!({"method":"initialized"})).await?;
         Ok(client)
     }

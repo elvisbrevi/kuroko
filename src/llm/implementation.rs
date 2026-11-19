@@ -1192,7 +1192,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires the user's provider login and a small synthetic model call"]
     async fn remote_provider_smoke() {
-        let provider = std::env::var("PTA_REMOTE_SMOKE_PROVIDER").unwrap();
+        let provider = std::env::var("KUROKO_REMOTE_SMOKE_PROVIDER")
+            .or_else(|_| std::env::var("PTA_REMOTE_SMOKE_PROVIDER"))
+            .unwrap();
         let model = if provider == "codex" {
             "gpt-6.1-sol"
         } else {

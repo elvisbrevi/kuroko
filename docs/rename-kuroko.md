@@ -420,8 +420,6 @@ A documentation-only pass (no code, no version):
 
 Remaining, optional or tied to 0.21.0:
 
-- Renaming, or keeping on purpose, the `PTA_*` variables that have no `KUROKO_*` name yet
-  (development and tests; the server updater reads `KUROKO_UPDATE_*` first).
 - Retiring the aliases in 0.21.0 once every machine's service entry and MCP configuration has
   migrated (architecture §15).
 
@@ -441,3 +439,14 @@ and falls back to `PTA_UPDATE_*`. The repository scripts (`dev-host.sh`, `rehear
 `configure-cloud-access.py`, `configure-web-access.py`) call `kuroko` and `kuroko-host`, and fall
 back to the former names where an older build is all there is. The Cloudflare tunnel and Access
 apps keep their names.
+
+## 14. 0.18.5: development names and a protected prefix
+
+- Development and test variables are read as `KUROKO_DEV_UI_DIR`, `KUROKO_DEV_CREDENTIALS_DIR`,
+  `KUROKO_UI_CHROMIUM`, `KUROKO_SERVICE_LIVE_TEST` and `KUROKO_REMOTE_SMOKE_PROVIDER`, with their
+  `PTA_*` names as fallback. The development credentials directory keeps its path `~/.config/pta`.
+- Launchers refuse `KUROKO_*` variables as they refuse `PTA_*`, and the credential migration
+  excludes them. Since 0.17.0 the product reads `KUROKO_PROFILE_DIR`, so a launcher given that
+  name could otherwise have pointed a CLI it runs at another profile.
+- The User-Agents for GitHub and deliveries, and the client name sent to Codex, say `kuroko`. The
+  cloud User-Agent, which the Worker parses, stays.

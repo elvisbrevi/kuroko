@@ -314,7 +314,7 @@ fn the_release_binary_does_not_read_the_variable() {
     let code = include_str!("../gui_assets.rs");
     let lines: Vec<&str> = code.lines().map(str::trim).collect();
     let reads: Vec<usize> = (0..lines.len())
-        .filter(|&i| lines[i].contains("std::env::var_os(DEV_DIR_VARIABLE)"))
+        .filter(|&i| lines[i].contains("crate::env_names::var_os(DEV_DIR_NAME)"))
         .collect();
     assert_eq!(reads.len(), 1);
     assert_eq!(lines[reads[0] - 1], "#[cfg(debug_assertions)]");
@@ -381,16 +381,21 @@ fn reads_from_the_development_directory_never_leave_it() {
 #[test]
 fn the_variable_is_on_no_allowlist_a_child_process_inherits() {
     use std::ffi::OsString;
-    let name = DEV_DIR_VARIABLE;
-    assert!(
-        name.starts_with("PTA_"),
-        "reserved for the host (consumers)"
-    );
-    assert!(!crate::llm::agent::PASSED_ENV.contains(&name));
-    assert!(!crate::app::web::profiles::WORKER_ENV.contains(&name));
-    let kept =
-        crate::maintenance::build_environment([(OsString::from(name), OsString::from("/tmp/ui"))]);
-    assert!(kept.iter().all(|(key, _)| key != name));
+    let former = crate::env_names::legacy(DEV_DIR_NAME);
+    assert_eq!(crate::env_names::current(DEV_DIR_NAME), DEV_DIR_VARIABLE);
+    for name in [DEV_DIR_VARIABLE, former.as_str()] {
+        assert!(
+            crate::consumers::reserved_env(name),
+            "reserved for the host (consumers): {name}"
+        );
+        assert!(!crate::llm::agent::PASSED_ENV.contains(&name));
+        assert!(!crate::app::web::profiles::WORKER_ENV.contains(&name));
+        let kept = crate::maintenance::build_environment([(
+            OsString::from(name),
+            OsString::from("/tmp/ui"),
+        )]);
+        assert!(kept.iter().all(|(key, _)| key != name));
+    }
 }
 
 #[test]

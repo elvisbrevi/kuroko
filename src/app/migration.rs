@@ -68,7 +68,11 @@ pub(super) fn excluded(name: &str) -> Option<(&'static str, &'static str)> {
     let has = |part: &str| upper.contains(part);
     if has("ENCRYPTION") {
         Some(("internal", INTERNAL))
-    } else if upper.starts_with("PTA_") || has("MACHINE") || has("CONTROL") {
+    } else if upper.starts_with("PTA_")
+        || upper.starts_with("KUROKO_")
+        || has("MACHINE")
+        || has("CONTROL")
+    {
         Some(("machine", MACHINE))
     } else if has("WEBHOOK") {
         Some(("webhook", WEBHOOK))

@@ -5,10 +5,10 @@
 #   source scripts/dev-env.sh
 #
 # Exports NAME_FILE for every non-empty regular file in
-# ${PTA_DEV_CREDENTIALS_DIR:-$HOME/.config/pta}. Bootstrap and rationale:
+# ${KUROKO_DEV_CREDENTIALS_DIR:-$HOME/.config/pta} (the former PTA_DEV_CREDENTIALS_DIR is still read). Bootstrap and rationale:
 # docs/architecture.md, section 4. Nothing here contains or prints secrets.
 
-dev_dir="${PTA_DEV_CREDENTIALS_DIR:-$HOME/.config/pta}"
+dev_dir="${KUROKO_DEV_CREDENTIALS_DIR:-${PTA_DEV_CREDENTIALS_DIR:-$HOME/.config/pta}}"
 
 if [ ! -d "$dev_dir" ]; then
 	echo "dev-env: $dev_dir does not exist; see docs/architecture.md (section 4)" >&2

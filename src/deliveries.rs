@@ -425,7 +425,7 @@ pub async fn send(
     let mut builder = client
         .request(request.method, &request.url)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "personal-teams-assistant-delivery")
+        .header("User-Agent", "kuroko-delivery")
         .body(request.body);
     for (name, value) in request.headers {
         builder = builder.header(name, value);
