@@ -596,6 +596,11 @@ pub(in crate::app) async fn protocol(host: &Arc<Host>, args: &Value) -> Result<V
                 )
                 .await
             }
+            // A signed-in computer has no `[secrets]` of its own: the coordinator, which holds the
+            // Azure source's personal access token and performs the writes, answers for it.
+            "azure_cli_status" => Ok(json!(
+                super::super::azure_pat::status(&host.state, args["args"]["source"].as_str()).await
+            )),
             "machine_list" | "machine_teams" => {
                 Box::pin(operate(
                     host,

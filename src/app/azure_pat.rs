@@ -4,6 +4,7 @@
 //! remedy for automation. The token stays in host memory and never reaches IPC, logs or models.
 use super::*;
 use crate::ado::implementation::Identity;
+use serde_json::{Value, json};
 
 const NOT_CONFIGURED: &str = "Azure DevOps writes use the enabled Azure source's personal access \
 token. Store a PAT with Work Items (Read & write) in that source's variable.";
@@ -21,14 +22,53 @@ pub(super) struct Status {
     pub user: Option<String>,
     pub method: &'static str,
 }
+impl Status {
+    fn new(state: &'static str) -> Self {
+        Self {
+            state,
+            authenticated: false,
+            user: None,
+            method: "personal_access_token",
+        }
+    }
+}
+
+/// The coordinator's answer, taken only for a known state and a bounded account name. An older
+/// coordinator that does not answer the operation reads as `unavailable`.
+fn from_coordinator(data: &Value) -> Status {
+    let mut status = Status::new(
+        ["authenticated", "rejected", "not_configured", "unavailable"]
+            .into_iter()
+            .find(|state| data["state"] == *state)
+            .unwrap_or("unavailable"),
+    );
+    status.authenticated = status.state == "authenticated" && data["authenticated"] == true;
+    if !status.authenticated && status.state == "authenticated" {
+        status.state = "unavailable";
+    }
+    status.user = data["user"]
+        .as_str()
+        .filter(|s| s.len() <= 320 && !s.chars().any(char::is_control))
+        .map(str::to_owned);
+    status
+}
 
 pub(super) async fn status(state: &DesktopState, source: Option<&str>) -> Status {
-    let mut status = Status {
-        state: "not_configured",
-        authenticated: false,
-        user: None,
-        method: "personal_access_token",
-    };
+    // A computer signed in to a coordinator keeps no `[secrets]`: the coordinator holds the token
+    // (its agents receive it from there) and answers for it.
+    if implementation::link(state).ok().flatten().is_some() {
+        let reply = implementation::fleet::account_reply(
+            state,
+            "azure_cli_status",
+            &json!({"source":source}),
+        )
+        .await;
+        return match reply {
+            Ok(Some(reply)) if reply["ok"] == true => from_coordinator(&reply["data"]),
+            _ => Status::new("unavailable"),
+        };
+    }
+    let mut status = Status::new("not_configured");
     let Ok((client, key, catalog)) = tools::todo::azure_credential(state, source) else {
         return status;
     };
@@ -52,5 +92,37 @@ pub(super) async fn require(state: &DesktopState, source: Option<&str>) -> Resul
         "rejected" => Err(SetupError(REJECTED).into()),
         "unavailable" => Err(anyhow::anyhow!(UNAVAILABLE)),
         _ => Err(SetupError(NOT_CONFIGURED).into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signed_in_computer_takes_only_a_known_state_from_its_coordinator() {
+        let ok = from_coordinator(
+            &json!({"state":"authenticated","authenticated":true,"user":"Ana Example"}),
+        );
+        assert!(ok.authenticated);
+        assert_eq!(ok.user.as_deref(), Some("Ana Example"));
+        assert_eq!(
+            from_coordinator(&json!({"state":"rejected"})).state,
+            "rejected"
+        );
+        for odd in [
+            json!({"state":"authenticated","authenticated":false}),
+            json!({"state":"granted","authenticated":true}),
+            json!(null),
+        ] {
+            let status = from_coordinator(&odd);
+            assert_eq!(status.state, "unavailable");
+            assert!(!status.authenticated);
+        }
+        let user = "x".repeat(400);
+        assert_eq!(
+            from_coordinator(&json!({"state":"rejected","user":user})).user,
+            None
+        );
     }
 }
