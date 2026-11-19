@@ -422,11 +422,15 @@ Remaining, optional or tied to 0.21.0:
 
 - Renaming the server's units and updater to `kuroko-*` (decision 5), or at least pointing
   `personal-teams-assistant-web.service` at `kuroko-host --web` and the updater at `kuroko`.
-- The one-command installers still register the skill and the MCP server under
-  `personal-teams-assistant` (`INTEGRATION` in `install.sh`, `$Integration` in `install.ps1`).
 - The scripts that still run the CLI or host by a former name (`configure-cloud-access.py`,
   `rehearse-cloud-migration.py`, `dev-host.sh`, `vps-update.py`).
 - Renaming, or keeping on purpose, the `PTA_*` variables that have no `KUROKO_*` name yet
   (development, tests and the server updater's `PTA_UPDATE_*`).
 - Retiring the aliases in 0.21.0 once every machine's service entry and MCP configuration has
   migrated (architecture §15).
+
+## 12. 0.18.4: installers register `kuroko`
+
+With `--integrations`, `install.sh` and `install.ps1` install the skill into `~/.<cli>/skills/kuroko`
+and register the MCP server as `kuroko`. A registration under the former name is not duplicated:
+they say to run `kuroko mcp migrate --confirmed`.

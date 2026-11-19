@@ -43,7 +43,7 @@ PROVENANCE="$REPOSITORY"
 RECORD_REPOSITORY="https://github.com/$REPOSITORY"
 # The skill directory and the MCP server name registered with coding CLIs keep the former name
 # until a later release migrates the clients' configuration.
-INTEGRATION="$LEGACY"
+INTEGRATION="$PRODUCT"
 RECORD="install.json"
 RC_FILES=".profile .bash_profile .bash_login .bashrc .zprofile .zshrc"
 BEGIN_MARK="# >>> kuroko (install.sh) >>>"
@@ -566,8 +566,9 @@ remove_path() {
 }
 
 # ---------------------------------------------------------------------------------------------
-# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both keep
-# the name they had before the rename (INTEGRATION).
+# Coding CLIs: the skill and `kuroko mcp`, with consent; the exact commands otherwise. Both are
+# named `kuroko` (INTEGRATION); a registration under the former name is left for
+# `kuroko mcp migrate`, and installing the skill beside its former folder removes that copy.
 
 register_mcp() {
     if [ "$1" = claude ]; then
@@ -605,6 +606,8 @@ integrations() {
         fi
         if "$tool" mcp get "$INTEGRATION" >/dev/null 2>&1 </dev/null; then
             say "$tool: $INTEGRATION is already registered as an MCP server."
+        elif "$tool" mcp get "$LEGACY" >/dev/null 2>&1 </dev/null; then
+            say "$tool: the MCP server is registered under its former name $LEGACY; run '$CLI mcp migrate --confirmed' to move it."
         elif register_mcp "$tool" "$command"; then
             say "$tool: registered '$command mcp' as the MCP server $INTEGRATION."
         else
