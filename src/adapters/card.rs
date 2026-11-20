@@ -32,7 +32,7 @@ const BAND: &str = "pta-band";
 /// The band's animated mark (rendered from the Kuroko figure, 135 pixels so it stays sharp at the
 /// largest mark size on a 3× screen; also the GUI preview's): an animated PNG of about 76 KB,
 /// sent as the message's last hosted content when the style asks for it.
-pub const MARK: &[u8] = include_bytes!("../../desktop/ui/kuroko-mark.png");
+pub const MARK: &[u8] = crate::app::gui_assets::KUROKO_MARK;
 
 /// The bytes of the band's animated mark, when a message in `style` carries it.
 pub fn hosted_mark(style: &MessageStyle) -> Option<&'static [u8]> {
