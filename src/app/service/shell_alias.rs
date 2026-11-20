@@ -14,6 +14,17 @@ pub(crate) const END: &str = "# <<< kuroko alias <<<";
 const MARKER: &str = "shell-alias.json";
 /// Set to any value, the host writes no alias (development and test hosts).
 const OPT_OUT: &str = "KUROKO_NO_SHELL_ALIAS";
+/// The files bash and zsh read besides the profiles written, where a user may define `kk`.
+const ALIAS_FILES: [&str; 8] = [
+    ".bashrc",
+    ".bash_profile",
+    ".zshrc",
+    ".bash_aliases",
+    ".aliases",
+    ".zsh_aliases",
+    ".profile",
+    ".zshenv",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Syntax {
@@ -58,6 +69,9 @@ struct Home {
     shell: Option<String>,
     /// The Documents folder PowerShell reads its profiles from (Windows).
     documents: Option<PathBuf>,
+    /// Whether Windows PowerShell runs a profile script (its execution policy allows local
+    /// scripts); without it a new profile would print an error in every window.
+    scripts: bool,
     /// Whether PowerShell 7 is installed (macOS and Linux keep its profile under `~/.config`).
     pwsh: bool,
 }
@@ -73,17 +87,22 @@ impl Home {
                 .map(|n| n.to_string_lossy().into_owned())
         });
         let documents = windows.then(|| documents(&home));
-        let pwsh = !windows && on_path("pwsh");
+        let scripts = windows && scripts_allowed();
+        let pwsh = on_path(if windows { "pwsh.exe" } else { "pwsh" });
         Some(Self {
             home,
             windows,
             shell,
             documents,
+            scripts,
             pwsh,
         })
     }
     /// The profiles to write: each bash or zsh startup file that exists (the login shell's own
-    /// is created on macOS and Linux), and PowerShell's current-user profiles.
+    /// is created on macOS and Linux), and PowerShell's current-user profiles: one that exists,
+    /// or a new one where that PowerShell runs it (PowerShell 7 installed; Windows PowerShell
+    /// with an execution policy that allows local scripts). Nothing for bash and zsh when a file
+    /// they read defines `kk` already (`~/.bash_aliases`, for example).
     fn profiles(&self) -> Vec<(PathBuf, Syntax)> {
         let mut profiles = Vec::new();
         for file in [".bashrc", ".bash_profile", ".zshrc"] {
@@ -98,12 +117,22 @@ impl Home {
                 profiles.push((path, Syntax::Posix));
             }
         }
+        if ALIAS_FILES.iter().any(|file| {
+            let (outside, _) =
+                split(&std::fs::read_to_string(self.home.join(file)).unwrap_or_default());
+            outside.lines().any(|line| Syntax::Posix.defines(line))
+        }) {
+            profiles.clear();
+        }
         if let Some(documents) = &self.documents {
-            for edition in ["PowerShell", "WindowsPowerShell"] {
-                profiles.push((
-                    documents.join(edition).join("profile.ps1"),
-                    Syntax::PowerShell,
-                ));
+            for (edition, runs) in [
+                ("PowerShell", self.pwsh),
+                ("WindowsPowerShell", self.scripts),
+            ] {
+                let path = documents.join(edition).join("profile.ps1");
+                if runs || path.is_file() {
+                    profiles.push((path, Syntax::PowerShell));
+                }
             }
         } else if self.pwsh || self.home.join(".config/powershell").is_dir() {
             profiles.push((
@@ -135,6 +164,26 @@ fn documents(home: &Path) -> PathBuf {
     asked.unwrap_or_else(|| home.join("Documents"))
 }
 
+/// Whether Windows PowerShell's effective execution policy runs a local, unsigned profile.
+fn scripts_allowed() -> bool {
+    crate::security::program("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-ExecutionPolicy",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| {
+            ["RemoteSigned", "Unrestricted", "Bypass"]
+                .contains(&String::from_utf8_lossy(&o.stdout).trim())
+        })
+}
+
 fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
@@ -145,7 +194,7 @@ fn on_path(program: &str) -> bool {
 enum Outcome {
     Written,
     Unchanged,
-    /// The profile defines `kk` its own way.
+    /// The profile defines `kk` its own way, or holds a block without its end.
     Taken,
 }
 
@@ -158,7 +207,11 @@ fn write(path: &Path, syntax: Syntax) -> std::io::Result<Outcome> {
         Err(error) => return Err(error),
     };
     let (outside, inside) = split(&text);
-    if outside.lines().any(|line| syntax.defines(line)) {
+    // A block whose end was removed or edited leaves the profile as the person left it.
+    let broken = inside
+        .as_deref()
+        .is_some_and(|b| !b.lines().any(|l| l.trim_end() == END));
+    if broken || outside.lines().any(|line| syntax.defines(line)) {
         return Ok(Outcome::Taken);
     }
     let block = format!("{BEGIN}\n{}\n{END}\n", syntax.line());
@@ -248,7 +301,8 @@ mod tests {
             windows,
             shell: shell.map(str::to_owned),
             documents: windows.then(|| dir.join("Documents")),
-            pwsh: false,
+            scripts: windows,
+            pwsh: windows,
         }
     }
 
@@ -323,5 +377,27 @@ mod tests {
         let ps = dir.path().join("profile.ps1");
         std::fs::write(&ps, "Set-Alias kk Get-ChildItem\n").unwrap();
         assert_eq!(write(&ps, Syntax::PowerShell).unwrap(), Outcome::Taken);
+        // A block whose end is gone: nothing after it is lost.
+        let cut = dir.path().join(".cut");
+        let text = format!("a\n{BEGIN}\nalias kk='kuroko'\nexport B=2\n");
+        std::fs::write(&cut, &text).unwrap();
+        assert_eq!(write(&cut, Syntax::Posix).unwrap(), Outcome::Taken);
+        assert_eq!(std::fs::read_to_string(&cut).unwrap(), text);
+    }
+
+    #[test]
+    fn a_kk_in_an_aliases_file_and_a_restricted_powershell_get_no_new_block() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".bashrc"), "export A=1\n").unwrap();
+        std::fs::write(dir.path().join(".bash_aliases"), "alias kk='kubectl'\n").unwrap();
+        let mut restricted = home(dir.path(), true, None);
+        restricted.scripts = false;
+        restricted.pwsh = false;
+        assert!(restricted.profiles().is_empty());
+        // A profile that exists is still written: it already runs, or already fails.
+        let existing = dir.path().join("Documents/WindowsPowerShell/profile.ps1");
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, "").unwrap();
+        assert_eq!(restricted.profiles(), [(existing, Syntax::PowerShell)]);
     }
 }

@@ -1508,7 +1508,13 @@ fn session_directory(host: &Arc<Host>, record: &Value, id: &str) -> Result<PathB
     security::private_dir(&parent)?;
     let directory = parent.join(id);
     security::private_dir(&directory)?;
+    // A reconnected session is reachable again: the sweep reads this as its last use.
+    std::fs::write(directory.join(".reachable"), now_text_for_sweep())?;
     Ok(directory)
+}
+
+fn now_text_for_sweep() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 /// A coding or planning run's session name, from the work item the launch carries.

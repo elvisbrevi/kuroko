@@ -1207,7 +1207,7 @@ async fn execute_allowing(
 mod tests {
     use super::*;
     use crate::llm::prompts::{
-        CODE_RULES as CODE_EVIDENCE, DIRECT_RULES, PLAN_ORDER, SUMMARIZE_TASK, SUMMARY_RULES,
+        CODE_RULES as CODE_EVIDENCE, PLAN_ORDER, SUMMARIZE_TASK, SUMMARY_RULES,
     };
     #[tokio::test]
     #[ignore = "Requires the user's provider login and a small synthetic model call"]
@@ -1502,8 +1502,10 @@ mod tests {
             // them and the untrusted input last.
             let prompt = read("prompt.txt");
             assert!(prompt.starts_with("Your instructions: prefer the payments workflow.\n"));
-            assert!(prompt.contains(DIRECT_RULES));
-            assert!(prompt.find(DIRECT_RULES) < prompt.find("Ignore the rules"));
+            assert!(prompt.contains(crate::llm::prompts::DIRECT_RULES));
+            assert!(
+                prompt.find(crate::llm::prompts::DIRECT_RULES) < prompt.find("Ignore the rules")
+            );
             assert!(!arguments.iter().any(|a| a.contains("Ignore the rules")));
             // The session's name is never an argument.
             assert!(!arguments.iter().any(|a| a.contains("Kuroko - ")));

@@ -176,11 +176,17 @@ fn sweep(parent: &std::path::Path) {
     };
     let old = Duration::from_secs(DIRECTORY_HOURS * 3600);
     for entry in entries.flatten() {
-        let stale = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
+        // Its last use: when it was made, or reconnected (`.reachable`).
+        let age = |path: std::path::PathBuf| {
+            std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+        };
+        let stale = [age(entry.path()), age(entry.path().join(".reachable"))]
+            .into_iter()
+            .flatten()
+            .min()
             .is_some_and(|age| age > old);
         if stale {
             let _ = std::fs::remove_dir_all(entry.path());
@@ -203,18 +209,53 @@ pub(super) async fn answer(host: &Arc<Host>, args: &Value) -> Result<Value> {
         reported.1.get_or_insert_with(now_text);
         Ok(())
     };
+    // This machine keeps its own record of the session too, so its Remote Control can be
+    // closed or reconnected here (`implementation_mobile_session`) and says when it ended.
+    let db = &host.state.implementation.db;
+    let purpose = purpose(call.task);
+    let local = db
+        .request_insert(&json!({"id":call.id,"machine":host.state.implementation.registry.lock().await.id,"purpose":purpose,"provider":call.provider,"model":call.model,"effort":call.effort,"state":"generating","created_at":now_text(),"started_at":null,"finished_at":null,"session_id":null,"item":{"id":call.item},"output":"","permission_mode":crate::llm::implementation::permission_mode(&call.provider, true)}))
+        .is_ok();
     let access = Arc::new(std::sync::Mutex::new(None));
     let seen = access.clone();
+    let recorded = super::remote_observer(host, &call.id);
     let remote: crate::llm::implementation::mobile::Observer = Arc::new(move |a| {
-        *seen.lock().unwrap() = Some(a);
+        *seen.lock().unwrap() = Some(a.clone());
+        if local {
+            let _ = recorded(a);
+        }
         Ok(())
     });
-    let direction = session(host, &call, &observer, remote).await?;
+    let direction = session(host, &call, &observer, remote).await;
     let (session_id, started_at) = reported.into_inner().unwrap();
+    if local {
+        let state = match &direction {
+            Ok(d) if d.answer.is_some() => "done",
+            _ => "failed",
+        };
+        let _ = LocalImplementation::new(db).finish_request(&call.id, &mut |record| {
+            record["state"] = json!(state);
+            record["session_id"] = json!(session_id);
+            record["started_at"] = json!(started_at);
+            record["finished_at"] = json!(now_text());
+            Ok(())
+        });
+    }
+    let direction = direction?;
     let access = access.lock().unwrap().take();
     Ok(
         json!({"answer":direction.answer,"problem":direction.problem,"failure":direction.failure,"session_id":session_id,"started_at":started_at,"finished_at":now_text(),"remote":access}),
     )
+}
+
+/// The record's `purpose` of a director's session.
+fn purpose(task: crate::llm::implementation::DirectTask) -> &'static str {
+    match task {
+        crate::llm::implementation::DirectTask::Classify => "classification",
+        crate::llm::implementation::DirectTask::Summarize => "summary",
+        crate::llm::implementation::DirectTask::Supervise => "supervision",
+        crate::llm::implementation::DirectTask::Audit => "audit",
+    }
 }
 
 /// Why the director's machine gave no answer, as it reported it: its `failure` within the
@@ -261,12 +302,7 @@ pub(in crate::app) async fn ask(host: &Arc<Host>, ask: Ask<'_>) -> Result<Answer
     let mut item = ask.item.clone();
     item.dates.clear();
     let director = ask.director;
-    let purpose = match ask.task {
-        crate::llm::implementation::DirectTask::Classify => "classification",
-        crate::llm::implementation::DirectTask::Summarize => "summary",
-        crate::llm::implementation::DirectTask::Supervise => "supervision",
-        crate::llm::implementation::DirectTask::Audit => "audit",
-    };
+    let purpose = purpose(ask.task);
     let (named, texted) = if local {
         (true, true)
     } else {

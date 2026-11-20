@@ -258,6 +258,9 @@ impl Session {
     }
 }
 
+/// The most yielding sessions (`Keep::Yielding`) a host keeps at once.
+const YIELDING: usize = 4;
+
 /// Whether a Claude session that ended with its answer stays reachable through Remote Control.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Keep {
@@ -292,8 +295,10 @@ async fn retain(
     let mut sessions = sessions().lock().await;
     sessions.retain(|_, live| !live.task.is_finished());
     // A full host lets its oldest yielding session go, so a director's turns never take the
-    // places of the sessions people continue.
-    if sessions.len() >= 16
+    // places of the sessions people continue; and it keeps at most `YIELDING` of them, so
+    // frequent director turns hold few processes.
+    let yielding = sessions.values().filter(|live| live.yields).count();
+    if (sessions.len() >= 16 || (yields && yielding >= YIELDING))
         && let Some(oldest) = sessions
             .iter()
             .filter(|(_, live)| live.yields)
