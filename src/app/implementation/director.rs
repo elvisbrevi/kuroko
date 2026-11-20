@@ -1,7 +1,10 @@
 //! The workflow director's session. It runs on the director's machine in the same tool-less,
-//! read-only, closed-JSON session as planning (`llm::implementation::direct`), never retained
-//! after its answer, in a private temporary directory under `implementation/directors/` removed
-//! when the session ends, with the restricted child environment;
+//! read-only, closed-JSON session as planning (`llm::implementation::direct`), with Remote
+//! Control like every agent session: a Claude session that answered stays reachable for the
+//! person, yielding its place to newer sessions when the machine keeps the most it can. It runs
+//! in a private directory of its own, `implementation/directors/<record ID>` (kept while the session
+//! may be reachable, removed by a later session after `DIRECTORY_HOURS`), with the restricted
+//! child environment;
 //! on another machine it is the additive one-shot call `workflow_direct` (`answer`), which a
 //! worker runs beside its poll and advertises with `workflow_direct_support`. The coordinator
 //! records each session as an agent session in `request_runs` (purpose `classification`: the
@@ -23,6 +26,8 @@ pub(in crate::app) const POLL_SECONDS: u64 = 10;
 /// polls, with ten seconds of margin (95). With the item read before it, a classification
 /// answers within the control channel's client deadline (`control::CLIENT_DEADLINE_SECONDS`).
 pub(in crate::app) const WAIT_SECONDS: u64 = PROBE_SECONDS + SESSION_SECONDS + POLL_SECONDS + 10;
+/// How long a director's directory is kept: longer than a retained session (two hours).
+const DIRECTORY_HOURS: u64 = 3;
 const INSTRUCTIONS: usize = 12_000;
 const INPUT: usize = 200_000;
 
@@ -75,6 +80,11 @@ struct Call {
     /// otherwise, and sent only to a worker that advertises `workflow_supervise_support`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     seconds: Option<u64>,
+    /// The user's changes to the prompts the session composes (`DirectTask::changes`); sent only
+    /// to a worker that advertises `prompt_texts_support`, which uses its own default for the
+    /// rest.
+    #[serde(default, skip_serializing_if = "crate::agent_prompts::Texts::is_empty")]
+    texts: crate::agent_prompts::Texts,
 }
 
 /// The longest session a call may ask for (the supervisor's `session_seconds` bound).
@@ -123,21 +133,25 @@ async fn session(
         Duration::from_secs(PROBE_SECONDS),
     )
     .await?;
-    // A private directory for this session only, removed when it ends (`directory` drops).
+    // A private directory for this session only. A retained session keeps working in it, so
+    // it outlives the session; a later one removes it once no session can be reachable.
     let parent = host.state.implementation.root.join("directors");
     security::private_dir(&parent)?;
-    let directory = tempfile::Builder::new()
-        .prefix("session-")
-        .tempdir_in(&parent)?;
-    security::private_dir(directory.path())?;
+    sweep(&parent);
+    let directory = parent.join(&call.id);
+    security::private_dir(&directory)?;
     match tokio::time::timeout(
         Duration::from_secs(seconds),
         crate::llm::implementation::direct(
             call.task,
             (&call.provider, &call.model, &call.effort),
-            directory.path().to_path_buf(),
+            directory,
             &call.instructions,
             &call.input,
+            // Changes another host sent that this one cannot accept leave its own defaults.
+            &Some(call.texts.clone())
+                .filter(|t| t.check().is_ok())
+                .unwrap_or_default(),
             &call.task.session_name(call.item),
             observer,
             remote,
@@ -155,8 +169,27 @@ async fn session(
     }
 }
 
+/// Remove the directories of director sessions that no Remote Control can still reach.
+fn sweep(parent: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let old = Duration::from_secs(DIRECTORY_HOURS * 3600);
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > old);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// `workflow_direct` on the director's machine: run the session and return what it gave, with
-/// its native session ID and times. The coordinator keeps the record.
+/// its native session ID, times and Remote Control access. The coordinator keeps the record.
 pub(super) async fn answer(host: &Arc<Host>, args: &Value) -> Result<Value> {
     let call: Call = serde_json::from_value(args.clone())?;
     let reported = std::sync::Mutex::new((None::<String>, None::<String>));
@@ -170,10 +203,17 @@ pub(super) async fn answer(host: &Arc<Host>, args: &Value) -> Result<Value> {
         reported.1.get_or_insert_with(now_text);
         Ok(())
     };
-    let direction = session(host, &call, &observer, Arc::new(|_| Ok(()))).await?;
+    let access = Arc::new(std::sync::Mutex::new(None));
+    let seen = access.clone();
+    let remote: crate::llm::implementation::mobile::Observer = Arc::new(move |a| {
+        *seen.lock().unwrap() = Some(a);
+        Ok(())
+    });
+    let direction = session(host, &call, &observer, remote).await?;
     let (session_id, started_at) = reported.into_inner().unwrap();
+    let access = access.lock().unwrap().take();
     Ok(
-        json!({"answer":direction.answer,"problem":direction.problem,"failure":direction.failure,"session_id":session_id,"started_at":started_at,"finished_at":now_text()}),
+        json!({"answer":direction.answer,"problem":direction.problem,"failure":direction.failure,"session_id":session_id,"started_at":started_at,"finished_at":now_text(),"remote":access}),
     )
 }
 
@@ -227,14 +267,19 @@ pub(in crate::app) async fn ask(host: &Arc<Host>, ask: Ask<'_>) -> Result<Answer
         crate::llm::implementation::DirectTask::Supervise => "supervision",
         crate::llm::implementation::DirectTask::Audit => "audit",
     };
-    let named = local
-        || state
+    let (named, texted) = if local {
+        (true, true)
+    } else {
+        state
             .registry
             .lock()
             .await
             .machines
             .iter()
-            .any(|m| m.id == ask.machine && m.session_names);
+            .find(|m| m.id == ask.machine)
+            .map_or((false, false), |m| (m.session_names, m.prompt_texts))
+    };
+    let texts = crate::agent_prompts::Texts::new(&host.state.settings.map()?.agent_prompts);
     let record = json!({"id":id,"machine":ask.machine,"purpose":purpose,"project":item.project,"kind":item.kind,"provider":director.provider,"model":director.model,"effort":director.effort,"state":"generating","created_at":now_text(),"started_at":null,"finished_at":null,"session_id":null,"item":item,"output":"","permission_mode":crate::llm::implementation::permission_mode(&director.provider, true)});
     state.db.request_insert(&record)?;
     let call = Call {
@@ -247,6 +292,11 @@ pub(in crate::app) async fn ask(host: &Arc<Host>, ask: Ask<'_>) -> Result<Answer
         input: ask.input,
         item: named.then_some(item.id),
         seconds: ask.seconds,
+        texts: if texted {
+            ask.task.changes(&texts)
+        } else {
+            Default::default()
+        },
     };
     let result: Result<(Direction, Option<String>, Option<String>)> = if local {
         let observer = |session: Option<&str>| {
@@ -288,6 +338,18 @@ pub(in crate::app) async fn ask(host: &Arc<Host>, ask: Ask<'_>) -> Result<Answer
                 .as_str()
                 .filter(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())
                 .map(str::to_owned);
+            // The session's Remote Control as the machine reported it; a link that is not
+            // Claude's own session link is dropped.
+            if let Ok(mut access) = serde_json::from_value::<
+                crate::llm::implementation::mobile::Access,
+            >(reply["remote"].clone())
+                && ["connected", "unavailable", "offline"].contains(&access.status.as_str())
+            {
+                access.url = access
+                    .url
+                    .and_then(|u| crate::llm::implementation::mobile::claude_url(&u).ok());
+                let _ = state.db.remote(&id, access);
+            }
             let problem = known_problem(&reply["problem"]);
             let answer = if problem.is_none() {
                 reply.get("answer").cloned().filter(|a| !a.is_null())

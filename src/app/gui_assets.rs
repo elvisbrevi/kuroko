@@ -151,6 +151,11 @@ pub(super) const ASSETS: &[Asset] = &[
         "text/javascript; charset=utf-8",
         true
     ),
+    asset!(
+        "settings-prompts.js",
+        "text/javascript; charset=utf-8",
+        true
+    ),
     asset!("i18n.js", "text/javascript; charset=utf-8", false),
     asset!("catalog.js", "text/javascript; charset=utf-8", false),
     asset!("style.css", "text/css; charset=utf-8", false),

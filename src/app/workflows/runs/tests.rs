@@ -793,7 +793,7 @@ async fn a_coding_run_gets_the_fixed_rules_its_workflow_lifts_as_the_run_got_it(
         .as_str()
         .unwrap();
     assert!(
-        system.ends_with("Do not create or change provider work items, publish or deploy."),
+        system.ends_with("Do not create or change Azure DevOps or GitHub work items or issues (a pull request is not a work item), publish or deploy."),
         "{system}"
     );
     // An HU's planning run keeps its own read-only rules, whatever the workflow allows.

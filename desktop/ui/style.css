@@ -381,6 +381,8 @@ nav button, .status-row, .activity-row, .segmented button, .subnav [role=tab], .
 .case-badges { display: inline-flex; gap: .3rem; }
 .resource-facts { display: grid; gap: .1rem; margin: 0; }
 .resource-facts small { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+/* A workflow text in Settings › Prompts: three lines, its whole text is edited in Workflows. */
+.prompt-preview span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; white-space: pre-line; overflow-wrap: anywhere; }
 .workflow-row { min-width: 0; }
 .workflow-row .resource-head .title { min-width: 0; overflow-wrap: anywhere; }
 .workflow-lead { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; line-height: 1.45; }

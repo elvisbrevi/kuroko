@@ -31,10 +31,16 @@ fn failure(error: &anyhow::Error) -> &'static str {
 pub async fn providers(config: &Config) -> Result<Value> {
     let evidence = "Synthetic test data: support Monday to Friday from 09:00 to 18:00. Maintenance on Sunday from 02:00 to 03:00. The maintenance window is independent of support.";
     let mut checks = Vec::new();
+    // The probes run under the user's own prompts, as answers do.
+    let texts = std::sync::Arc::new(
+        crate::knowledge::KnowledgeMap::load(&config.knowledge_map)
+            .map(|map| crate::agent_prompts::Texts::new(&map.agent_prompts))
+            .unwrap_or_default(),
+    );
     for choice in config.llm.active() {
         let label = format!("{}:{}:{}", choice.provider, choice.model, choice.effort);
         let probe = async {
-            let model = llm::model_for(&choice, &config.llm, &mut Vec::new())?;
+            let model = llm::model_for(&choice, &config.llm, &mut Vec::new())?.texts(texts.clone());
             let mut answers = Vec::new();
             for (question, detail_requested) in [
                 ("What are the support hours? Answer briefly.", false),

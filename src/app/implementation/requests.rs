@@ -249,8 +249,8 @@ async fn run(host: &Arc<Host>, request: Request, prepared: Value, directory: Pat
             input["organization"] = crate::organization::agent_input(entries);
         }
         let input = input.to_string();
-        let instructions =
-            crate::agent_prompts::resolve(&map.agent_prompts, crate::agent_prompts::REQUEST);
+        let texts = crate::agent_prompts::Texts::new(&map.agent_prompts);
+        let instructions = texts.get(crate::agent_prompts::REQUEST);
         let observer = |session: Option<&str>| {
             authority::require_execution(&host.state)?;
             db.request_update(&request.id, |record| {
@@ -275,6 +275,7 @@ async fn run(host: &Arc<Host>, request: Request, prepared: Value, directory: Pat
             directory,
             &instructions,
             &input,
+            &texts,
             &crate::llm::implementation::SessionName::request(&request.kind),
             &observer,
             super::remote_observer(host, &request.id),

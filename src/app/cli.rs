@@ -443,7 +443,9 @@ Knowledge
                            projects, purpose, instructions and fields (reference, name, required,
                            values, default, guidance, fill) and listed_with_bugs (To-Do lists that
                            Azure task type with the bugs). The implementation agents follow them.
-  prompts list | prompts show ID         The implementation agents' instructions (plan, code, request, direct).
+  prompts list | prompts show ID         Every prompt the app gives a model, by section: the agents' instructions
+                           (plan, code, request, direct, supervise), their rules, the workflow director
+                           and supervisor, workflow runs, Teams answers, steps and activity.
   prompts edit ID | prompts reset ID     JSON on stdin: {\"instructions\": TEXT}; reset restores the default.
   workflows list | workflows show ID     Workflows: recipes for implementing the items of one Azure DevOps project,
                            with how much of each limit they use (usage: instructions, blocks, context).
@@ -3244,7 +3246,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
         }
         "capabilities" => {
             return Ok(Reply::success(
-                json!({"contract":control::CONTRACT,"commands":HELP,"skill_version":env!("CARGO_PKG_VERSION"),"activity_registration_support":true,"web_support":true,"web_access_support":true,"knowledge_index_support":true,"mcp_support":true,"tools_support":true,"todo_support":true,"implementation_support":true,"workflows_support":true,"workflow_director_support":true,"workflow_runs_support":true,"workflow_supervisor_support":true,"machine_pairing_support":true,"machine_login_support":true,"machine_management_support":true,"account_variables_support":true,"account_portable_support":true,"account_authority_support":true,"shared_accounts_support":true,"cloud_store_support":true,"cloud_mirror_support":true,"cloud_disconnect_support":true,"cloud_primary_support":true,"cloud_migration_support":true,"cloud_installations_support":true,"cloud_handoff_support":true,"cloud_delivery_support":true,"cloud_restore_support":true,"cloud_conflicts_support":true,"cloud_lost_support":true,"cloud_repair_support":true,"teams_read_support":true,"teams_images_support":true,"audit_pages_support":true,"service_support":true}),
+                json!({"contract":control::CONTRACT,"commands":HELP,"skill_version":env!("CARGO_PKG_VERSION"),"activity_registration_support":true,"web_support":true,"web_access_support":true,"knowledge_index_support":true,"mcp_support":true,"tools_support":true,"todo_support":true,"implementation_support":true,"workflows_support":true,"workflow_director_support":true,"workflow_runs_support":true,"workflow_supervisor_support":true,"prompts_catalog_support":true,"machine_pairing_support":true,"machine_login_support":true,"machine_management_support":true,"account_variables_support":true,"account_portable_support":true,"account_authority_support":true,"shared_accounts_support":true,"cloud_store_support":true,"cloud_mirror_support":true,"cloud_disconnect_support":true,"cloud_primary_support":true,"cloud_migration_support":true,"cloud_installations_support":true,"cloud_handoff_support":true,"cloud_delivery_support":true,"cloud_restore_support":true,"cloud_conflicts_support":true,"cloud_lost_support":true,"cloud_repair_support":true,"teams_read_support":true,"teams_images_support":true,"audit_pages_support":true,"service_support":true}),
             ));
         }
         "skill" => return crate::app::skill::command(action, args.get(2).map(String::as_str)),
@@ -3940,7 +3942,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 .as_array()
                 .and_then(|prompts| prompts.iter().find(|p| p["id"] == id))
                 .cloned()
-                .context("unknown agent prompt")?;
+                .context("unknown prompt")?;
             let change = data["map"]["agent_prompts"]
                 .as_array()
                 .and_then(|prompts| prompts.iter().find(|p| p["id"] == id))
@@ -3961,7 +3963,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 let change = input()?;
                 ensure!(
                     change.get("id").is_none_or(|v| v == id),
-                    "agent prompt ID cannot change"
+                    "prompt ID cannot change"
                 );
                 list.push(json!({"id": id, "instructions": change["instructions"]}));
             }

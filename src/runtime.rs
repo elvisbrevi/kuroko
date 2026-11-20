@@ -50,6 +50,9 @@ pub async fn serve(
     let config = Arc::new(Config::load(path)?);
     let knowledge = KnowledgeMap::load(&config.knowledge_map)?;
     let (llm, llm_secrets) = crate::llm::from_config(&config.llm)?;
+    let llm = llm.texts(Arc::new(crate::agent_prompts::Texts::new(
+        &knowledge.agent_prompts,
+    )));
     let client_state = security::secret("GRAPH_WEBHOOK_SECRET")?;
     let encryption_key = security::secret("STATE_ENCRYPTION_KEY")?;
     ensure!(

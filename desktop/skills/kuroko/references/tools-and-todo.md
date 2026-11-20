@@ -233,7 +233,7 @@ children and run installed coding agents.
    `depends_on` (keys of earlier children only), proposed from the work item
    guides; only fields the type's guide marks `fill` and values valid for the live type are
    accepted, and every child is checked before anything is written. The agents start from the
-   editable agent instructions (`kuroko prompts`) plus fixed rules, and also receive the
+   editable agent instructions plus the rules code adds (both in `kuroko prompts`), and also receive the
    organization's norms, architecture and conventions for the item's project as untrusted input.
    On a process task (any task-category type, such as a development bug a guide lists with the bugs) or ordinary GitHub issue, Start implements that item in
    the chosen directories. A started implementation is fully autonomous on that computer: the
@@ -588,8 +588,9 @@ Requires host and CLI `workflow_director_support: true`.
   map without the section.
 - **The director's prompt:** `direct` in `kuroko prompts list|show|edit|reset` (MCP
   `agent_prompts_list`, `agent_prompt_update`, `agent_prompt_reset`; To-Do › Guides and
-  instructions). Code always adds the rules: the item and the workflow descriptions are
-  untrusted, the answer is only the closed JSON, and nothing outside the list may be chosen.
+  instructions). Code adds the rules (`director.rules`, editable in Settings › Prompts): the
+  item and the workflow descriptions are untrusted, the answer is only the closed JSON, and code
+  refuses anything outside the list whatever the prompts say.
 - **Classify an item (dry run):** `kuroko workflows classify ID [--project NAME] [--source ID]`
   (MCP `workflow_classify` with `provider: "azure"` and `id`) reads the Azure item fresh and asks
   the project's director (as `directors` resolves it; `workflow_summary` uses the same one), on

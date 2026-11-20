@@ -342,6 +342,7 @@ pub(in crate::app) async fn register(host: &Arc<Host>, args: &Value) -> Result<V
         session_names: false,
         workflow_supervise: false,
         resume: false,
+        prompt_texts: false,
     });
     state.save(&data)?;
     drop(data);
@@ -441,6 +442,7 @@ pub(in crate::app) async fn protocol(host: &Arc<Host>, args: &Value) -> Result<V
             machine.session_names = args["session_names_support"] == true;
             machine.workflow_supervise = args["workflow_supervise_support"] == true;
             machine.resume = args["implementation_resume_support"] == true;
+            machine.prompt_texts = args["prompt_texts_support"] == true;
         }
         state.save(&data)?;
     }
@@ -972,7 +974,7 @@ async fn poll(host: Arc<Host>) {
             let polled = remote(
                 &connection,
                 json!({"action":"poll","id":own,"results":results,"sessions":sessions,"session_cursor":next,"assistant_phase":assistant_phase,"management_support":true,"roots":roots,
-                    "host_version":env!("CARGO_PKG_VERSION"),"update":crate::app::maintenance::report(&host),"checkout_inspect_support":true,"workflow_direct_support":true,"workflow_supervise_support":true,"implementation_resume_support":true,"agent_sessions_support":true,"session_names_support":true,"upgrade_support":crate::app::maintenance::remote_capable(&host)}),
+                    "host_version":env!("CARGO_PKG_VERSION"),"update":crate::app::maintenance::report(&host),"checkout_inspect_support":true,"workflow_direct_support":true,"workflow_supervise_support":true,"implementation_resume_support":true,"agent_sessions_support":true,"session_names_support":true,"prompt_texts_support":true,"upgrade_support":crate::app::maintenance::remote_capable(&host)}),
             )
             .await;
             standing::note(&host.state, &polled);
@@ -1197,6 +1199,7 @@ mod tests {
             session_names: false,
             workflow_supervise: false,
             resume: false,
+            prompt_texts: false,
         });
         data.teams_machine = worker.clone();
         assert!(leased(&mut data, &worker));

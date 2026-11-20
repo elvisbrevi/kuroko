@@ -695,6 +695,27 @@ function Install-Archive {
     Say "Open a new terminal to use '$Cli'. To remove the binaries later, run this script with -Uninstall (the profile is kept)."
 }
 
+# The `kk` alias block the host writes on the first start of each version
+# (src/app/service/shell_alias.rs), in both PowerShell editions' profiles and Git Bash's files.
+function Remove-ShellAlias {
+    $documents = [Environment]::GetFolderPath('MyDocuments')
+    $files = @()
+    if ($documents) { $files += @((Join-Path $documents 'PowerShell\profile.ps1'), (Join-Path $documents 'WindowsPowerShell\profile.ps1')) }
+    $files += @('.bashrc', '.bash_profile', '.zshrc' | ForEach-Object { Join-Path $env:USERPROFILE $_ })
+    foreach ($file in $files) {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+        $lines = @(Get-Content -LiteralPath $file -Encoding UTF8)
+        if ($lines -notcontains '# >>> kuroko alias >>>') { continue }
+        $skip = $false
+        $kept = foreach ($line in $lines) {
+            if ($line -eq '# >>> kuroko alias >>>') { $skip = $true; continue }
+            if ($line -eq '# <<< kuroko alias <<<') { $skip = $false; continue }
+            if (-not $skip) { $line }
+        }
+        [IO.File]::WriteAllLines($file, [string[]] @($kept))
+    }
+}
+
 function Uninstall-Archive {
     $recordFile = Join-Path $Root $Record
     if (-not (Test-Path -LiteralPath $recordFile) -or ((Get-Content -LiteralPath $recordFile -Raw | ConvertFrom-Json).kind -ne 'archive')) {
@@ -708,6 +729,7 @@ function Uninstall-Archive {
         Stop-AppHost
     }
     Remove-UserPath
+    Remove-ShellAlias
     Remove-Item -LiteralPath $Bin -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $recordFile -Force
     if (-not (Get-ChildItem -LiteralPath $Root -Force)) { Remove-Item -LiteralPath $Root -Force }

@@ -45,7 +45,7 @@ async fn a_workflow_at_its_limits_reaches_the_coding_prompt_whole_with_the_longe
     let bench = Bench::new().await;
     let (workflow, blocks) = at_the_limits(&bench, 3000);
     // A definition a save accepts: its largest context fits.
-    let largest = engine::largest_context(&workflow, &blocks);
+    let largest = engine::largest_context(&workflow, &blocks, &Default::default());
     assert!(largest <= MAX_CONTEXT, "{largest}");
 
     bench.mode("mode", "fail");
@@ -81,7 +81,7 @@ async fn a_definition_whose_context_does_not_fit_stops_its_run_and_is_never_cut(
     let bench = Bench::new().await;
     // Only a hand edit or an older host could store it: a save refuses it.
     let (workflow, blocks) = at_the_limits(&bench, crate::workflows::MAX_BLOCK_TEXT);
-    let largest = engine::largest_context(&workflow, &blocks);
+    let largest = engine::largest_context(&workflow, &blocks, &Default::default());
     assert!(largest > MAX_CONTEXT, "{largest}");
     let id = bench.start(TASK).await;
     let run = bench.state(&id, Phase::Failed).await;
