@@ -322,6 +322,81 @@ impl Graph {
         );
         self.store.finish_output(nonce, id)
     }
+    /// Forgets an unresolved output of the personal chat that never became a message (a send
+    /// Teams refused before hosts recorded it): only after reading every message of the chat
+    /// since that send, a minute earlier included, and finding none with its marker, so the
+    /// assistant can never take its own message for a question.
+    pub async fn discard_output(&self, nonce: &str) -> Result<()> {
+        let chat = self
+            .config
+            .graph
+            .self_chat
+            .as_ref()
+            .context("personal chat disabled")?;
+        self.validate_self_chat(&chat.id).await?;
+        let (conversation, created) = self
+            .store
+            .output_intent(nonce)?
+            .context("unresolved output not found")?;
+        ensure!(
+            conversation == format!("chats/{}", chat.id),
+            "output conversation differs"
+        );
+        let marker = format!("personalteams.invalid/output/{nonce}");
+        // Notes are readable only through /me, as in personal polling.
+        let path = if chat.id == "48:notes" {
+            "me/chats/48:notes/messages".to_owned()
+        } else {
+            format!("chats/{}/messages", chat.id)
+        };
+        let mut url = self.url(&path)?;
+        url.query_pairs_mut()
+            .append_pair("$top", "50")
+            .append_pair("$orderby", "createdDateTime desc");
+        let (origin, expected_path) = (url.origin(), url.path().to_owned());
+        for _ in 0..40 {
+            ensure!(
+                url.origin() == origin
+                    && url.path() == expected_path
+                    && url.username().is_empty()
+                    && url.password().is_none(),
+                "untrusted Graph pagination URL"
+            );
+            let page = self
+                .request_url(Method::GET, url.clone(), None, true)
+                .await?;
+            for message in page["value"].as_array().context("invalid message page")? {
+                let at = message["createdDateTime"]
+                    .as_str()
+                    .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                    .context("a message without its time")?
+                    .timestamp();
+                if at < created - 60 {
+                    return self.forget_output(nonce);
+                }
+                ensure!(
+                    !message["body"]["content"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains(&marker),
+                    "a message of the personal chat carries this output's marker: reconcile it \
+                     with that message's ID instead"
+                );
+            }
+            match page["@odata.nextLink"].as_str() {
+                Some(next) => url = url::Url::parse(next)?,
+                None => return self.forget_output(nonce),
+            }
+        }
+        anyhow::bail!("too many messages since that send to check; reconcile it by hand")
+    }
+    fn forget_output(&self, nonce: &str) -> Result<()> {
+        ensure!(
+            self.store.discard_output(nonce)?,
+            "unresolved output not found"
+        );
+        Ok(())
+    }
     pub async fn discover_self_chat(&self) -> Result<String> {
         // A candidate only: validate it against this account before enabling it.
         if self.validate_self_chat("48:notes").await.is_ok() {
@@ -1197,6 +1272,11 @@ impl Graph {
             Ok(message) => message,
             Err(error) => {
                 let refused = refused_by_graph(&error);
+                // Refused, no message exists, so its output is forgotten; the personal chat
+                // would otherwise stay paused waiting for it.
+                if refused && let Some(nonce) = &nonce {
+                    let _ = self.store.discard_output(nonce);
+                }
                 // The request went out: a log that cannot be written never changes the outcome.
                 let outcome = if refused { "refused" } else { "uncertain" };
                 if self
@@ -1622,7 +1702,18 @@ impl MessageAdapter for Graph {
             body["hostedContents"] = contents;
         }
         // Never retry a send: Graph provides no idempotency guarantee for this endpoint.
-        let result = self.request(Method::POST, &path, Some(body), false).await?;
+        let result = match self.request(Method::POST, &path, Some(body), false).await {
+            Ok(result) => result,
+            Err(error) => {
+                // Refused, no message exists: forget its output so the personal chat goes on.
+                if refused_by_graph(&error)
+                    && let Some(nonce) = &nonce
+                {
+                    let _ = self.store.discard_output(nonce);
+                }
+                return Err(error);
+            }
+        };
         let id = result["id"]
             .as_str()
             .context("Graph send has no message ID")?;

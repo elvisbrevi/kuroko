@@ -307,6 +307,7 @@
               <div id="style-kuroko-fields">
                 <label class="check"><input id="style-animated" class="cfg" type="checkbox"> Animate the icon <small>It travels inside each message as a small image (about 76 KB).</small></label>
                 <label class="check"><input id="style-site-link" class="cfg" type="checkbox"> Open the Kuroko site from the band's text and icon</label>
+                <label class="check" id="style-link-underline-field"><input id="style-link-underline" class="cfg" type="checkbox"> Show the text as a link (underlined) <small>Off, the text keeps the band's look and still opens the site.</small></label>
               </div>
               <details class="fold" id="style-custom">
                 <summary>Colors and sizes <small>Advanced</small></summary>
@@ -322,7 +323,7 @@
                 <div class="grid">
                   <label>Icon position<select id="style-mark-side" class="cfg"><option value="left">Left of the text</option><option value="right">Right of the text</option></select></label>
                   <label>Band content<select id="style-band-align" class="cfg"><option value="right">On the right</option><option value="center">Centered</option><option value="left">On the left</option></select></label>
-                  <label>Band padding <small>Space at each end of the band, in pixels, from 0 to 48.</small><input id="style-band-padding" class="cfg" type="number" min="0" max="48" step="1" inputmode="numeric"></label>
+                  <label>Band padding <small>Space at each end of the band, in pixels, from 0 to 48.</small><input id="style-band-padding" class="cfg" type="number" min="0" max="48" step="1" inputmode="numeric" placeholder="0"></label>
                   <label id="style-mark-size-field">Kuroko icon size <small>In pixels, from 16 to 64. Empty follows the band text size.</small><input id="style-mark-size" class="cfg" type="number" min="16" max="64" step="1" inputmode="numeric"></label>
                 </div>
                 <div class="grid">

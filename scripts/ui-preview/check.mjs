@@ -733,12 +733,16 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.fill('#style-label', '');
   const signed = await page.evaluate(() => [!document.querySelector('#style-preview-mark').hidden, document.querySelector('#style-preview-icon').hidden,
     document.querySelector('#style-icon-field').hidden, document.querySelector('#style-preview-label').textContent, document.querySelector('#style-preview-label .teams-link')?.textContent]);
-  check('signing as Kuroko shows the mark and links the whole text', JSON.stringify(signed) === JSON.stringify([true, true, true, 'Mensaje generado por Kuroko', 'Mensaje generado por Kuroko']), JSON.stringify(signed));
-  // Any text links while the site link is on; off, nothing does.
+  check('signing as Kuroko shows the mark, with the text in the band look by default', JSON.stringify(signed) === JSON.stringify([true, true, true, 'Mensaje generado por Kuroko', null]), JSON.stringify(signed));
+  // Shown as a link, any text is the link; without the site link, nothing is, and its look option hides.
   await page.fill('#style-label', 'Escrito por mi asistente');
+  await page.check('#style-link-underline');
   const linked = await page.textContent('#style-preview-label .teams-link');
   await page.uncheck('#style-site-link');
-  check('the site link follows its switch and any band text', linked === 'Escrito por mi asistente' && !await page.$('#style-preview-label .teams-link'));
+  check('the site link follows its switches and any band text', linked === 'Escrito por mi asistente' && !await page.$('#style-preview-label .teams-link')
+    && !await page.isVisible('#style-link-underline'));
+  // An empty icon size shows the size the band text gives it.
+  check('an empty Kuroko icon size shows the size it follows', await page.getAttribute('#style-mark-size', 'placeholder') === '24');
   // The animated mark, its size, its side, the band's alignment and padding.
   await page.check('#style-animated');
   await page.fill('#style-mark-size', '45');
@@ -774,7 +778,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   check('the message style is saved', await page.evaluate(() => JSON.stringify(window.__ptaLastSave?.config?.message_style)) === JSON.stringify({
     enabled: true, label: 'Escrito por mi asistente', position: 'top', accent: '#13A10E', band: 'emphasis', label_color: 'good', icon: true,
     emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium', kuroko: false,
-    animated: true, mark_size: 45, site_link: false, mark_side: 'right', band_align: 'left', band_padding: 12 }));
+    animated: true, mark_size: 45, site_link: false, link_underline: true, mark_side: 'right', band_align: 'left', band_padding: 12 }));
   check('message style has no page errors', errors.length === 0, errors.join(' | '));
   await context.close();
 }

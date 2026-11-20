@@ -56,7 +56,8 @@ Configuration
                            Teams message style (every message is a card): config set
                            message_style.label \"text\" (and .position, .accent, .band, .label_color,
                            .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size, .kuroko,
-                           .animated, .mark_size, .site_link, .mark_side, .band_align, .band_padding).
+                           .animated, .mark_size, .site_link, .link_underline, .mark_side, .band_align,
+                           .band_padding).
                            Teams chats every computer of the account may read on request (follows the
                            account): config set teams_reading.all_chats true (and .personal_chat,
                            .chats [\"CHAT_ID\",...]). graph.discover_all_chats, graph.allowed_chats and
@@ -385,6 +386,8 @@ Updates (the shared server's operator updates it separately)
 Personal chat
   self-chat status|enable [CHAT_ID]|disable
   self-chat reconcile NONCE MESSAGE_ID  Resolves a pending output.
+  self-chat discard NONCE  Forgets a pending output that never became a message (Teams refused
+                           its send), after checking that no message of the chat carries it.
   test self-chat           Checks the personal chat membership (does not send).
 
 Daily task record
@@ -2649,6 +2652,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["self-chat", "status" | "enable" | "disable"]
             | ["self-chat", "enable", _]
             | ["self-chat", "reconcile", _, _]
+            | ["self-chat", "discard", _]
             | [
                 "activity",
                 "status" | "pending" | "run" | "history" | "open"
@@ -3499,6 +3503,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
         ("self-chat", "enable") => Some("self_chat_enable"),
         ("self-chat", "disable") => Some("self_chat_disable"),
         ("self-chat", "reconcile") => Some("self_chat_reconcile"),
+        ("self-chat", "discard") => Some("self_chat_discard"),
         ("test", "self-chat") => Some("test_self_chat"),
         ("test", "providers") => Some("test_providers"),
         ("test", "connectivity") => Some("test_connectivity"),
@@ -3519,6 +3524,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
             "self_chat_reconcile" => {
                 json!({"nonce":positional(&args,2)?,"id":positional(&args,3)?})
             }
+            "self_chat_discard" => json!({"nonce":positional(&args,2)?}),
             "import_existing" => json!({"path":std::fs::canonicalize(positional(&args,2)?)?}),
             "set_credential" => {
                 ensure!(
