@@ -5575,16 +5575,16 @@ async fn teams_post_failure_is_uncertain_and_never_retried() {
     );
 }
 
-/// A GIF header of `width`×`height`, padded to `len` bytes.
-fn gif_bytes(width: u16, height: u16, len: usize) -> Vec<u8> {
-    let mut bytes = b"GIF89a".to_vec();
-    bytes.extend(width.to_le_bytes());
-    bytes.extend(height.to_le_bytes());
+/// A PNG header of `width`×`height`, padded to `len` bytes.
+fn png_bytes(width: u32, height: u32, len: usize) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    bytes.extend(width.to_be_bytes());
+    bytes.extend(height.to_be_bytes());
     bytes.resize(len, 7);
     bytes
 }
 fn image(name: &str, alt: &str, len: usize) -> Image {
-    Image::new(name, alt, gif_bytes(480, 400, len)).unwrap()
+    Image::new(name, alt, png_bytes(480, 400, len)).unwrap()
 }
 /// A Graph with the message style on, the user's personal chat and `chat1`, and its store's path.
 async fn styled_post_fixture(server: &MockServer) -> (Graph, std::path::PathBuf) {
@@ -5649,16 +5649,16 @@ async fn teams_post_shows_images_from_hosted_contents_inside_the_card_once() {
         .mount(&server)
         .await;
     let images = [
-        image("homero.gif", "Homero <b>\"escondido\"</b>", 1_050_994),
-        image("dos.gif", "", 64),
+        image("homero.png", "Homero <b>\"escondido\"</b>", 1_050_994),
+        image("dos.png", "", 64),
     ];
     let sent = graph
         .post_chat("self", "**Mira** esto", &images)
         .await
         .unwrap();
     assert_eq!(sent["status"], "sent");
-    assert_eq!(sent["images"][0]["name"], "homero.gif");
-    assert_eq!(sent["images"][0]["type"], "image/gif");
+    assert_eq!(sent["images"][0]["name"], "homero.png");
+    assert_eq!(sent["images"][0]["type"], "image/png");
     assert_eq!(sent["images"][0]["bytes"], 1_050_994);
     assert!(sent["images"][0].get("data").is_none());
     assert!(sent.get("style").is_none(), "{sent}");
@@ -5691,7 +5691,7 @@ async fn teams_post_shows_images_from_hosted_contents_inside_the_card_once() {
             hosted[at]["@microsoft.graph.temporaryId"],
             (at + 1).to_string()
         );
-        assert_eq!(hosted[at]["contentType"], "image/gif");
+        assert_eq!(hosted[at]["contentType"], "image/png");
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(hosted[at]["contentBytes"].as_str().unwrap())
             .unwrap();
@@ -5699,6 +5699,67 @@ async fn teams_post_shows_images_from_hosted_contents_inside_the_card_once() {
     }
     // The record counts the images and their bytes, never their content or names.
     assert_eq!(post_events(&store), ["sent images=2 bytes=1051058"]);
+}
+
+#[tokio::test]
+async fn the_animated_band_mark_travels_as_the_last_hosted_content_of_every_message() {
+    use base64::Engine;
+    let server = MockServer::start().await;
+    let (styled, _) = styled_post_fixture(&server).await;
+    let mut config = (*styled.config).clone();
+    config.message_style.kuroko = true;
+    config.message_style.animated = true;
+    config.message_style.mark_size = 45;
+    let graph = Graph {
+        config: Arc::new(config),
+        ..styled
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "m1"})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    // A post with one image: the image is hosted content 1 and the mark 2.
+    graph
+        .post_chat("self", "Mira", &[image("a.png", "", 64)])
+        .await
+        .unwrap();
+    // An answer, through the same path every reply and notice takes: the mark alone.
+    let me = graph.config.graph.user_id.clone();
+    let now = chrono::Utc::now();
+    let current = personal_teams_assistant::adapters::teams::IncomingMessage {
+        resource: "chats/chat1/messages/123".into(),
+        conversation: "chats/chat1".into(),
+        sender: me,
+        sender_name: String::new(),
+        kind: personal_teams_assistant::adapters::teams::ConversationKind::Direct,
+        mentions: vec![],
+        text: "pregunta".into(),
+        created_at: now.timestamp(),
+        created_at_millis: now.timestamp_millis(),
+        is_user_message: true,
+    };
+    graph.send(&current, "Respuesta").await.unwrap();
+    let posts = posted(&server).await;
+    assert_eq!(posts.len(), 2);
+    for (body, mark_at) in [(&posts[0], 2), (&posts[1], 1)] {
+        let hosted = body["hostedContents"].as_array().unwrap();
+        assert_eq!(hosted.len(), mark_at);
+        let mark = &hosted[mark_at - 1];
+        assert_eq!(mark["@microsoft.graph.temporaryId"], mark_at.to_string());
+        assert_eq!(mark["contentType"], "image/png");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(mark["contentBytes"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(bytes, personal_teams_assistant::adapters::card::MARK);
+        let card: serde_json::Value =
+            serde_json::from_str(body["attachments"][0]["content"].as_str().unwrap()).unwrap();
+        let band = card["body"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(band["id"], "pta-band");
+        let image = &band["items"][0]["columns"][0]["items"][0];
+        assert_eq!(image["url"], format!("../hostedContents/{mark_at}/$value"));
+        assert_eq!(image["width"], "45px");
+    }
 }
 
 #[tokio::test]
@@ -5725,7 +5786,7 @@ async fn teams_post_with_images_is_uncertain_or_refused_and_never_retried() {
             .mount(&server)
             .await;
         let error = graph
-            .post_chat("chat1", "", &[image("a.gif", "", 64)])
+            .post_chat("chat1", "", &[image("a.png", "", 64)])
             .await
             .unwrap_err();
         assert_eq!(error.downcast_ref::<PostRefusal>(), Some(&expected));
@@ -5755,13 +5816,13 @@ async fn teams_post_refuses_too_many_or_too_large_images_before_any_request() {
         .expect(0)
         .mount(&server)
         .await;
-    let many = vec![image("a.gif", "", 64); 5];
+    let many = vec![image("a.png", "", 64); 5];
     let error = graph.post_chat("self", "hola", &many).await.unwrap_err();
     assert_eq!(
         error.downcast_ref::<ImageRefusal>(),
         Some(&ImageRefusal::TooMany)
     );
-    let large = vec![image("a.gif", "", 1_500_000); 2];
+    let large = vec![image("a.png", "", 1_500_000); 2];
     let error = graph.post_chat("self", "hola", &large).await.unwrap_err();
     assert_eq!(
         error.downcast_ref::<ImageRefusal>(),

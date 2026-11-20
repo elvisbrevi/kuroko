@@ -155,6 +155,9 @@ pub(super) const ASSETS: &[Asset] = &[
     asset!("apple-touch-icon.png", "image/png", false),
     asset!("icon-192.png", "image/png", false),
     asset!("icon-512.png", "image/png", false),
+    // The band's animated mark, for the message style preview (`card::MARK` sends the same file
+    // in Teams messages, so it holds nothing private).
+    asset!("kuroko-mark.png", "image/png", false),
 ];
 
 /// The files served without a session, for the listeners' routers.

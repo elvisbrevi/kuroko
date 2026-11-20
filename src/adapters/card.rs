@@ -14,7 +14,9 @@
 //! shorter by a model ([`condense`]) and checked by code, or not sent. It never falls back to
 //! plain HTML.
 use super::teams;
-use crate::config::{BandColor, BandPosition, LabelColor, Language, MessageStyle, TextSize};
+use crate::config::{
+    BandColor, BandPosition, LabelColor, Language, MarkSide, MessageStyle, TextSize,
+};
 use crate::llm::LlmProvider;
 use base64::Engine;
 use serde_json::{Value, json};
@@ -27,6 +29,15 @@ pub use blocks::GUIDE;
 pub const CONTENT_TYPE: &str = "application/vnd.microsoft.card.adaptive";
 /// The band's element ID: the label is presentation, so reading a card back skips it.
 const BAND: &str = "pta-band";
+/// The band's animated mark (rendered from the Kuroko figure, 135 pixels so it stays sharp at the
+/// largest mark size on a 3× screen; also the GUI preview's): an animated PNG of about 76 KB,
+/// sent as the message's last hosted content when the style asks for it.
+pub const MARK: &[u8] = include_bytes!("../../desktop/ui/kuroko-mark.png");
+
+/// The bytes of the band's animated mark, when a message in `style` carries it.
+pub fn hosted_mark(style: &MessageStyle) -> Option<&'static [u8]> {
+    (style.kuroko && style.animated).then_some(MARK)
+}
 /// Stands for `](` in a link this module wrote; every other `](` is broken up so the card's
 /// Markdown never turns text into a link the pipeline did not check.
 const LINK: char = '\u{e002}';
@@ -41,6 +52,8 @@ pub const MENTION_END: char = '\u{e001}';
 /// of the personal chat, or nothing) after it. `mentions` are the (user ID, shown name) of each
 /// mention marked in `markdown`: the card mentions them itself, as Teams cards do. `images` are
 /// the alt texts of the message's hosted contents, in order: the card shows them after the text.
+/// When [`hosted_mark`] returns the mark, the band points at one more hosted content after them,
+/// which the caller attaches.
 /// `Err` holds the size in bytes of the smallest layout when even it does not fit in one message:
 /// nothing may be sent then, and the caller shortens the text ([`condense`]) or refuses.
 pub fn message(
@@ -131,7 +144,8 @@ fn laid_out(
         body.iter_mut().for_each(|e| resize(e, style.text_size));
     }
     body.extend(images.iter().enumerate().map(|(at, alt)| picture(at, alt)));
-    let mut band = band(style, language, &stripe);
+    let mark = hosted_mark(style).map(|_| images.len() + 1);
+    let mut band = band(style, language, &stripe, mark);
     match style.position {
         BandPosition::Top => {
             if let Some(first) = body.first_mut() {
@@ -196,6 +210,10 @@ pub fn image_labels(message: &Value) -> Vec<String> {
     fn walk(value: &Value, out: &mut Vec<String>) {
         match value {
             Value::Object(object) => {
+                // The band's mark is presentation, like its text.
+                if object.get("id").and_then(Value::as_str) == Some(BAND) {
+                    return;
+                }
                 if object.get("type").and_then(Value::as_str) == Some("Image")
                     && object
                         .get("url")
@@ -334,7 +352,9 @@ fn texts(value: &Value, out: &mut Vec<String>) {
     }
 }
 
-fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
+/// The band: its mark or emoji and its text, on the side and at the place the style says, with
+/// free space at its ends. `mark` is the hosted content holding the animated mark.
+fn band(style: &MessageStyle, language: Language, stripe: &Value, mark: Option<usize>) -> Value {
     let color = match style.label_color {
         LabelColor::Default | LabelColor::Subtle => "Default",
         LabelColor::Accent => "Accent",
@@ -349,23 +369,54 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value) -> Value {
         "wrap": true, "color": color, "isSubtle": subtle})
     };
     let column = |item: Value| json!({"type": "Column", "width": "auto", "verticalContentAlignment": "Center", "items": [item]});
-    let mut columns = Vec::new();
     let label = style.label(language);
-    if style.kuroko {
-        // The app's mark, inline: no request leaves the card, and it weighs about 1 KB.
-        let side = style.label_size.badge();
-        columns.push(column(json!({"type": "Image", "url": badge(),
-            "width": format!("{side}px"), "height": format!("{side}px"), "altText": "Kuroko"})));
-        columns.push(column(text(&kuroko_link(&label))));
-    } else {
-        if style.icon {
-            // Plain text: Teams does not draw the card `Icon` element in chat messages.
-            columns.push(column(text(style.emoji())));
+    // A signed band can open the project site from its text, whatever it says, and its mark.
+    let site = (style.kuroko && style.site_link).then(
+        || json!({"type": "Action.OpenUrl", "title": "Kuroko", "url": MessageStyle::KUROKO_URL}),
+    );
+    let icon = if style.kuroko {
+        // The still mark goes inside the card (about 1 KB, no request leaves it); the animated
+        // one is one of the message's own hosted contents.
+        let side = format!("{}px", style.mark_pixels());
+        let url = match mark {
+            Some(at) => format!("../hostedContents/{at}/$value"),
+            None => badge(),
+        };
+        let mut image = json!({"type": "Image", "url": url, "width": side, "height": side,
+            "altText": "Kuroko"});
+        if let Some(open) = &site {
+            image["selectAction"] = open.clone();
         }
-        columns.push(column(text(&label)));
+        // As wide as the mark: Teams on iPhone lays the band out before a hosted image loads, and
+        // an `auto` column then has no width and the mark spills over the text.
+        let mut mark = column(image);
+        mark["width"] = json!(side);
+        Some(mark)
+    } else {
+        // Plain text: Teams does not draw the card `Icon` element in chat messages.
+        style.icon.then(|| column(text(style.emoji())))
+    };
+    let mut words = column(text(&match site {
+        Some(_) => site_link(&label),
+        None => label,
+    }));
+    if let Some(open) = site {
+        words["selectAction"] = open;
     }
+    let mut columns = Vec::new();
+    // Free space at the band's ends: a column that holds nothing but takes that width.
+    let padding = (style.band_padding > 0).then(
+        || json!({"type": "Column", "width": format!("{}px", style.band_padding), "items": []}),
+    );
+    columns.extend(padding.clone());
+    match style.mark_side {
+        MarkSide::Left => columns.extend(icon.into_iter().chain([words])),
+        MarkSide::Right => columns.extend([words].into_iter().chain(icon)),
+    }
+    columns.extend(padding);
     let mut band = json!({"type": "Container", "id": BAND,
-        "items": [{"type": "ColumnSet", "horizontalAlignment": "Right", "columns": columns}]});
+        "items": [{"type": "ColumnSet", "horizontalAlignment": style.band_align.card(),
+            "columns": columns}]});
     if style.band_height > 0 {
         band["minHeight"] = json!(format!("{}px", style.band_height));
         band["verticalContentAlignment"] = json!("Center");
@@ -394,17 +445,13 @@ fn badge() -> String {
     )
 }
 
-/// A signed band's text with its first «Kuroko» as a link to the project site; Markdown the
-/// label already carries keeps its meaning.
-fn kuroko_link(label: &str) -> String {
-    match label.find("Kuroko") {
-        Some(at) => format!(
-            "{}[Kuroko]({}){}",
-            &label[..at],
-            MessageStyle::KUROKO_URL,
-            &label[at + "Kuroko".len()..]
-        ),
-        None => label.to_owned(),
+/// A signed band's whole text as a link to the project site. A label with brackets of its own
+/// stays as it is (its column still opens the site), so Markdown it carries keeps its meaning.
+fn site_link(label: &str) -> String {
+    if label.contains(['[', ']']) {
+        label.to_owned()
+    } else {
+        format!("[{label}]({})", MessageStyle::KUROKO_URL)
     }
 }
 
@@ -892,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn a_signed_band_shows_the_mark_and_links_kuroko() {
+    fn a_signed_band_shows_the_mark_and_opens_the_site_from_any_text() {
         let signed = MessageStyle {
             kuroko: true,
             ..style()
@@ -902,33 +949,39 @@ mod tests {
         assert_eq!(band["id"], BAND);
         let columns = band["items"][0]["columns"].as_array().unwrap();
         assert_eq!(columns.len(), 2);
+        let open = json!({"type": "Action.OpenUrl", "title": "Kuroko",
+            "url": MessageStyle::KUROKO_URL});
         let mark = &columns[0]["items"][0];
         assert_eq!(mark["type"], "Image");
         assert_eq!(mark["width"], "16px");
+        assert_eq!(mark["selectAction"], open);
         assert!(
             mark["url"]
                 .as_str()
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
+        // The whole text is the link, and its column opens the site too.
         assert_eq!(
             columns[1]["items"][0]["text"],
             format!(
-                "Mensaje generado por [Kuroko]({})",
+                "[Mensaje generado por Kuroko]({})",
                 MessageStyle::KUROKO_URL
             )
         );
+        assert_eq!(columns[1]["selectAction"], open);
         // The mark replaces the emoji, and the band is not part of the message's text.
         assert!(!card.to_string().contains('🤖'));
         let message = json!({"body": {"contentType": "html", "content": ""},
             "attachments": [{"contentType": CONTENT_TYPE, "content": card.to_string()}]});
         assert_eq!(message_text(&message).trim(), "Hola");
+        assert!(image_labels(&message).is_empty());
         // The whole card stays light.
         assert!(card.to_string().len() < 3_000);
 
-        // A label of the user's own keeps its words, and links «Kuroko» when it names it.
+        // Any label of the user's own links, whether or not it names Kuroko.
         let named = MessageStyle {
-            label: "Escrito con Kuroko por Ana".into(),
+            label: "Escrito por mi asistente".into(),
             label_size: TextSize::Large,
             ..signed.clone()
         };
@@ -937,17 +990,34 @@ mod tests {
         assert_eq!(columns[0]["items"][0]["width"], "28px");
         assert_eq!(
             columns[1]["items"][0]["text"],
-            format!("Escrito con [Kuroko]({}) por Ana", MessageStyle::KUROKO_URL)
+            format!("[Escrito por mi asistente]({})", MessageStyle::KUROKO_URL)
         );
-        let plain = MessageStyle {
-            label: "Escrito por mi asistente".into(),
+        // A label with brackets of its own keeps its Markdown; its column still opens the site.
+        let bracketed = MessageStyle {
+            label: "Escrito por [Ana](https://example.com/ana)".into(),
+            ..signed.clone()
+        };
+        let card = super::card("Hola", &bracketed, Language::En);
+        let columns = card["body"][1]["items"][0]["columns"].as_array().unwrap();
+        assert_eq!(
+            columns[1]["items"][0]["text"],
+            "Escrito por [Ana](https://example.com/ana)"
+        );
+        assert_eq!(columns[1]["selectAction"], open);
+        // Without the site link nothing in the band opens anything.
+        let unlinked = MessageStyle {
+            site_link: false,
+            mark_size: 45,
             ..signed
         };
-        let card = super::card("Hola", &plain, Language::En);
+        let card = super::card("Hola", &unlinked, Language::Es);
+        let columns = card["body"][1]["items"][0]["columns"].as_array().unwrap();
+        assert_eq!(columns[0]["items"][0]["width"], "45px");
         assert_eq!(
-            card["body"][1]["items"][0]["columns"][1]["items"][0]["text"],
-            "Escrito por mi asistente"
+            columns[1]["items"][0]["text"],
+            "Mensaje generado por Kuroko"
         );
+        assert!(!card.to_string().contains("selectAction"));
         assert_eq!(
             MessageStyle {
                 kuroko: true,
@@ -956,6 +1026,101 @@ mod tests {
             .label(Language::En),
             "Message generated by Kuroko"
         );
+    }
+
+    #[test]
+    fn the_animated_mark_is_the_hosted_content_after_the_images() {
+        let animated = MessageStyle {
+            kuroko: true,
+            animated: true,
+            mark_size: 45,
+            ..style()
+        };
+        assert_eq!(hosted_mark(&animated), Some(MARK));
+        assert!(hosted_mark(&style()).is_none());
+        // Only a signed band carries it.
+        assert!(
+            hosted_mark(&MessageStyle {
+                animated: true,
+                ..style()
+            })
+            .is_none()
+        );
+        assert!(detect_png(MARK));
+        let sent = message("Mira", &animated, Language::Es, "", &[], &["Uno", "Dos"]).unwrap();
+        let card = posted(&sent);
+        let body = card["body"].as_array().unwrap();
+        assert_eq!(body[2]["url"], "../hostedContents/2/$value");
+        let mark = &body[3]["items"][0]["columns"][0]["items"][0];
+        assert_eq!(mark["url"], "../hostedContents/3/$value");
+        assert_eq!(mark["width"], "45px");
+        // Reading the message back sees the posted images, not the band's mark.
+        assert_eq!(image_labels(&sent), ["[image: Uno]", "[image: Dos]"]);
+        // Without images the mark is the first hosted content, and the card stays light.
+        let alone = message("Hola", &animated, Language::Es, "", &[], &[]).unwrap();
+        let card = posted(&alone);
+        assert_eq!(
+            card["body"][1]["items"][0]["columns"][0]["items"][0]["url"],
+            "../hostedContents/1/$value"
+        );
+        assert!(card.to_string().len() < 2_000);
+    }
+    fn detect_png(bytes: &[u8]) -> bool {
+        matches!(
+            super::super::images::detect(bytes),
+            Some((super::super::images::Kind::Png, 135, 135))
+        )
+    }
+
+    #[test]
+    fn the_band_places_its_mark_and_text_where_the_style_says() {
+        let columns = |style: &MessageStyle| -> Vec<Value> {
+            card("Hola", style, Language::Es)["body"][1]["items"][0]["columns"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        let set = |style: &MessageStyle| -> Value {
+            card("Hola", style, Language::Es)["body"][1]["items"][0].clone()
+        };
+        // By default: the emoji left of the text, on the band's right, with no padding.
+        let plain = columns(&style());
+        assert_eq!(plain.len(), 2);
+        assert_eq!(plain[0]["items"][0]["text"], "🤖");
+        assert_eq!(set(&style())["horizontalAlignment"], "Right");
+        // The mark on the right of the text, the content on the left, and space at both ends.
+        let moved = MessageStyle {
+            kuroko: true,
+            mark_side: MarkSide::Right,
+            band_align: crate::config::BandAlign::Left,
+            band_padding: 12,
+            ..style()
+        };
+        let moved_columns = columns(&moved);
+        assert_eq!(moved_columns.len(), 4);
+        let spacer = json!({"type": "Column", "width": "12px", "items": []});
+        assert_eq!(moved_columns[0], spacer);
+        assert_eq!(moved_columns[3], spacer);
+        assert_eq!(moved_columns[1]["items"][0]["type"], "TextBlock");
+        assert_eq!(moved_columns[2]["items"][0]["type"], "Image");
+        // The mark's column is as wide as the mark, so a client that lays the band out before
+        // the image loads keeps its room.
+        assert_eq!(moved_columns[2]["width"], "16px");
+        assert_eq!(moved_columns[1]["width"], "auto");
+        assert_eq!(set(&moved)["horizontalAlignment"], "Left");
+        // The emoji follows the same side; without an icon the text stands alone.
+        let emoji_right = columns(&MessageStyle {
+            mark_side: MarkSide::Right,
+            band_align: crate::config::BandAlign::Center,
+            ..style()
+        });
+        assert_eq!(emoji_right[1]["items"][0]["text"], "🤖");
+        let bare = columns(&MessageStyle {
+            icon: false,
+            mark_side: MarkSide::Right,
+            ..style()
+        });
+        assert_eq!(bare.len(), 1);
     }
 
     #[test]

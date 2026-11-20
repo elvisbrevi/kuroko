@@ -1,6 +1,6 @@
 [package]
 name = "kuroko"
-version = "0.18.7"
+version = "0.18.8"
 edition = "2024"
 rust-version = "1.95"
 build = "build.rs"
@@ -102,6 +102,8 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "9.4", default-features = false, features = ["deflate-flate2"] }
 tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73"] }
+gif = { version = "0.14.2", default-features = false, features = ["std"] }
+png = "0.18.1"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = "4.2"

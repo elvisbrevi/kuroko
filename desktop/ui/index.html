@@ -303,7 +303,11 @@
                 <label>Band position<select id="style-position" class="cfg"><option value="bottom">Below the text</option><option value="top">Above the text</option></select></label>
                 <label>Color combination<select id="style-preset" class="cfg"><option value="teams">Teams purple</option><option value="blue">Blue</option><option value="green">Green</option><option value="amber">Amber</option><option value="red">Red</option><option value="gray">Gray</option><option value="custom">Custom</option></select></label>
               </div>
-              <label class="check"><input id="style-kuroko" class="cfg" type="checkbox"> Sign the band as Kuroko, with the app's icon and a link to its site</label>
+              <label class="check"><input id="style-kuroko" class="cfg" type="checkbox"> Sign the band as Kuroko, with the app's icon</label>
+              <div id="style-kuroko-fields">
+                <label class="check"><input id="style-animated" class="cfg" type="checkbox"> Animate the icon <small>It travels inside each message as a small image (about 76 KB).</small></label>
+                <label class="check"><input id="style-site-link" class="cfg" type="checkbox"> Open the Kuroko site from the band's text and icon</label>
+              </div>
               <details class="fold" id="style-custom">
                 <summary>Colors and sizes <small>Advanced</small></summary>
                 <div class="grid">
@@ -314,6 +318,12 @@
                 <div class="grid">
                   <label>Stripe width <small>In pixels, from 2 to 16.</small><input id="style-stripe-width" class="cfg" type="number" min="2" max="16" step="1" inputmode="numeric"></label>
                   <label>Band height <small>In pixels, from 24 to 160. Empty fits the text.</small><input id="style-band-height" class="cfg" type="number" min="24" max="160" step="1" inputmode="numeric"></label>
+                </div>
+                <div class="grid">
+                  <label>Icon position<select id="style-mark-side" class="cfg"><option value="left">Left of the text</option><option value="right">Right of the text</option></select></label>
+                  <label>Band content<select id="style-band-align" class="cfg"><option value="right">On the right</option><option value="center">Centered</option><option value="left">On the left</option></select></label>
+                  <label>Band padding <small>Space at each end of the band, in pixels, from 0 to 48.</small><input id="style-band-padding" class="cfg" type="number" min="0" max="48" step="1" inputmode="numeric"></label>
+                  <label id="style-mark-size-field">Kuroko icon size <small>In pixels, from 16 to 64. Empty follows the band text size.</small><input id="style-mark-size" class="cfg" type="number" min="16" max="64" step="1" inputmode="numeric"></label>
                 </div>
                 <div class="grid">
                   <label>Message text size<select id="style-text-size" class="cfg"><option value="small">Small</option><option value="default">Normal</option><option value="medium">Medium</option><option value="large">Large</option><option value="extralarge">Extra large</option></select></label>

@@ -1172,8 +1172,8 @@ impl Graph {
         let alts: Vec<&str> = images.iter().map(|i| i.alt.as_str()).collect();
         let mut body = super::card::message(&text, &style, language, &marker, &mentioned, &alts)
             .map_err(|_| PostRefusal::TooLong)?;
-        if !images.is_empty() {
-            body["hostedContents"] = hosted_contents(images);
+        if let Some(contents) = hosted_contents(images, &style) {
+            body["hostedContents"] = contents;
         }
         let tally = if images.is_empty() {
             String::new()
@@ -1612,12 +1612,15 @@ impl MessageAdapter for Graph {
         // Always a card in the configured style. The pipeline shortened an answer that did not
         // fit (`card_overflow`); one that still does not fit is not sent.
         let (style, language) = self.message_style();
-        let body =
+        let mut body =
             super::card::message(text, &style, language, &marker, &[], &[]).map_err(|bytes| {
                 anyhow::anyhow!(
                     "the answer does not fit in one Teams card ({bytes} bytes); nothing was sent"
                 )
             })?;
+        if let Some(contents) = hosted_contents(&[], &style) {
+            body["hostedContents"] = contents;
+        }
         // Never retry a send: Graph provides no idempotency guarantee for this endpoint.
         let result = self.request(Method::POST, &path, Some(body), false).await?;
         let id = result["id"]
@@ -1630,19 +1633,24 @@ impl MessageAdapter for Graph {
     }
 }
 
-/// Graph's hosted contents for the card's images, numbered as `card::message` refers to them:
-/// the bytes in base64 and the type read from them.
-fn hosted_contents(images: &[super::images::Image]) -> Value {
+/// Graph's hosted contents for the card's images and then the band's animated mark when `style`
+/// has one, numbered as `card::message` refers to them: the bytes in base64 and the type read
+/// from them. `None` when the message carries none.
+fn hosted_contents(images: &[super::images::Image], style: &MessageStyle) -> Option<Value> {
     use base64::Engine;
-    images
+    let mark = super::card::hosted_mark(style).map(|bytes| (bytes, "image/png"));
+    let contents: Vec<Value> = images
         .iter()
+        .map(|image| (image.bytes.as_slice(), image.kind.content_type()))
+        .chain(mark)
         .enumerate()
-        .map(|(at, image)| {
+        .map(|(at, (bytes, kind))| {
             json!({"@microsoft.graph.temporaryId": (at + 1).to_string(),
-                "contentBytes": base64::engine::general_purpose::STANDARD.encode(&image.bytes),
-                "contentType": image.kind.content_type()})
+                "contentBytes": base64::engine::general_purpose::STANDARD.encode(bytes),
+                "contentType": kind})
         })
-        .collect()
+        .collect();
+    (!contents.is_empty()).then_some(Value::Array(contents))
 }
 
 /// Why a message was not posted: fixed explanations that are safe to show as they are.
