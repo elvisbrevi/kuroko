@@ -487,6 +487,14 @@ impl Store {
         )?;
         Ok(nonce)
     }
+    /// Forgets an output that never became a message (Teams refused its send); `false` when
+    /// it is unknown or already has its message.
+    pub fn discard_output(&self, nonce: &str) -> Result<bool> {
+        Ok(self.db.lock().unwrap().execute(
+            "DELETE FROM outputs WHERE nonce=?1 AND message_id IS NULL",
+            [nonce],
+        )? == 1)
+    }
     pub fn finish_output(&self, nonce: &str, id: &str) -> Result<()> {
         self.db.lock().unwrap().execute(
             "UPDATE outputs SET message_id=?2 WHERE nonce=?1",

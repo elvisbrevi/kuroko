@@ -327,6 +327,10 @@ pub struct MessageStyle {
     /// on, the default.
     #[serde(skip_serializing_if = "MessageStyle::on")]
     pub site_link: bool,
+    /// The linked text is drawn as a link (the link color, underlined where the client does);
+    /// off, it keeps the band's look and still opens the site. Omitted while off, the default.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub link_underline: bool,
     /// The side of the band's text where the mark or the emoji sits. Omitted while left.
     #[serde(skip_serializing_if = "MarkSide::is_left")]
     pub mark_side: MarkSide,
@@ -356,6 +360,7 @@ impl Default for MessageStyle {
             animated: false,
             mark_size: 0,
             site_link: true,
+            link_underline: false,
             mark_side: MarkSide::Left,
             band_align: BandAlign::Right,
             band_padding: 0,
@@ -390,6 +395,7 @@ impl MessageStyle {
         fields["animated"] = style.animated.into();
         fields["mark_size"] = style.mark_size.into();
         fields["site_link"] = style.site_link.into();
+        fields["link_underline"] = style.link_underline.into();
         fields["mark_side"] = serde_json::to_value(style.mark_side).unwrap_or_default();
         fields["band_align"] = serde_json::to_value(style.band_align).unwrap_or_default();
         fields["band_padding"] = style.band_padding.into();
@@ -902,6 +908,7 @@ mod tests {
             "animated",
             "mark_size",
             "site_link",
+            "link_underline",
             "mark_side",
             "band_align",
             "band_padding",
@@ -917,6 +924,7 @@ mod tests {
         assert_eq!(fields["animated"], false);
         assert_eq!(fields["mark_size"], 0);
         assert_eq!(fields["site_link"], true);
+        assert_eq!(fields["link_underline"], false);
         assert_eq!(fields["mark_side"], "left");
         assert_eq!(fields["band_align"], "right");
         assert_eq!(fields["band_padding"], 0);
@@ -926,6 +934,7 @@ mod tests {
         style.animated = true;
         style.mark_size = 45;
         style.site_link = false;
+        style.link_underline = true;
         style.mark_side = super::MarkSide::Right;
         style.band_align = super::BandAlign::Center;
         style.band_padding = 12;

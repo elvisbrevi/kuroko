@@ -1428,6 +1428,23 @@ async fn operate(
             }
             result?
         }
+        "self_chat_discard" => {
+            let nonce: String = arg(args, "nonce")?;
+            let was_running = state.running.lock().await.is_some();
+            stop(state).await.map_err(fail)?;
+            let result = async {
+                let graph = profile_graph(state).await.map_err(fail)?;
+                graph.discard_output(&nonce).await.map_err(fail)
+            }
+            .await;
+            if was_running {
+                let restart = start(state).await.map_err(fail);
+                result.as_ref().map_err(Clone::clone)?;
+                restart?;
+            }
+            result?;
+            json!({"discarded":true})
+        }
         "self_chat_reconcile" => {
             let nonce: String = arg(args, "nonce")?;
             let id: String = arg(args, "id")?;

@@ -429,6 +429,8 @@ const UI_CATALOG = { es: {
   "Animate the icon": "Animar el ícono",
   "It travels inside each message as a small image (about 76 KB).": "Viaja dentro de cada mensaje como una imagen pequeña (unos 76 KB).",
   "Open the Kuroko site from the band's text and icon": "Abrir el sitio de Kuroko desde el texto y el ícono de la banda",
+  "Show the text as a link (underlined)": "Mostrar el texto como enlace (subrayado)",
+  "Off, the text keeps the band's look and still opens the site.": "Si está desactivado, el texto conserva el aspecto de la banda y sigue abriendo el sitio.",
   "Icon position": "Posición del ícono",
   "Left of the text": "A la izquierda del texto",
   "Right of the text": "A la derecha del texto",

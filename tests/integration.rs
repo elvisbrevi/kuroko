@@ -5763,6 +5763,70 @@ async fn the_animated_band_mark_travels_as_the_last_hosted_content_of_every_mess
 }
 
 #[tokio::test]
+async fn a_refused_personal_post_never_pauses_the_chat_and_a_stuck_output_is_discarded_after_checking()
+ {
+    let server = MockServer::start().await;
+    let (styled, _) = styled_post_fixture(&server).await;
+    let mut config = (*styled.config).clone();
+    config.graph.self_chat = Some(personal_teams_assistant::config::SelfChat {
+        id: "48:notes".into(),
+        user_id: config.graph.user_id.clone(),
+        enabled_at: chrono::Utc::now().timestamp_millis() - 60_000,
+    });
+    let graph = Graph {
+        config: Arc::new(config),
+        ..styled
+    };
+    let notes = "chats/48:notes";
+    // Teams refuses the post: nothing exists, so its output does not pause the personal chat.
+    Mock::given(method("POST"))
+        .and(path("/chats/48:notes/messages"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"code": "BadRequest"}})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let refused = graph.post_chat("self", "hola", &[]).await.unwrap_err();
+    assert!(matches!(
+        refused.downcast_ref::<PostRefusal>(),
+        Some(PostRefusal::Refused { .. })
+    ));
+    assert!(!graph.store.has_unresolved_output(notes).unwrap());
+
+    // An output a host left open before this fix is discarded only once no message carries it.
+    let stuck = graph.store.begin_output(notes).unwrap();
+    let user = graph.config.graph.user_id.clone();
+    let note = |content: &str| {
+        json!({"id": "n1", "messageType": "message", "createdDateTime": chrono::Utc::now().to_rfc3339(),
+            "deletedDateTime": null, "from": {"user": {"id": user}},
+            "body": {"contentType": "html", "content": content}, "mentions": []})
+    };
+    let marked = format!("<p><a href=\"https://personalteams.invalid/output/{stuck}\">PTA</a></p>");
+    for (page, discarded) in [(note(&marked), false), (note("<p>hola</p>"), true)] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": user})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/chats/48:notes/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [page]})))
+            .mount(&server)
+            .await;
+        let result = graph.discard_output(&stuck).await;
+        assert_eq!(result.is_ok(), discarded, "{result:?}");
+        assert_eq!(
+            graph.store.has_unresolved_output(notes).unwrap(),
+            !discarded
+        );
+    }
+    // Gone, it cannot be discarded twice.
+    assert!(graph.discard_output(&stuck).await.is_err());
+}
+
+#[tokio::test]
 async fn teams_post_with_images_is_uncertain_or_refused_and_never_retried() {
     for (status, expected, recorded) in [
         (500, PostRefusal::Uncertain, "uncertain images=1 bytes=64"),

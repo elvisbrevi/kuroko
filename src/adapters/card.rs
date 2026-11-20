@@ -396,9 +396,11 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value, mark: Option<u
         // Plain text: Teams does not draw the card `Icon` element in chat messages.
         style.icon.then(|| column(text(style.emoji())))
     };
+    // Drawn as a link only when asked: clients underline links, and the column opens the site
+    // anyway.
     let mut words = column(text(&match site {
-        Some(_) => site_link(&label),
-        None => label,
+        Some(_) if style.link_underline => site_link(&label),
+        _ => label,
     }));
     if let Some(open) = site {
         words["selectAction"] = open;
@@ -961,13 +963,11 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
-        // The whole text is the link, and its column opens the site too.
+        // By default the text keeps the band's look, without a link's underline, and its column
+        // opens the site.
         assert_eq!(
             columns[1]["items"][0]["text"],
-            format!(
-                "[Mensaje generado por Kuroko]({})",
-                MessageStyle::KUROKO_URL
-            )
+            "Mensaje generado por Kuroko"
         );
         assert_eq!(columns[1]["selectAction"], open);
         // The mark replaces the emoji, and the band is not part of the message's text.
@@ -979,10 +979,12 @@ mod tests {
         // The whole card stays light.
         assert!(card.to_string().len() < 3_000);
 
-        // Any label of the user's own links, whether or not it names Kuroko.
+        // Drawn as a link, any label of the user's own is the link, whether or not it names
+        // Kuroko.
         let named = MessageStyle {
             label: "Escrito por mi asistente".into(),
             label_size: TextSize::Large,
+            link_underline: true,
             ..signed.clone()
         };
         let card = super::card("Hola", &named, Language::En);
@@ -995,6 +997,7 @@ mod tests {
         // A label with brackets of its own keeps its Markdown; its column still opens the site.
         let bracketed = MessageStyle {
             label: "Escrito por [Ana](https://example.com/ana)".into(),
+            link_underline: true,
             ..signed.clone()
         };
         let card = super::card("Hola", &bracketed, Language::En);
@@ -1007,6 +1010,7 @@ mod tests {
         // Without the site link nothing in the band opens anything.
         let unlinked = MessageStyle {
             site_link: false,
+            link_underline: true,
             mark_size: 45,
             ..signed
         };
