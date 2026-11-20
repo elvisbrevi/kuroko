@@ -55,7 +55,8 @@ Configuration
   config set FIELD JSON    Changes a field; the value is JSON (true, \"text\", [...], {...}).
                            Teams message style (every message is a card): config set
                            message_style.label \"text\" (and .position, .accent, .band, .label_color,
-                           .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size, .kuroko).
+                           .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size, .kuroko,
+                           .animated, .mark_size, .site_link, .mark_side, .band_align, .band_padding).
                            Teams chats every computer of the account may read on request (follows the
                            account): config set teams_reading.all_chats true (and .personal_chat,
                            .chats [\"CHAT_ID\",...]). graph.discover_all_chats, graph.allowed_chats and
@@ -103,8 +104,9 @@ Messages and diagnostics
   teams send CHAT [--image PATH [--alt TEXT]]...
                            Posts the Markdown text on stdin as you in a chat (ID from `teams chats`, or
                            `self`); @[Display Name] mentions a chat member. --image embeds a PNG, JPEG or
-                           GIF file in the message after the text (up to 4, 2.9 MB together; the text may
-                           then be empty). Sent once, never retried.
+                           GIF file in the message after the text (up to 4, 2.8 MB together; a GIF goes as
+                           its animated PNG, which Teams accepts; the text may then be empty). Sent once,
+                           never retried.
   logs [--limit N]         Host events.
   chat | test simulate     Real pipeline with a SimulationRequest JSON on stdin; never sends to Teams.
   test connectivity        Reads the connected Microsoft account (without sending).
@@ -4522,7 +4524,8 @@ mod wiki_tests {
             .iter()
             .map(|i| (i.name.as_str(), i.alt.as_str()))
             .collect();
-        assert_eq!(named, [("uno.gif", "Homero"), ("dos.gif", "")]);
+        // GIFs go as their animated PNG, named for it.
+        assert_eq!(named, [("uno.png", "Homero"), ("dos.png", "")]);
         // An alt before any image, a missing value, a non-image and a foreign command fail.
         let fail =
             |args: &[&str]| post_images(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>());

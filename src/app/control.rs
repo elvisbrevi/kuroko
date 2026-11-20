@@ -762,7 +762,7 @@ pub(crate) fn launch(
     )?;
     let router = Router::new()
         .route("/control", post(endpoint))
-        // Room for the images of one Teams post (up to 2.9 MB, a third more in base64).
+        // Room for the images of one Teams post (up to 2.8 MB, a third more in base64).
         .layer(DefaultBodyLimit::max(4_500_000))
         .with_state(Arc::new(LocalState {
             host: host.clone(),

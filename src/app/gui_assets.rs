@@ -34,6 +34,10 @@ pub const DEV_DIR_VARIABLE: &str = "KUROKO_DEV_UI_DIR";
 #[cfg_attr(not(debug_assertions), allow(dead_code))]
 const DEV_DIR_NAME: &str = "DEV_UI_DIR";
 
+/// The band's animated mark, the file the message style preview shows: `card::MARK` sends these
+/// bytes in Teams messages. Read here because only this module reads `desktop/ui`.
+pub(crate) const KUROKO_MARK: &[u8] = include_bytes!("../../desktop/ui/kuroko-mark.png");
+
 pub(super) struct Asset {
     /// The file's name directly under `desktop/ui` (the GUI is flat); it is served at `/<file>`.
     pub(super) file: &'static str,
@@ -155,6 +159,9 @@ pub(super) const ASSETS: &[Asset] = &[
     asset!("apple-touch-icon.png", "image/png", false),
     asset!("icon-192.png", "image/png", false),
     asset!("icon-512.png", "image/png", false),
+    // The band's animated mark, for the message style preview (`card::MARK` sends the same file
+    // in Teams messages, so it holds nothing private).
+    asset!("kuroko-mark.png", "image/png", false),
 ];
 
 /// The files served without a session, for the listeners' routers.

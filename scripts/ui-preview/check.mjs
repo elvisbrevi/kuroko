@@ -678,7 +678,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.selectOption('#style-position', 'top');
   await page.fill('#style-label', 'Escrito por mi asistente');
   const preview = await page.evaluate(() => [document.querySelector('#style-preview').className, document.querySelector('#style-preview').style.getPropertyValue('--stripe')]);
-  check('the preview follows the combination, position and label', preview[0] === 'teams-card band-good label-good at-top text-default label-size-small' && preview[1] === '#13a10e'
+  check('the preview follows the combination, position and label', preview[0] === 'teams-card band-good label-good at-top text-default label-size-small mark-left align-right' && preview[1] === '#13a10e'
     && await page.textContent('#style-preview-label') === 'Escrito por mi asistente', preview.join(' | '));
   await page.evaluate(() => { document.querySelector('#style-custom').open = true; });
   await page.selectOption('#style-band', 'emphasis');
@@ -727,21 +727,54 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.uncheck('#style-icon');
   check('the emoji field hides with the emoji', !await page.isVisible('#style-emoji') && !await page.isVisible('#style-preview-icon'));
   await page.check('#style-icon');
-  // Signed as Kuroko: the app's mark takes the emoji's place and the default text links «Kuroko».
+  // Signed as Kuroko: the app's mark takes the emoji's place and the whole text links the site.
   await page.check('#style-kuroko');
   const label = await page.inputValue('#style-label');
   await page.fill('#style-label', '');
   const signed = await page.evaluate(() => [!document.querySelector('#style-preview-mark').hidden, document.querySelector('#style-preview-icon').hidden,
     document.querySelector('#style-icon-field').hidden, document.querySelector('#style-preview-label').textContent, document.querySelector('#style-preview-label .teams-link')?.textContent]);
-  check('signing as Kuroko shows the mark and links the name', JSON.stringify(signed) === JSON.stringify([true, true, true, 'Mensaje generado por Kuroko', 'Kuroko']), JSON.stringify(signed));
+  check('signing as Kuroko shows the mark and links the whole text', JSON.stringify(signed) === JSON.stringify([true, true, true, 'Mensaje generado por Kuroko', 'Mensaje generado por Kuroko']), JSON.stringify(signed));
+  // Any text links while the site link is on; off, nothing does.
+  await page.fill('#style-label', 'Escrito por mi asistente');
+  const linked = await page.textContent('#style-preview-label .teams-link');
+  await page.uncheck('#style-site-link');
+  check('the site link follows its switch and any band text', linked === 'Escrito por mi asistente' && !await page.$('#style-preview-label .teams-link'));
+  // The animated mark, its size, its side, the band's alignment and padding.
+  await page.check('#style-animated');
+  await page.fill('#style-mark-size', '45');
+  await page.selectOption('#style-mark-side', 'right');
+  await page.selectOption('#style-band-align', 'left');
+  await page.fill('#style-band-padding', '12');
+  const layout = await page.evaluate(() => {
+    const card = document.querySelector('#style-preview');
+    const mark = document.querySelector('#style-preview-mark');
+    const text = document.querySelector('#style-preview-label').getBoundingClientRect();
+    const band = getComputedStyle(card.querySelector('.teams-band'));
+    return [mark.getAttribute('src'), Math.round(mark.getBoundingClientRect().width), mark.getBoundingClientRect().left > text.left,
+      band.justifyContent, card.style.getPropertyValue('--band-padding')];
+  });
+  check('the preview follows the animated mark, its size and side, and the band layout',
+    JSON.stringify(layout) === JSON.stringify(['kuroko-mark.png', 45, true, 'flex-start', '12px']), JSON.stringify(layout));
+  await page.fill('#style-band-padding', '60');
+  await page.click('#save');
+  await page.waitForTimeout(300);
+  check('a band padding over 48 px is refused before saving', await page.isVisible('#notice.error'));
+  await page.fill('#style-band-padding', '12');
+  await page.fill('#style-mark-size', '8');
+  await page.click('#save');
+  await page.waitForTimeout(300);
+  check('a Kuroko icon under 16 px is refused before saving', await page.isVisible('#notice.error'));
+  await page.fill('#style-mark-size', '45');
   await page.fill('#style-label', label);
   await page.uncheck('#style-kuroko');
+  check('the Kuroko options hide without the signature', !await page.isVisible('#style-animated') && !await page.isVisible('#style-mark-size'));
   check('without the signature the emoji comes back', await page.isVisible('#style-preview-icon') && !await page.isVisible('#style-preview-mark'));
   await page.click('#save');
   await page.waitForTimeout(300);
   check('the message style is saved', await page.evaluate(() => JSON.stringify(window.__ptaLastSave?.config?.message_style)) === JSON.stringify({
     enabled: true, label: 'Escrito por mi asistente', position: 'top', accent: '#13A10E', band: 'emphasis', label_color: 'good', icon: true,
-    emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium', kuroko: false }));
+    emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium', kuroko: false,
+    animated: true, mark_size: 45, site_link: false, mark_side: 'right', band_align: 'left', band_padding: 12 }));
   check('message style has no page errors', errors.length === 0, errors.join(' | '));
   await context.close();
 }
