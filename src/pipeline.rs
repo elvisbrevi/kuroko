@@ -2099,8 +2099,7 @@ impl Pipeline {
     fn prompts(&self) -> crate::llm::Prompts<'_> {
         if self.knowledge.questions.is_some() {
             return crate::llm::Prompts {
-                status_round: "Use only the configured question sources and preserve the actual date or period requested.",
-                recap: "When the evidence is a daily activity record, summarize only the requested days. A saved empty day differs from a day that was never saved.",
+                questions: true,
                 ..Default::default()
             };
         }
@@ -2116,6 +2115,7 @@ impl Pipeline {
             documentation: text("documentation"),
             activity_review: text("activity_review"),
             statement: text("statement"),
+            questions: false,
         }
     }
     /// Search an indexed source (a whole repository, the verified notes or the organization) for

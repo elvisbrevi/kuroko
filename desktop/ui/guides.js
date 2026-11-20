@@ -116,7 +116,8 @@ function renderAgentPrompts() {
   const container = $('#agent-prompts');
   container.replaceChildren();
   const changes = current.map.agent_prompts ??= [];
-  for (const built of current.agent_prompts ?? []) {
+  // The agents' own instructions; Settings › Prompts holds every other prompt.
+  for (const built of (current.agent_prompts ?? []).filter(p => (p.section ?? 'agents') === 'agents')) {
     const change = () => changes.find(c => c.id === built.id);
     const state = el('span');
     const renderState = () => state.replaceChildren(change() ? badge(t('Your instructions'), 'active') : badge(t('Default instructions'), 'muted'));

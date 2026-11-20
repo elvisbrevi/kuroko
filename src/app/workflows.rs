@@ -16,6 +16,7 @@
 //! (`save_settings`). The workflow director's settings and its dry-run classification are in
 //! `director`.
 use super::*;
+use crate::agent_prompts::Texts;
 use crate::workflows::{self as core, Block, Facts, Inspection, Kind, Workflow};
 use serde_json::{Value, json};
 
@@ -164,10 +165,10 @@ fn listed(workflow: &Workflow, blocks: &[Block]) -> Vec<Block> {
 /// characters of the largest context a run of it can be given (`fixed` of them are not its
 /// instructions or instruction blocks: the fixed sentences, its checkouts, the item and the
 /// longest handover note).
-pub(super) fn usage(workflow: &Workflow, blocks: &[Block]) -> Value {
+pub(super) fn usage(workflow: &Workflow, blocks: &[Block], texts: &Texts) -> Value {
     let listed = listed(workflow, blocks);
-    let context = engine::largest_context(workflow, &listed);
-    let fixed = context.saturating_sub(engine::instructions_part(workflow, &listed));
+    let context = engine::largest_context(workflow, &listed, texts);
+    let fixed = context.saturating_sub(engine::instructions_part(workflow, &listed, texts));
     json!({
         "instructions": {"used": workflow.instructions.chars().count(), "limit": core::MAX_INSTRUCTIONS},
         "blocks": {"used": workflow.blocks.len(), "limit": core::MAX_WORKFLOW_BLOCKS},
@@ -177,13 +178,13 @@ pub(super) fn usage(workflow: &Workflow, blocks: &[Block]) -> Value {
 
 /// Refuses a workflow whose largest run context would not fit, with the numbers: a run is
 /// given its instructions and instruction blocks whole or not at all.
-fn fits(workflow: &Workflow, blocks: &[Block]) -> Result<(), String> {
+fn fits(workflow: &Workflow, blocks: &[Block], texts: &Texts) -> Result<(), String> {
     let listed = listed(workflow, blocks);
-    let used = engine::largest_context(workflow, &listed);
+    let used = engine::largest_context(workflow, &listed, texts);
     if used <= core::MAX_CONTEXT {
         return Ok(());
     }
-    let part = engine::instructions_part(workflow, &listed);
+    let part = engine::instructions_part(workflow, &listed, texts);
     Err(invalid(format!(
         "A run of workflow {} could be given {used} characters of context, more than the {} a run takes (and a context is never cut): {part} of them are its instructions and instruction blocks, the other {} the fixed sentences, its checkouts, the item and the longest handover note. Shorten its instructions or instruction blocks by at least {} characters.",
         workflow.id,
@@ -333,11 +334,12 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
         "workflows_list" => {
             ensure_no_arguments(args)?;
             let map = state.settings.map().map_err(fail)?;
+            let texts = Texts::new(&map.agent_prompts);
             let workflows: Vec<Value> = map.workflows.iter().map(shown).collect();
             let used: BTreeMap<&str, Value> = map
                 .workflows
                 .iter()
-                .map(|w| (w.id.as_str(), usage(w, &map.workflow_blocks)))
+                .map(|w| (w.id.as_str(), usage(w, &map.workflow_blocks, &texts)))
                 .collect();
             Ok(json!({"workflows":workflows,"usage":used,"editable":editable(state)?}))
         }
@@ -357,7 +359,7 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
             Ok(json!({
                 "workflow": shown(workflow),
                 "blocks": blocks,
-                "usage": usage(workflow, &map.workflow_blocks),
+                "usage": usage(workflow, &map.workflow_blocks, &Texts::new(&map.agent_prompts)),
                 "editable": editable(state)?,
             }))
         }
@@ -513,14 +515,19 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             let mut candidate = state.settings.map().map_err(fail)?;
             upsert(&mut candidate.workflows, workflow.clone(), |w| &w.id);
             core::validate(&candidate.workflows, &candidate.workflow_blocks).map_err(invalid)?;
-            fits(&workflow, &candidate.workflow_blocks)?;
+            fits(
+                &workflow,
+                &candidate.workflow_blocks,
+                &Texts::new(&candidate.agent_prompts),
+            )?;
             let mut warnings = verify(host, &mut workflow).await?;
             // A pre-approved post goes only to a chat the user belongs to.
             let saved = workflow.clone();
             // Again with the directories as the machine spells them and the blocks as they are now.
             let used = change(host, |map| {
-                fits(&workflow, &map.workflow_blocks)?;
-                let used = usage(&workflow, &map.workflow_blocks);
+                let texts = Texts::new(&map.agent_prompts);
+                fits(&workflow, &map.workflow_blocks, &texts)?;
+                let used = usage(&workflow, &map.workflow_blocks, &texts);
                 upsert(&mut map.workflows, workflow, |w| &w.id);
                 Ok(used)
             })
@@ -804,7 +811,11 @@ async fn save_block(host: &Arc<Host>, args: BlockSaveArgs) -> Result<Value, Stri
             .iter()
             .filter(|w| w.blocks.contains(&saved.id))
         {
-            fits(workflow, &map.workflow_blocks)?;
+            fits(
+                workflow,
+                &map.workflow_blocks,
+                &Texts::new(&map.agent_prompts),
+            )?;
         }
         Ok(())
     })

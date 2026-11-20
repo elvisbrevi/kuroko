@@ -50,6 +50,7 @@
   <link rel="modulepreload" href="workflows.js" fetchpriority="low">
   <link rel="modulepreload" href="workflow-blocks.js" fetchpriority="low">
   <link rel="modulepreload" href="settings-workflows.js" fetchpriority="low">
+  <link rel="modulepreload" href="settings-prompts.js" fetchpriority="low">
   <link rel="modulepreload" href="run-states.js" fetchpriority="low">
   <link rel="modulepreload" href="workflow-runs.js" fetchpriority="low">
   <link rel="modulepreload" href="workflow-supervisor.js" fetchpriority="low">
@@ -278,6 +279,7 @@
           <button role="tab" id="settings-tab-machines" data-group="machines" aria-controls="settings-machines" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg>Machines</button>
           <button role="tab" id="settings-tab-activity" data-group="activity" aria-controls="settings-activity" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Daily record<span class="flag edited" hidden><span class="sr-only">Unsaved changes</span></span></button>
           <button role="tab" id="settings-tab-workflows" data-group="workflows" aria-controls="settings-workflows" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-flow"/></svg>Workflows<span class="flag warn" hidden><span class="sr-only">Needs attention</span></span><span class="flag edited" hidden><span class="sr-only">Unsaved changes</span></span></button>
+          <button role="tab" id="settings-tab-prompts" data-group="prompts" aria-controls="settings-prompts" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg>Prompts<span class="flag edited" hidden><span class="sr-only">Unsaved changes</span></span></button>
           <button role="tab" id="settings-tab-variables" data-group="variables" aria-controls="settings-variables" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg>Variables<span class="flag warn" hidden><span class="sr-only">Needs attention</span></span></button>
           <button role="tab" id="settings-tab-advanced" data-group="advanced" aria-controls="settings-advanced" aria-selected="false" tabindex="-1"><svg class="icon" aria-hidden="true"><use href="#i-wrench"/></svg>Advanced</button>
         </div>
@@ -564,6 +566,17 @@
           </div>
           <div id="workflow-settings-warnings" class="callout warn" role="status" hidden></div>
           <div id="workflow-settings-problem" class="callout error" role="alert" hidden></div>
+        </div>
+
+        <div id="settings-prompts" class="settings-group" role="tabpanel" aria-labelledby="settings-tab-prompts" data-settings-group="prompts" hidden>
+          <div class="panel" id="panel-prompts">
+            <h2>Prompts</h2>
+            <p class="hint">Every text the app gives a model, each loaded with its default: the agents' instructions and rules, the workflow director and supervisor, workflow runs, the answers in Teams, how a request is read and the activity registration. A change reaches the next request. A prompt grants nothing: code still checks every answer, audience, path and link, whatever a prompt says.</p>
+            <label>Search the prompts<input id="prompt-search" type="search" autocomplete="off" spellcheck="false"></label>
+            <div id="prompt-sections" class="segmented" role="group" aria-label="Prompt sections"></div>
+            <p id="prompt-section-hint" class="hint"></p>
+            <div id="prompts" class="list"></div>
+          </div>
         </div>
 
         <div id="settings-variables" class="settings-group" role="tabpanel" aria-labelledby="settings-tab-variables" data-settings-group="variables" hidden>

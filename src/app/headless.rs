@@ -65,6 +65,9 @@ pub(crate) fn run(
         if restore {
             tokio::spawn(service::restore(host.clone(), service::restore_pause()));
         }
+        // The `kk` alias, on the first start of a newly installed or updated version.
+        let profile = host.state.settings.profile().to_path_buf();
+        tokio::task::spawn_blocking(move || service::shell_alias::ensure(&profile));
         if service::launched_by_service() {
             let profile = host.state.settings.profile().to_path_buf();
             tokio::task::spawn_blocking(move || service::upgrade(&profile));

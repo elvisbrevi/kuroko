@@ -69,6 +69,9 @@ pub async fn chat(
     let repositories = knowledge.repositories.clone();
     let selected = simulation::sources(&knowledge, &input)?;
     let (llm, llm_secrets) = crate::llm::from_config(&config.llm)?;
+    let llm = llm.texts(Arc::new(crate::agent_prompts::Texts::new(
+        &knowledge.agent_prompts,
+    )));
     let mut exact_secrets = llm_secrets;
     for name in config.secrets.values() {
         exact_secrets.push(security::secret(name)?);

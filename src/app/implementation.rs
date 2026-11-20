@@ -99,6 +99,10 @@ struct Machine {
     /// (`implementation_resume_support`: a review round's `resume`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     resume: bool,
+    /// Whether its last poll said a director's call may carry the user's changes to the
+    /// director's and supervisor's prompts (`prompt_texts_support`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    prompt_texts: bool,
 }
 impl Machine {
     /// Trusted and seen in its last polls (a worker polls every two seconds).
@@ -318,6 +322,11 @@ pub(crate) struct Launch {
     /// interactive Azure sign-in. A worker that predates the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     azure_token: Option<String>,
+    /// The user's changes to the prompts the machine composes the run with
+    /// (`llm::implementation::RUN_TEXTS`), from where it was started; a worker that predates the
+    /// field, or a prompt not listed, uses that machine's default.
+    #[serde(default, skip_serializing_if = "crate::agent_prompts::Texts::is_empty")]
+    pub(crate) texts: crate::agent_prompts::Texts,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Run {
@@ -950,6 +959,8 @@ fn build_launch(
         round: false,
         resume: None,
         azure_token,
+        texts: crate::agent_prompts::Texts::new(&map.agent_prompts)
+            .only(&crate::llm::implementation::RUN_TEXTS),
     })
 }
 
@@ -1410,7 +1421,7 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
                 record["model"].as_str().unwrap_or_default().to_owned(),
                 record["effort"].as_str().unwrap_or_default().to_owned(),
                 record["session_id"].as_str().map(str::to_owned),
-                vec![host.state.implementation.root.join("requests").join(id)],
+                vec![session_directory(host, &record, id)?],
                 true,
                 record["state"] == "generating",
                 serde_json::from_value::<mobile::Access>(record["remote"].clone()).ok(),
@@ -1485,6 +1496,27 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
     }
 }
 
+/// The directory a recorded request or workflow director session ran in: `requests/<id>`, or
+/// `directors/<id>` for a director's or supervisor's, made again when it was already removed so
+/// the provider can resume the session there.
+fn session_directory(host: &Arc<Host>, record: &Value, id: &str) -> Result<PathBuf> {
+    let root = &host.state.implementation.root;
+    if record["purpose"] == "request" || record["purpose"].is_null() {
+        return Ok(root.join("requests").join(id));
+    }
+    let parent = root.join("directors");
+    security::private_dir(&parent)?;
+    let directory = parent.join(id);
+    security::private_dir(&directory)?;
+    // A reconnected session is reachable again: the sweep reads this as its last use.
+    std::fs::write(directory.join(".reachable"), now_text_for_sweep())?;
+    Ok(directory)
+}
+
+fn now_text_for_sweep() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 /// A coding or planning run's session name, from the work item the launch carries.
 fn run_name(launch: &Launch) -> crate::llm::implementation::SessionName {
     let item = &launch.detail.item;
@@ -1526,6 +1558,10 @@ async fn run(host: &Arc<Host>, launch: Launch) {
             },
         )
     });
+    // Changes another host sent that this one cannot accept leave its own defaults.
+    let texts = Some(launch.texts.clone())
+        .filter(|t| t.check().is_ok())
+        .unwrap_or_default();
     let observer = |session: Option<&str>| {
         authority::require_execution(&host.state)?;
         host.state.implementation.db.session(&launch.id, session)
@@ -1542,6 +1578,7 @@ async fn run(host: &Arc<Host>, launch: Launch) {
                         &request.directories,
                         &instructions,
                         &input,
+                        &texts,
                         &name,
                         &observer,
                         remote.clone(),
@@ -1564,7 +1601,7 @@ async fn run(host: &Arc<Host>, launch: Launch) {
                 // instructions and its earlier work; this turn gets the fixed rules and the round.
                 let prompt = format!(
                     "{}\n{}",
-                    crate::llm::implementation::code_rules(&launch.allow),
+                    crate::llm::implementation::code_rules(&launch.allow, &texts),
                     request.context
                 );
                 crate::llm::implementation::execute_resumed(
@@ -1572,7 +1609,7 @@ async fn run(host: &Arc<Host>, launch: Launch) {
                     &request.model,
                     &request.effort,
                     &request.directories,
-                    &prompt,
+                    (&prompt, &texts),
                     &launch.allow,
                     session,
                     &name,
@@ -1585,14 +1622,18 @@ async fn run(host: &Arc<Host>, launch: Launch) {
                     (outcome.ok, outcome.text, None, outcome.prompts, failure)
                 })
             } else {
-                let prompt =
-                    crate::llm::implementation::coding_prompt(&instructions, &input, &launch.allow);
+                let prompt = crate::llm::implementation::coding_prompt(
+                    &instructions,
+                    &input,
+                    &launch.allow,
+                    &texts,
+                );
                 crate::llm::implementation::execute(
                     &request.provider,
                     &request.model,
                     &request.effort,
                     &request.directories,
-                    &prompt,
+                    (&prompt, &texts),
                     &launch.allow,
                     &name,
                     &observer,

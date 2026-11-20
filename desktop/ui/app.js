@@ -36,6 +36,7 @@ import {
   renderPeople, renderQuestions,
 } from './knowledge-map.js';
 import { openGuides, renderGuides } from './guides.js';
+import { initPrompts } from './settings-prompts.js';
 import { answerBubble, bubble, chosen, resizeComposer } from './chat.js';
 import { machineTrust } from './dialogs.js';
 import { closeWorkflowRun, loadWorkflowRuns, showRunsList } from './workflow-runs.js';
@@ -84,6 +85,7 @@ $('#todo-more').onclick = () => busy($('#todo-more'), async () => {
   // Reading continues where the list ended.
   $('#todo-list').querySelectorAll('.todo-item')[shown]?.querySelector('.todo-select')?.focus({ preventScroll: true });
 });
+initPrompts();
 $('#todo-agent-guides').onclick = () => { showTab('agent-guides'); $('#agent-guides h1').focus(); };
 $('#agent-guides-back').onclick = () => { showTab('todo'); $('#todo-agent-guides').focus(); };
 $('#teams-machine-open').onclick = () => showTab('settings', 'panel-machines');

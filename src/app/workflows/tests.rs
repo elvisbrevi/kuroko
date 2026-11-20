@@ -1814,7 +1814,7 @@ async fn a_workflow_at_its_limits_saves_and_one_whose_context_cannot_fit_is_refu
     assert_eq!(refused.code, "invalid_input");
     let text = refused.message.unwrap();
     let blocks = host.state.settings.map().unwrap().workflow_blocks;
-    let largest = engine::largest_context(&w, &blocks);
+    let largest = engine::largest_context(&w, &blocks, &Default::default());
     assert!(largest > MAX_CONTEXT);
     assert!(
         text.contains(&format!("{largest} characters of context"))
@@ -1860,7 +1860,7 @@ async fn a_longer_block_is_refused_when_a_workflow_that_lists_it_would_not_fit()
     // The refused block keeps its text, and the stored workflow fits.
     let map = host.state.settings.map().unwrap();
     assert_eq!(map.workflow_blocks[n].text, before.workflow_blocks[n].text);
-    assert!(engine::largest_context(&w, &map.workflow_blocks) <= MAX_CONTEXT);
+    assert!(engine::largest_context(&w, &map.workflow_blocks, &Default::default()) <= MAX_CONTEXT);
 }
 
 #[tokio::test]
@@ -1874,8 +1874,8 @@ async fn list_and_show_say_how_much_of_each_limit_a_workflow_uses() {
     w.blocks = ids;
     store(&host, vec![w.clone()]);
     let blocks = host.state.settings.map().unwrap().workflow_blocks;
-    let largest = engine::largest_context(&w, &blocks);
-    let part = engine::instructions_part(&w, &blocks);
+    let largest = engine::largest_context(&w, &blocks, &Default::default());
+    let part = engine::instructions_part(&w, &blocks, &Default::default());
     // The instructions' section, and each block's (`Instruction block «Rule N»:` and its text).
     assert_eq!(part, 15 + 18 + 3 * (23 + 6 + 100));
     let expected = json!({

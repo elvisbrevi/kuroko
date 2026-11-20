@@ -15,6 +15,8 @@ import { loadActivity, loadMessages } from './messages.js';
 import { loadKnowledge } from './knowledge.js';
 import { loadWorkflows } from './workflows.js';
 import { loadWorkflowSettings } from './settings-workflows.js';
+import { renderPrompts } from './settings-prompts.js';
+import { renderAgentPrompts } from './guides.js';
 
 /** Views opened from To-Do: they have no navigation item of their own. */
 const TODO_VIEWS = ['implementation', 'create-request', 'agent-history', 'agent-guides'];
@@ -39,6 +41,9 @@ function showTab(name, anchor) {
   if (name === 'todo') loadTodo();
   if (name === 'agent-history') loadAgentHistory();
   if (name === 'settings') { loadMachines().catch(fail); loadVariables(); loadAccountConfig(); loadUpdates(); loadService(); loadCloud(); loadAgentEndpoint(); loadWorkflowSettings(); }
+  // Settings › Prompts and To-Do's agent instructions edit the same prompts: each shows the other's edits.
+  if (name === 'settings') renderPrompts();
+  if (name === 'agent-guides') renderAgentPrompts();
   const target = anchor && document.getElementById(anchor);
   // A panel inside a tab (a Settings section, an Activities view) opens that tab first.
   const owner = target && document.querySelector(`[aria-controls="${target.closest('[role=tabpanel]')?.id}"]`);

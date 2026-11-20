@@ -585,8 +585,7 @@ pub(in crate::app) fn describe_restart(
     });
     let note_text = match note {
         Some(n) => format!(
-            "Each of its coding runs gets your handover note ({n} characters) under «{}», next to the item's evidence; it is stored with the new run and posted nowhere",
-            engine::HANDOVER
+            "Each of its coding runs gets your handover note ({n} characters) through the prompt runs.handover_person, next to the item's evidence; it is stored with the new run and posted nowhere"
         ),
         None => "No handover note is given".into(),
     };

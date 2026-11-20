@@ -258,18 +258,60 @@ impl Session {
     }
 }
 
+/// The most yielding sessions (`Keep::Yielding`) a host keeps at once.
+const YIELDING: usize = 4;
+
+/// Whether a Claude session that ended with its answer stays reachable through Remote Control.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Keep {
+    /// Its process ends with the run.
+    #[cfg_attr(not(test), allow(dead_code))]
+    No,
+    /// It stays for the person (`retain`).
+    Yes,
+    /// It stays too, but gives its place up to a newer session when the host already keeps the
+    /// most it can: the one read-only turn of a workflow director or supervisor.
+    Yielding,
+}
+
 struct Live {
     access: Access,
     task: tokio::task::JoinHandle<()>,
     observer: Observer,
+    yields: bool,
+    since: std::time::Instant,
 }
 fn sessions() -> &'static Mutex<HashMap<String, Live>> {
     static SESSIONS: OnceLock<Mutex<HashMap<String, Live>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
-async fn retain(id: &str, mut session: Session, access: Access, observer: Observer) -> Result<()> {
+async fn retain(
+    id: &str,
+    mut session: Session,
+    access: Access,
+    observer: Observer,
+    yields: bool,
+) -> Result<()> {
     let mut sessions = sessions().lock().await;
     sessions.retain(|_, live| !live.task.is_finished());
+    // A full host lets its oldest yielding session go, so a director's turns never take the
+    // places of the sessions people continue; and it keeps at most `YIELDING` of them, so
+    // frequent director turns hold few processes.
+    let yielding = sessions.values().filter(|live| live.yields).count();
+    if (sessions.len() >= 16 || (yields && yielding >= YIELDING))
+        && let Some(oldest) = sessions
+            .iter()
+            .filter(|(_, live)| live.yields)
+            .min_by_key(|(_, live)| live.since)
+            .map(|(id, _)| id.clone())
+        && let Some(live) = sessions.remove(&oldest)
+    {
+        live.task.abort();
+        let _ = (live.observer)(Access {
+            status: "offline".into(),
+            ..Access::default()
+        });
+    }
     ensure!(
         sessions.len() < 16,
         "Close an existing mobile session before connecting another (maximum 16)."
@@ -293,6 +335,8 @@ async fn retain(id: &str, mut session: Session, access: Access, observer: Observ
             access,
             task,
             observer: disconnected,
+            yields,
+            since: std::time::Instant::now(),
         },
     ) {
         old.task.abort();
@@ -458,7 +502,7 @@ impl Activity {
 }
 
 /// Run one Claude session; a coding session (`planning` false) is autonomous until it ends.
-/// With `keep`, a session that ended with its answer stays reachable through Remote Control
+/// As `keep` says, a session that ended with its answer stays reachable through Remote Control
 /// for the person (`retain`); any other session's process ends with its run.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute(
@@ -467,7 +511,7 @@ pub(super) async fn execute(
     directory: &std::path::Path,
     prompt: &str,
     id: &str,
-    (planning, keep): (bool, bool),
+    (planning, keep): (bool, Keep),
     name: &SessionName,
     observer: SessionObserver<'_>,
     remote: Observer,
@@ -496,7 +540,7 @@ async fn follow_session(
     directory: &std::path::Path,
     prompt: &str,
     id: &str,
-    (planning, keep): (bool, bool),
+    (planning, keep): (bool, Keep),
     name: &SessionName,
     observer: SessionObserver<'_>,
     remote: Observer,
@@ -566,9 +610,12 @@ async fn follow_session(
         keep_prompt(&mut events.prompts, &prompt);
     }
     let text = noted(std::mem::take(&mut events.text), session.skipped, planning);
-    if keep && ok && access.status == "connected" {
+    if keep != Keep::No && ok && access.status == "connected" {
         offline.0 = None;
-        if retain(id, session, access, remote.clone()).await.is_err() {
+        if retain(id, session, access, remote.clone(), keep == Keep::Yielding)
+            .await
+            .is_err()
+        {
             remote(Access::unavailable())?;
         }
     } else {
@@ -620,7 +667,7 @@ pub(crate) async fn reconnect(
     }
     let mut session = spawn(&binary, &args, &directories[0]).await?;
     let access = session.enable(name).await?;
-    retain(id, session, access.clone(), observer).await?;
+    retain(id, session, access.clone(), observer, false).await?;
     Ok(access)
 }
 
@@ -743,7 +790,10 @@ while read -r control; do :; done
                 &binary,
                 ("claude", "synthetic-model", "low"),
                 &[root.path().into()],
-                "Synthetic mobile check",
+                (
+                    "Synthetic mobile check",
+                    &crate::agent_prompts::Texts::default(),
+                ),
                 None,
                 &SessionName::item(4211, "Fix \"rounding\"\nnow"),
                 &|id| {
@@ -824,7 +874,7 @@ while read -r control; do :; done
                     root.path(),
                     "Synthetic coding task",
                     &id,
-                    (false, keep),
+                    (false, if keep { Keep::Yes } else { Keep::No }),
                     &SessionName::default(),
                     &|_| Ok(()),
                     Arc::new(move |access| {
@@ -878,7 +928,7 @@ while read -r control; do :; done
                     &root,
                     "Synthetic coding task",
                     &uuid::Uuid::new_v4().to_string(),
-                    (false, true),
+                    (false, Keep::Yes),
                     &SessionName::default(),
                     &|_| Ok(()),
                     Arc::new(move |access| {
@@ -945,7 +995,10 @@ printf '{"type":"result","session_id":"%s","is_error":false,"result":"Opened not
                 &binary,
                 ("claude", "synthetic-model", "low"),
                 &[root.path().into()],
-                "Synthetic coding task",
+                (
+                    "Synthetic coding task",
+                    &crate::agent_prompts::Texts::default(),
+                ),
                 None,
                 &SessionName::default(),
                 &|_| Ok(()),
@@ -1017,7 +1070,7 @@ printf '{{"type":"system","subtype":"init","session_id":"%s"}}\n' "$session"
             root,
             "Synthetic coding task",
             &uuid::Uuid::new_v4().to_string(),
-            (false, true),
+            (false, Keep::Yes),
             &SessionName::default(),
             &|_| Ok(()),
             Arc::new(|_| Ok(())),
@@ -1302,7 +1355,7 @@ while read -r line; do :; done"##
                 root.path(),
                 "Synthetic coding task",
                 &uuid::Uuid::new_v4().to_string(),
-                (false, true),
+                (false, Keep::Yes),
                 &SessionName::default(),
                 &|id| {
                     observed.lock().unwrap().extend(id.map(str::to_owned));

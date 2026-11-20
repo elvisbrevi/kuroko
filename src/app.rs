@@ -600,6 +600,9 @@ async fn shorter_card_text(
 ) -> Result<String> {
     let config = state.settings.config()?;
     let (llm, _) = crate::llm::from_config(&config.llm)?;
+    let llm = llm.texts(Arc::new(crate::agent_prompts::Texts::new(
+        &state.settings.map()?.agent_prompts,
+    )));
     crate::adapters::card::condense(&llm, text, |shorter| graph.card_overflow(shorter, images))
         .await
 }
@@ -980,7 +983,7 @@ async fn snapshot(host: &Host) -> std::result::Result<Snapshot, String> {
             .is_some(),
         tunnel_config: state.settings.tunnel().unwrap_or_default(),
         cases: &crate::cases::BUILT_IN,
-        agent_prompts: &crate::agent_prompts::BUILT_IN,
+        agent_prompts: crate::agent_prompts::BUILT_IN,
         workflow_attention: workflows::runs::attention(state).unwrap_or_default(),
     })
 }

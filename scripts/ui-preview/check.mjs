@@ -596,6 +596,29 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await plan.locator('.actions button').click();
   await page.click('#save'); await page.waitForTimeout(300);
   check('restoring the default removes the change', await page.evaluate(() => !window.__ptaLastSave.map.agent_prompts.some(p => p.id === 'plan')));
+  // Settings › Prompts: every section's prompts, edited, saved and restored like the agents' own.
+  await page.evaluate(() => showTab('settings', 'panel-prompts'));
+  await page.waitForTimeout(200);
+  check('Settings › Prompts lists the agents\' instructions first', await page.locator('#prompts > .resource').count() === 5
+    && await page.getAttribute('#prompt-sections button:first-child', 'aria-pressed') === 'true');
+  await page.click('#prompt-sections [data-section="steps"]');
+  const condense = page.locator('#prompts [data-prompt="prompt:steps.condense"]');
+  check('a section shows its prompts and the values code fills in', await condense.count() === 1
+    && (await condense.locator('code').allTextContents()).includes('{{max_chars}}'));
+  await condense.locator('summary').click();
+  await condense.locator('textarea').fill('At most {{max_chars}} characters, same links.');
+  check('an edited prompt marks Prompts as edited', await page.isVisible('#settings-tab-prompts .flag.edited'));
+  await page.click('#save'); await page.waitForTimeout(300);
+  check('a changed prompt is saved', await page.evaluate(() => window.__ptaLastSave.map.agent_prompts.some(p => p.id === 'steps.condense' && p.instructions === 'At most {{max_chars}} characters, same links.')));
+  await condense.locator('.actions button').click();
+  await page.click('#save'); await page.waitForTimeout(300);
+  check('restoring a prompt removes its change', await page.evaluate(() => !window.__ptaLastSave.map.agent_prompts.some(p => p.id === 'steps.condense')));
+  await page.fill('#prompt-search', 'nothing matches this');
+  check('a search with no match says so', (await page.textContent('#prompts')).length > 0 && await page.locator('#prompts > .resource').count() === 0);
+  await page.fill('#prompt-search', '');
+  await page.click('#prompt-sections [data-section="cases"]');
+  check('cases show how each is recognized and answered', await page.locator('#prompts > .resource').count() > 0);
+  await page.evaluate(() => showTab('agent-guides'));
   await page.click('#agent-guides-back');
   check('Back returns to To-Do, on the button that opened the guides', await page.isVisible('#todo-master') && await page.evaluate(() => document.activeElement?.id === 'todo-agent-guides'));
   await page.evaluate(() => showTab('knowledge'));
@@ -984,7 +1007,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.screenshot({ path: `${out}/phone-messages-answer.png`, fullPage: true });
   await page.click('nav [data-tab="registration"]');
   check('phone: recorded day list remains available', await page.isVisible('#activity-master'));
-  for (const g of ['general', 'teams', 'models', 'activity', 'variables', 'advanced']) {
+  for (const g of ['general', 'teams', 'models', 'activity', 'prompts', 'variables', 'advanced']) {
     await page.evaluate(x => selectTab($('#settings-tabs'), x), g);
     await page.waitForTimeout(150);
     await page.screenshot({ path: `${out}/phone-settings-${g}.png`, fullPage: true });
@@ -994,7 +1017,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
 {
   const { context, page } = await open();
   await page.click('nav [data-tab="settings"]');
-  for (const g of ['general', 'teams', 'models', 'activity', 'variables', 'advanced']) {
+  for (const g of ['general', 'teams', 'models', 'activity', 'prompts', 'variables', 'advanced']) {
     await page.click(`#settings-tab-${g}`);
     await page.waitForTimeout(150);
     await page.screenshot({ path: `${out}/desktop-settings-${g}.png`, fullPage: true });

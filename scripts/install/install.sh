@@ -50,6 +50,9 @@ BEGIN_MARK="# >>> kuroko (install.sh) >>>"
 END_MARK="# <<< kuroko (install.sh) <<<"
 LEGACY_BEGIN_MARK="# >>> personal-teams-assistant (install.sh) >>>"
 LEGACY_END_MARK="# <<< personal-teams-assistant (install.sh) <<<"
+# The `kk` alias block the host writes on the first start of each version (src/app/service/shell_alias.rs).
+ALIAS_BEGIN_MARK="# >>> kuroko alias >>>"
+ALIAS_END_MARK="# <<< kuroko alias <<<"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'install.sh: %s\n' "$*" >&2; }
@@ -560,7 +563,9 @@ remove_path() {
     for file in $RC_FILES; do
         remove_block "$HOME/$file" "$BEGIN_MARK" "$END_MARK"
         remove_legacy_block "$HOME/$file"
+        remove_block "$HOME/$file" "$ALIAS_BEGIN_MARK" "$ALIAS_END_MARK"
     done
+    remove_block "$HOME/.config/powershell/profile.ps1" "$ALIAS_BEGIN_MARK" "$ALIAS_END_MARK"
     remove_fish "$PRODUCT" "$BEGIN_MARK"
     remove_fish "$LEGACY" "$LEGACY_BEGIN_MARK"
 }

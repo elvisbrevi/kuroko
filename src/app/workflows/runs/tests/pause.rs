@@ -50,7 +50,7 @@ async fn a_restart_cancels_the_run_and_its_new_coding_run_gets_the_handover_note
         "{asked}"
     );
     assert!(
-        asked.contains(engine::HANDOVER) && asked.contains("posted nowhere"),
+        asked.contains("runs.handover_person") && asked.contains("posted nowhere"),
         "{asked}"
     );
     let long = "x".repeat(record::MAX_HANDOVER + 1);
@@ -98,9 +98,11 @@ async fn a_restart_cancels_the_run_and_its_new_coding_run_gets_the_handover_note
     // instructions; the first coding run had none.
     bench.state(&new, Phase::PullRequests).await;
     let first = fs::read_to_string(bench.log.join("coding.1")).unwrap();
-    assert!(!first.contains(engine::HANDOVER));
+    assert!(!first.contains("Handover from the previous run"));
     let prompt = fs::read_to_string(bench.log.join("coding.2")).unwrap();
-    let heading = prompt.find(engine::HANDOVER).expect("the heading");
+    let heading = prompt
+        .find("Handover from the previous run")
+        .expect("the heading");
     let (at_note, at_left) = (prompt.find(NOTE).unwrap(), prompt.find(LEFT).unwrap());
     assert!(heading < at_note && at_note < at_left, "{prompt}");
     assert!(

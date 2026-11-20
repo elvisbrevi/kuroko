@@ -1416,6 +1416,7 @@ pub(crate) fn profile_argument(args: Vec<String>) -> (Vec<String>, Option<PathBu
     (rest, profile)
 }
 
+pub(crate) mod shell_alias;
 #[cfg(test)]
 mod tests;
 

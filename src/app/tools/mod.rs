@@ -33,6 +33,13 @@ fn default_teams_reading() -> Value {
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 }
+/// The IDs of every prompt (`crate::agent_prompts::BUILT_IN`).
+fn prompt_ids() -> Vec<&'static str> {
+    crate::agent_prompts::BUILT_IN
+        .iter()
+        .map(|p| p.id)
+        .collect()
+}
 fn none() -> Value {
     object(json!({}), &[])
 }
@@ -1443,31 +1450,31 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "agent_prompts_list",
-        title: "Implementation agent prompts",
-        description: "The implementation agents' instructions: plan (children of an HU, bug or GitHub epic), code (implementing a task, development bug or issue), request (writing a new HU, bug or epic) and direct (the workflow director choosing a workflow for a work item), with their defaults and the user's changes. The rules on untrusted evidence, provider writes, the list the director chooses from and the JSON contract are added by code and cannot be changed.",
+        title: "Prompts",
+        description: "Every prompt the app gives a model, with its section, default, the {{name}} values code fills in and the user's changes: the implementation agents' instructions (plan, code, request, direct, supervise), the rules and JSON answer code adds to them, the workflow director's and supervisor's rules, the contexts of workflow runs and review rounds, the Teams answers, the steps that read a request and the activity registration. The cases' descriptions and instructions are in cases_list. A prompt grants nothing: code still checks every answer, audience, path and link.",
         effect: Effect::Read,
         schema: none,
     },
     Tool {
         name: "agent_prompt_update",
-        title: "Change an implementation agent prompt",
-        description: "Replaces the instructions of one implementation agent prompt (plan, code, request or direct); at most 8000 characters.",
+        title: "Change a prompt",
+        description: "Replaces the text of one prompt (an ID from agent_prompts_list); at most 8000 characters for the agents' instructions and 20000 for the others. Keep the {{name}} values the prompt lists where the text needs them.",
         effect: Effect::Local,
         schema: || {
             object(
-                json!({"id": {"type": "string", "enum": ["plan", "code", "request", "direct"]}, "instructions": string("The new instructions.")}),
+                json!({"id": {"type": "string", "enum": prompt_ids()}, "instructions": string("The new text.")}),
                 &["id", "instructions"],
             )
         },
     },
     Tool {
         name: "agent_prompt_reset",
-        title: "Reset an implementation agent prompt",
-        description: "Restores the default instructions of one implementation agent prompt.",
+        title: "Reset a prompt",
+        description: "Restores the default text of one prompt.",
         effect: Effect::Local,
         schema: || {
             object(
-                json!({"id": {"type": "string", "enum": ["plan", "code", "request", "direct"]}}),
+                json!({"id": {"type": "string", "enum": prompt_ids()}}),
                 &["id"],
             )
         },

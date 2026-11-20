@@ -13,6 +13,7 @@ import { loadActivity } from './messages.js';
 import { renderNoteContexts, renderRepositories, renderResources } from './knowledge.js';
 import { renderContexts, renderEntries, renderOrganization, renderPeople, renderQuestions } from './knowledge-map.js';
 import { renderAgentPrompts, renderGuides } from './guides.js';
+import { renderPrompts } from './settings-prompts.js';
 import { renderChatSources } from './chat.js';
 import { checkWorkflowSettings, discardWorkflowSettings, saveWorkflowSettings } from './settings-workflows.js';
 
@@ -83,7 +84,7 @@ async function reload() {
   dirtyGroups.clear();
   renderSavebar();
   renderLive();
-  renderRepositories(); renderResources(); renderContexts(); renderQuestions(); renderPeople(); renderOrganization(); renderEntries(); renderGuides(); renderAgentPrompts(); renderNoteContexts(); renderChatSources();
+  renderRepositories(); renderResources(); renderContexts(); renderQuestions(); renderPeople(); renderOrganization(); renderEntries(); renderGuides(); renderAgentPrompts(); renderPrompts(); renderNoteContexts(); renderChatSources();
   discardWorkflowSettings();
   loadAzureDevopsStatus(); loadGithubCliStatus();
   await Promise.all([loadChain(), loadSelfChat()]);
