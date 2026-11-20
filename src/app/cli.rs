@@ -451,7 +451,9 @@ Knowledge
                            with how much of each limit they use (usage: instructions, blocks, context).
   workflows save [--confirmed]   JSON on stdin: id, name, description, enabled, auto_start, organization
                            (https://dev.azure.com/NAME), project, repositories [{id, name}], machine (ID),
-                           checkouts {REPOSITORY_ID: DIRECTORY}, agent {provider, model, effort},
+                           checkouts {REPOSITORY_ID: DIRECTORY}, agent {provider, model, effort,
+                           time_limit_minutes (optional, 30-480: each session of its runs; none takes
+                           workflows settings' coding_ or planning_time_limit_minutes)},
                            instructions (at most 20000 characters), blocks (IDs, at most 20) and allow:
                            what its coding runs may do that the fixed rules forbid (work_items, teams,
                            merge, deploy; empty by default; any of them needs --confirmed), and
@@ -482,6 +484,9 @@ Knowledge
   workflows settings --set KEY VALUE [--set KEY VALUE…] [--source ID]
                            KEY: watch_interval_minutes (1-60), concurrency (1-4),
                            pull_request_wait_days (1-60), dependency_wait_days (1-90),
+                           coding_time_limit_minutes (30-480, default 120: how long a coding
+                           session or review round may take before it is stopped),
+                           planning_time_limit_minutes (30-480, default 120),
                            director.machine|provider|model|effort,
                            director none, ready_states.PROJECT \"STATE,STATE\" (empty clears),
                            ready_states with JSON {organization?, project, states},
@@ -1135,7 +1140,9 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
             "watch_interval_minutes"
             | "concurrency"
             | "pull_request_wait_days"
-            | "dependency_wait_days" => {
+            | "dependency_wait_days"
+            | "coding_time_limit_minutes"
+            | "planning_time_limit_minutes" => {
                 let number: u32 = value
                     .parse()
                     .with_context(|| format!("{key} takes a whole number"))?;

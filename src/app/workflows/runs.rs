@@ -265,6 +265,7 @@ pub(super) async fn operation(
             let run = found(&host.state, &a.run)?;
             let mut view = placed(run.view(), &run, &places(&host.state)?);
             sessions(host, &mut view).await;
+            item_state(host, azure, &run, &mut view).await;
             view["supervising"] = json!(super::supervisor::queued(&host.state, &run.id));
             Ok(json!({ "run": view }))
         }
@@ -497,7 +498,74 @@ async fn sessions(host: &Arc<Host>, view: &mut Value) {
     for index in 0..view["children"].as_array().map_or(0, Vec::len) {
         if view["children"][index]["coding"].is_object() {
             mark(host, &mut view["children"][index]["coding"]).await;
+            stops(&mut view["children"][index], now());
         }
+    }
+}
+/// How long the item's state read for a run's status is kept: a run's detail is read every few
+/// seconds while it is open.
+const ITEM_STATE_SECONDS: i64 = 300;
+/// The work item's state as Azure DevOps has it now (`item.state`, read at most every
+/// `ITEM_STATE_SECONDS` per run, with `state_read_at`); the record keeps the state the run took
+/// it in (`state_when_taken`). When it cannot be read, `item.state` is that one and
+/// `state_read_at` is null.
+async fn item_state(host: &Arc<Host>, azure: &Azure, run: &Run, view: &mut Value) {
+    static READ: std::sync::OnceLock<std::sync::Mutex<BTreeMap<String, (i64, String)>>> =
+        std::sync::OnceLock::new();
+    let read = READ.get_or_init(Default::default);
+    view["item"]["state_when_taken"] = json!(run.item.state);
+    view["item"]["state_read_at"] = Value::Null;
+    let now = now();
+    let cached = read
+        .lock()
+        .unwrap()
+        .get(&run.id)
+        .filter(|(at, _)| now - at < ITEM_STATE_SECONDS)
+        .cloned();
+    let current = match cached {
+        Some(found) => Some(found),
+        None => tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            azure.item(
+                &host.state,
+                run.item.source.as_deref(),
+                Some(&run.item.project),
+                run.item.id,
+            ),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|detail| {
+            let found = (now, detail.item.state);
+            let mut read = read.lock().unwrap();
+            read.retain(|_, (at, _)| now - *at < ITEM_STATE_SECONDS);
+            read.insert(run.id.clone(), found.clone());
+            found
+        }),
+    };
+    if let Some((at, state)) = current {
+        view["item"]["state"] = json!(state);
+        view["item"]["state_read_at"] = json!(at);
+    }
+}
+/// While a child's coding session runs: when its time limit stops it (`stops_at`, Unix seconds,
+/// from when its machine accepted the launch) and the seconds left.
+fn stops(child: &mut Value, now: i64) {
+    let coding = &child["coding"];
+    let running = coding["started"] == true
+        && matches!(coding["state"].as_str(), None | Some("running"))
+        && child["outcome"].is_null();
+    let (Some(started), Some(minutes)) = (
+        child["started_at"].as_i64(),
+        coding["time_limit_minutes"].as_i64(),
+    ) else {
+        return;
+    };
+    if running {
+        let stops_at = started + minutes * 60;
+        child["coding"]["stops_at"] = json!(stops_at);
+        child["coding"]["seconds_left"] = json!((stops_at - now).max(0));
     }
 }
 

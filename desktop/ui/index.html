@@ -541,6 +541,8 @@
               <label>Check every (minutes) <small>From 1 to 60.</small><input id="workflow-interval" type="number" min="1" max="60" step="1" inputmode="numeric"></label>
               <label>Runs at once <small>From 1 to 4; the others wait their turn.</small><input id="workflow-concurrency" type="number" min="1" max="4" step="1" inputmode="numeric"></label>
               <label>Pull-request wait (days) <small>How long a run waits for its pull requests before it goes on.</small><input id="workflow-pr-wait" type="number" min="1" max="60" step="1" inputmode="numeric"></label>
+              <label>Coding time limit (minutes) <small>How long a coding session or review round may take before it is stopped; a workflow can set its own.</small><input id="workflow-coding-limit" type="number" min="30" max="480" step="1" inputmode="numeric"></label>
+              <label>Planning time limit (minutes) <small>How long a planning session may take before it is stopped.</small><input id="workflow-planning-limit" type="number" min="30" max="480" step="1" inputmode="numeric"></label>
             </div>
             <div id="workflow-watcher-state" role="status" aria-live="polite" hidden></div>
           </div>

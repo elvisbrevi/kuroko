@@ -255,6 +255,43 @@ impl Database {
         )?;
         Ok(())
     }
+    /// Record `report`, the final report of a session the person continued after its run
+    /// stopped before its answer (`Run::continuable`): the run is `done` with that report (as
+    /// a run's own report is kept: redacted and bounded), without its failure, and says when it
+    /// was continued. Any other run is left as it is. Returns whether the run changed.
+    pub(super) fn continued(&self, id: &str, report: &str) -> Result<bool> {
+        let Some(mut run) = self.get(id)? else {
+            return Ok(false);
+        };
+        if !run.continuable() {
+            return Ok(false);
+        }
+        let report = crate::llm::implementation::report_text(report)?;
+        if run.state == "done" && run.output == report {
+            return Ok(false);
+        }
+        let before = std::mem::replace(&mut run.state, "done".into());
+        let now = chrono::Utc::now().to_rfc3339();
+        run.output = report;
+        run.failure = None;
+        run.prompts.clear();
+        run.continued_at = Some(now.clone());
+        let mut db = self.0.lock().unwrap();
+        let tx = db.transaction()?;
+        let changed = tx.execute(
+            "UPDATE agent_runs SET state='done',finished_at=?2,payload=?3 WHERE id=?1 AND state=?4",
+            params![id, now, serde_json::to_string(&run)?, before],
+        )? > 0;
+        if changed {
+            tx.execute("INSERT INTO agent_run_events(run_id) VALUES (?1)", [id])?;
+        }
+        tx.commit()?;
+        drop(db);
+        if changed {
+            crate::mirror::wake();
+        }
+        Ok(changed)
+    }
     /// Record the permission prompts a run still raised, before it finishes.
     pub(super) fn prompts(&self, id: &str, prompts: &[String]) -> Result<()> {
         let value = serde_json::to_string(prompts)?;

@@ -231,6 +231,9 @@ pub const FORBID_DEPLOY: &str = "deploy";
 pub const ALLOWED: &str =
     "The workflow that started this run allows it: {{allowed}}, when its instructions ask for it.";
 
+/// Tells a coding session how long it has before its run's time limit stops it.
+pub const TIME_LIMIT: &str = "This session has {{minutes}} minutes: at {{stops_at}} it is stopped, finished or not. Commit and push your work early and often, open the pull requests and write your comments before then; if you will not finish in time, stop in time to end with your final report, starting with a handover note that says what is done and what is left.";
+
 /// Asks planning, request, director and supervisor runs for their JSON answer.
 pub const JSON_CONTRACT: &str = "Return only JSON matching this schema: {{schema}}";
 

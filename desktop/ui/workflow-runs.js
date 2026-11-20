@@ -274,7 +274,7 @@ function renderRunDetail(run, sessions) {
   const head = el('div', { class: 'run-head' },
     badge(runStateLabel(run.state), tone(run.state)), slotBadge(run), aheadBadge(run), pausedBadge(run), badge(workflowName(run.workflow), 'muted'), el('span', { class: 'grow' }), link(t('Open the work item'), run.item.url));
   const facts = el('dl', { class: 'todo-fields' },
-    ...[[t('Type'), tx(run.item.kind)], [t('Project'), run.item.project], [t('Started at'), when(run.created_at)], [t('Last change'), when(run.updated_at)],
+    ...[[t('Type'), tx(run.item.kind)], [t('Project'), run.item.project], [t('State in Azure DevOps'), itemState(run.item)], [t('Started at'), when(run.created_at)], [t('Last change'), when(run.updated_at)],
       ...(run.finished_at ? [[t('Finished at'), when(run.finished_at)]] : []),
       ...(run.auto_start ? [[t('Started by'), t('The watcher (a ready state)')]] : []),
       ...(run.allow?.length ? [[t('Also allowed'), allowNames(run.allow).join(', ')]] : [])]
@@ -286,6 +286,12 @@ function renderRunDetail(run, sessions) {
       return el('div', {}, el('dt', { textContent: label }), el('dd', {}, open));
     }));
   const notes = [];
+  // Stopped with nothing delivered: no pull request is waited for, whatever stage it stopped in.
+  if (run.state === 'needs_attention' && run.cause === 'nothing_delivered') {
+    notes.push(el('div', { class: 'callout warn', id: 'run-nothing-delivered' },
+      el('p', {}, el('strong', { textContent: t('Stopped: no pull request to wait for') })),
+      el('p', { textContent: t('No child ended its coding with a final report that names its branches. If you continued its agent session, its final report is taken by itself, or when you resume. Resume to finish the run as done without delivering anything, or cancel it.') })));
+  }
   if (run.attention) notes.push(el('div', { class: `callout ${WAITING.includes(run.state) ? 'warn' : 'info'}`, id: 'run-attention' }, el('p', { textContent: tx(run.attention) })));
   if (run.error) notes.push(el('div', { class: 'callout error', role: 'alert' }, el('p', { textContent: tx(run.error) })));
   if (run.classification?.reason) notes.push(el('p', { class: 'hint', id: 'run-classification', textContent: t('The director said: {reason}', { reason: run.classification.reason }) }));
@@ -299,6 +305,14 @@ function renderRunDetail(run, sessions) {
   detail.replaceChildren(head, facts, ...notes, runActions(run, sessionButton, area, refresh), supervision(run, area, refresh, shared),
     timeline(run), dependencies(run), children(run, sessionButton, sessions), rounds(run), blocks(run), summaries(run));
   if (focusId) /** @type {HTMLElement | null} */ (document.getElementById(focusId))?.focus({ preventScroll: true });
+}
+
+/** The item's state: as Azure DevOps has it now, or, when it could not be read, as the run took it. */
+function itemState(item) {
+  const now = item.state ?? '';
+  if (!item.state_read_at) return now ? t('{state} (when the run took it)', { state: tx(now) }) : t('Not recorded');
+  const taken = item.state_when_taken;
+  return taken && taken !== now ? t('{state} (was {taken} when the run took it)', { state: tx(now), taken: tx(taken) }) : tx(now);
 }
 
 /** The actions the run's state allows, each the host's operation and nothing else. */

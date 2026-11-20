@@ -260,7 +260,7 @@ impl Client {
         interrupt.turn = Some(turn_id.clone());
         let mut text = String::new();
         let mut prompts = Vec::new();
-        let ok = tokio::time::timeout(SESSION_LIMIT, async {
+        let ok = tokio::time::timeout(session_limit(), async {
             loop {
                 let event = match self.pending.pop_front() { Some(event) => event, None => self.receive().await? };
                 let method = event["method"].as_str().unwrap_or_default();

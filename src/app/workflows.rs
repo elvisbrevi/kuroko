@@ -356,10 +356,17 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
                 .iter()
                 .filter_map(|id| map.workflow_blocks.iter().find(|b| &b.id == id))
                 .collect();
+            let settings = &map.workflow_settings;
             Ok(json!({
                 "workflow": shown(workflow),
                 "blocks": blocks,
                 "usage": usage(workflow, &map.workflow_blocks, &Texts::new(&map.agent_prompts)),
+                // The limit each session of its runs gets: its agent's own, else the settings'.
+                "time_limit_minutes": {
+                    "coding": settings.time_limit_minutes(Some(workflow), false),
+                    "planning": settings.time_limit_minutes(Some(workflow), true),
+                    "from": if workflow.agent.time_limit_minutes.is_some() { "workflow" } else { "settings" },
+                },
                 "editable": editable(state)?,
             }))
         }

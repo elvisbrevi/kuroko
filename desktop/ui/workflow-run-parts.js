@@ -4,7 +4,7 @@
 import { t, tn, tx, uiLocale } from './i18n.js';
 import { badge, el } from './dom.js';
 import { link } from './markdown.js';
-import { failureText, runStateLabel } from './run-states.js';
+import { failureText, stageLabel } from './run-states.js';
 import { sessionLifeBadge } from './sessions.js';
 import { STAGE_NAMES } from './workflow-blocks.js';
 
@@ -23,7 +23,7 @@ function timeline(run) {
     const current = index === all.length - 1 && !FINAL.includes(run.state);
     return el('li', { class: current ? 'current' : '' },
       el('i', { class: `dot ${/fail|needs|interrupt|cancel|uncertain|refused|timed|missing|abandon|permission/.test(stage.outcome ?? '') ? 'warn' : stage.finished_at ? 'ok' : 'info'}`, 'aria-hidden': 'true' }),
-      el('div', {}, el('strong', { textContent: runStateLabel(stage.stage) }),
+      el('div', {}, el('strong', { textContent: stageLabel(stage.stage) }),
         el('small', { textContent: `${when(stage.started_at)}${stage.finished_at ? ` → ${when(stage.finished_at)}` : ''}${stage.outcome ? ` · ${tx(stage.outcome)}` : ''}` })));
   });
   return el('details', { class: 'fold', open: true, id: 'run-timeline' }, el('summary', { textContent: tn(items.length, 'Timeline (1 stage)', 'Timeline ({n} stages)') }),
@@ -41,6 +41,7 @@ function children(run, sessionButton, sessions) {
       el('p', { class: 'resource-facts' }, el('small', { textContent: [child.repository?.name, child.branch ? t('Branch {name}', { name: child.branch }) : null, ...otherBranches(child), child.outcome ? tx(child.outcome) : null].filter(Boolean).join(' · ') })),
       child.ignored_branches?.length ? el('p', { class: 'hint run-child-ignored', textContent: t('Ignored branch lines for repositories this workflow does not have: {names}', { names: child.ignored_branches.join(', ') }) }) : null,
       child.coding?.failure ? el('p', { class: 'hint run-child-failure', textContent: failureText(child.coding.failure) }) : null,
+      child.coding?.stops_at ? el('p', { class: 'hint run-child-limit', textContent: t('Its time limit ({minutes} minutes) stops its session at {time}.', { minutes: String(child.coding.time_limit_minutes), time: when(child.coding.stops_at) }) }) : null,
       prs.length ? el('ul', { class: 'run-pulls' }, ...prs.map(pr => el('li', {}, link(pr.title ? `!${pr.id} ${pr.title}` : pr.url, pr.url), ' ', badge(tx(pr.status), pr.status === 'completed' ? 'ok' : pr.status === 'abandoned' ? 'warn' : 'info')))) : null);
   });
   return el('details', { class: 'fold', open: true, id: 'run-children' }, el('summary', { textContent: tn(rows.length, 'Children (1)', 'Children ({n})') }),

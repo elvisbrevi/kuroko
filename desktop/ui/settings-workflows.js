@@ -34,8 +34,9 @@ const processStates = new Map();
 const agentCatalogs = new Map();
 let loadGeneration = 0;
 /** The numbers of the form and their host field; their bounds come with the settings. */
-const FIELDS = [['#workflow-interval', 'watch_interval_minutes'], ['#workflow-concurrency', 'concurrency'], ['#workflow-pr-wait', 'pull_request_wait_days']];
-const FALLBACK = { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60] };
+const FIELDS = [['#workflow-interval', 'watch_interval_minutes'], ['#workflow-concurrency', 'concurrency'], ['#workflow-pr-wait', 'pull_request_wait_days'],
+  ['#workflow-coding-limit', 'coding_time_limit_minutes'], ['#workflow-planning-limit', 'planning_time_limit_minutes']];
+const FALLBACK = { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60], coding_time_limit_minutes: [30, 480], planning_time_limit_minutes: [30, 480] };
 const range = field => workflowSettings?.bounds?.[field] ?? FALLBACK[field];
 /** The supervisor's numbers and their host field. */
 const SUPERVISOR_FIELDS = [['#workflow-supervisor-looks', 'looks_per_day'], ['#workflow-supervisor-interval', 'min_interval_minutes'],
@@ -46,6 +47,8 @@ const RANGE_TEXT = {
   watch_interval_minutes: bounds => t('Check every {min} to {max} minutes.', bounds),
   concurrency: bounds => t('Let {min} to {max} runs advance at once.', bounds),
   pull_request_wait_days: bounds => t('Wait {min} to {max} days for pull requests.', bounds),
+  coding_time_limit_minutes: bounds => t('Give a coding session {min} to {max} minutes.', bounds),
+  planning_time_limit_minutes: bounds => t('Give a planning session {min} to {max} minutes.', bounds),
   looks_per_day: bounds => t('Let the supervisor look {min} to {max} times a day.', bounds),
   min_interval_minutes: bounds => t('Leave {min} to {max} minutes between two looks at a run.', bounds),
   wait_hours: bounds => t('Look at a waiting run after {min} to {max} hours.', bounds),

@@ -149,6 +149,7 @@ fn workflow(machine: &str, api: &Path, web: &Path) -> Workflow {
             provider: "opencode".into(),
             model: "provider/model".into(),
             effort: "default".into(),
+            time_limit_minutes: None,
         },
         instructions: "Write tests first.".into(),
         blocks: vec!["base".into()],
@@ -1223,6 +1224,7 @@ async fn a_coding_run_holds_its_slot_and_directories_until_the_session_ends_not_
         provider: "claude".into(),
         model: "synthetic-model".into(),
         effort: "low".into(),
+        time_limit_minutes: None,
     };
     bench.host.state.settings.save_map(&map).unwrap();
     bench.catalog.add(
@@ -1289,6 +1291,7 @@ fn connected_claude(bench: &Bench, body: &str) {
         provider: "claude".into(),
         model: "synthetic-model".into(),
         effort: "low".into(),
+        time_limit_minutes: None,
     };
     bench.host.state.settings.save_map(&map).unwrap();
 }
@@ -1368,6 +1371,7 @@ async fn the_sessions_a_workflow_starts_carry_the_work_item_in_their_name() {
         provider: "claude".into(),
         model: "synthetic-model".into(),
         effort: "low".into(),
+        time_limit_minutes: None,
     };
     let mut map = bench.host.state.settings.map().unwrap();
     map.workflows[0].agent = claude.clone();
@@ -1541,6 +1545,7 @@ async fn cancelling_a_run_stops_a_kept_session_on_a_worker_machine() {
             started: true,
             state: Some("done".into()),
             failure: None,
+            time_limit_minutes: None,
         }),
         outcome: Some("done".into()),
         ..Default::default()
@@ -2186,6 +2191,7 @@ async fn cancel_warns_when_a_recorded_run_may_be_running_on_an_unreachable_machi
         started: false,
         state: None,
         failure: None,
+        time_limit_minutes: None,
     });
     bench.save(&run);
     let cancelled = bench
@@ -2502,6 +2508,7 @@ async fn a_worker_reports_why_its_sessions_did_not_end_with_their_answer() {
                 started: true,
                 state: Some("running".into()),
                 failure: None,
+                time_limit_minutes: None,
             }),
             ..Default::default()
         }];
@@ -2602,6 +2609,7 @@ fn a_run_needing_checkouts_another_runs_agent_holds_is_out_of_the_line() {
                 started,
                 state: started.then(|| "running".into()),
                 failure: None,
+                time_limit_minutes: None,
             }),
             ..Default::default()
         }];
@@ -2652,4 +2660,161 @@ fn a_run_needing_checkouts_another_runs_agent_holds_is_out_of_the_line() {
     runs[2].definition = Some(workflow("m1", &[("a", "D:\\code\\sag\\api")]));
     assert!(record::held_by(&runs, &runs[2]).is_none());
     assert!(record::held_by(&runs, &runs[1]).is_some());
+}
+
+/// A task run whose coding run stopped at its time limit, waiting for the person: its ID and
+/// the coding run's.
+async fn timed_out(bench: &Bench) -> (String, String) {
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    let run = bench
+        .until(&id, |r| {
+            r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    while bench.count("starts") == 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let coding = run.children[0].coding.clone().unwrap().id;
+    // Its session reported its ID: only a session can be continued.
+    for _ in 0..200 {
+        let observed = implementation::observe(&bench.host, &bench.machine, &coding)
+            .await
+            .unwrap()
+            .unwrap();
+        if observed["session_id"].is_string() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    implementation::test_time_out(&bench.host, &coding);
+    let run = bench.state(&id, Phase::NeedsAttention).await;
+    assert_eq!(run.stopped_in, Some(Phase::Coding));
+    let attention = run.attention.unwrap();
+    assert!(
+        attention.contains("time limit") && attention.contains("continue its session"),
+        "{attention}"
+    );
+    (id, coding)
+}
+
+#[tokio::test]
+async fn a_coding_session_continued_after_its_time_limit_delivers_its_branches() {
+    // The person continues the session to its final report while the run waits: the run goes
+    // on with that report by itself, and finds its pull request already completed.
+    let bench = Bench::new().await;
+    let (id, coding) = timed_out(&bench).await;
+    assert!(implementation::test_continue(
+        &bench.host,
+        &coding,
+        "Finished the rest.\nBranch: feature/continued"
+    ));
+    assert_eq!(bench.implementation(&coding).await, "done");
+    bench.pulls(WEB, "payments-web", "feature/continued", 61, "completed");
+    let run = bench.state(&id, Phase::Done).await;
+    assert_eq!(run.children[0].outcome.as_deref(), Some("done"));
+    assert_eq!(run.children[0].branch.as_deref(), Some("feature/continued"));
+    assert_eq!(run.children[0].coding.as_ref().unwrap().failure, None);
+    assert!(
+        run.timeline
+            .iter()
+            .any(|s| s.outcome.as_deref() == Some("completed: 1 pull requests"))
+    );
+    assert_eq!(bench.count("starts"), 1);
+
+    // Resumed once the report is there, before the run looked again: delivered, not accepted.
+    let bench = Bench::new().await;
+    let (id, coding) = timed_out(&bench).await;
+    implementation::test_continue(&bench.host, &coding, "Done.\nBranch: feature/continued");
+    let resumed = bench
+        .op("workflow_run_resume", json!({"run":id,"confirmed":true}))
+        .await
+        .unwrap();
+    assert_eq!(resumed["accepted"][0]["ended"], "done");
+    let run = bench.run(&id);
+    assert_eq!(run.children[0].outcome.as_deref(), Some("done"));
+    bench.pulls(WEB, "payments-web", "feature/continued", 62, "completed");
+    bench.state(&id, Phase::Done).await;
+    assert_eq!(bench.count("starts"), 1);
+}
+
+#[tokio::test]
+async fn a_run_that_delivered_nothing_takes_the_report_of_a_session_continued_after_its_resume() {
+    // The real sequence: the person resumes the run while they still continue the session, so
+    // the child is accepted and the run stops with nothing delivered; the report comes later.
+    let bench = Bench::new().await;
+    let (id, coding) = timed_out(&bench).await;
+    bench
+        .op("workflow_run_resume", json!({"run":id,"confirmed":true}))
+        .await
+        .unwrap();
+    let run = bench
+        .until(&id, |r| r.cause.as_deref() == Some("nothing_delivered"))
+        .await;
+    assert!(run.children[0].accepted());
+    // A report that names no branch delivers nothing; a later one replaces it.
+    assert!(implementation::test_continue(
+        &bench.host,
+        &coding,
+        "Looked at it again."
+    ));
+    bench.tick().await;
+    let run = bench.run(&id);
+    assert_eq!(run.cause.as_deref(), Some("nothing_delivered"));
+    assert!(implementation::test_continue(
+        &bench.host,
+        &coding,
+        "Done.\nBranch: feature/continued"
+    ));
+    bench.pulls(WEB, "payments-web", "feature/continued", 63, "completed");
+    let run = bench.state(&id, Phase::Done).await;
+    assert_eq!(run.children[0].outcome.as_deref(), Some("done"));
+    assert!(
+        !run.timeline
+            .iter()
+            .any(|s| s.outcome.as_deref() == Some("accepted: nothing delivered"))
+    );
+
+    // The person resumes once the report is there: it is recovered instead of accepting that
+    // nothing was delivered.
+    let bench = Bench::new().await;
+    let (id, coding) = timed_out(&bench).await;
+    bench
+        .op("workflow_run_resume", json!({"run":id,"confirmed":true}))
+        .await
+        .unwrap();
+    bench
+        .until(&id, |r| r.cause.as_deref() == Some("nothing_delivered"))
+        .await;
+    implementation::test_continue(&bench.host, &coding, "Done.\nBranch: feature/continued");
+    let resumed = bench
+        .op("workflow_run_resume", json!({"run":id,"confirmed":true}))
+        .await
+        .unwrap();
+    assert_eq!(resumed["accepted"][0]["continued"], true);
+    assert!(!bench.run(&id).undelivered_accepted);
+    bench.pulls(WEB, "payments-web", "feature/continued", 64, "completed");
+    bench.state(&id, Phase::Done).await;
+    assert_eq!(bench.count("starts"), 1);
+
+    // A run that was cancelled is not continued: its report changes nothing.
+    let bench = Bench::new().await;
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    let run = bench
+        .until(&id, |r| {
+            r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    let coding = run.children[0].coding.clone().unwrap().id;
+    bench
+        .op("workflow_run_cancel", json!({"run":id,"confirmed":true}))
+        .await
+        .unwrap();
+    assert!(!implementation::test_continue(
+        &bench.host,
+        &coding,
+        "Done.\nBranch: feature/continued"
+    ));
+    assert_eq!(bench.implementation(&coding).await, "cancelled");
 }

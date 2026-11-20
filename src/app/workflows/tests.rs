@@ -52,6 +52,7 @@ fn workflow(id: &str, machine: &str) -> Workflow {
             provider: "codex".into(),
             model: "gpt-6.1-sol".into(),
             effort: "medium".into(),
+            time_limit_minutes: None,
         },
         ..Default::default()
     }

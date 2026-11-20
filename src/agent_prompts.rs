@@ -190,6 +190,14 @@ pub const BUILT_IN: &[BuiltIn] = &[
         ["allowed"]
     ),
     built_in!(
+        "rules.time_limit",
+        "agent_rules",
+        "Time limit",
+        "Added to the rules of a coding run and its review rounds: minutes is the run's time limit and stops_at when it ends (UTC).",
+        prompts::TIME_LIMIT,
+        ["minutes", "stops_at"]
+    ),
+    built_in!(
         "rules.json",
         "agent_rules",
         "JSON answer",

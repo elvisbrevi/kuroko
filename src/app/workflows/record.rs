@@ -193,6 +193,10 @@ pub(in crate::app) struct Implementation {
     /// predates causes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<crate::llm::implementation::Failure>,
+    /// The time limit its session was launched with, in minutes; none before it was launched
+    /// or in a record from before the limit was configurable (two hours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_limit_minutes: Option<u32>,
 }
 
 /// A child the run codes (for a task-category item, the item itself).
