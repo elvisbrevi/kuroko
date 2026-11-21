@@ -1724,16 +1724,16 @@ impl MessageAdapter for Graph {
     }
 }
 
-/// Graph's hosted contents for the card's images and then the band's animated mark when `style`
-/// has one, numbered as `card::message` refers to them: the bytes in base64 and the type read
+/// Graph's hosted contents for the card's images and then the band's hosted image (the animated
+/// mark or the user's own) when `style` has one, numbered as `card::message` refers to them: the bytes in base64 and the type read
 /// from them. `None` when the message carries none.
 fn hosted_contents(images: &[super::images::Image], style: &MessageStyle) -> Option<Value> {
     use base64::Engine;
-    let mark = super::card::hosted_mark(style).map(|bytes| (bytes, "image/png"));
+    let mark = super::card::hosted_mark(style);
     let contents: Vec<Value> = images
         .iter()
         .map(|image| (image.bytes.as_slice(), image.kind.content_type()))
-        .chain(mark)
+        .chain(mark.as_ref().map(|(bytes, kind)| (bytes.as_ref(), *kind)))
         .enumerate()
         .map(|(at, (bytes, kind))| {
             json!({"@microsoft.graph.temporaryId": (at + 1).to_string(),

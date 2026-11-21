@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -340,6 +340,16 @@ pub struct MessageStyle {
     /// Pixels of space kept free at each end of the band, 0 to 48. Omitted while 0.
     #[serde(skip_serializing_if = "MessageStyle::zero")]
     pub band_padding: u8,
+    /// The band shows only its icon (the Kuroko mark, the own image or the emoji), without
+    /// text; the band must then show an icon. Omitted while off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_label: bool,
+    /// An image of the user's own as the band's icon, in place of the Kuroko mark or the emoji:
+    /// a PNG (animated or not) or a JPEG of up to [`Self::MAX_MARK_IMAGE`] bytes, in base64. A GIF
+    /// is saved as its animated PNG (`card::prepare_mark`), since Graph refuses GIF hosted
+    /// contents. Empty: none. Omitted while empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mark_image: String,
 }
 impl Default for MessageStyle {
     fn default() -> Self {
@@ -364,6 +374,8 @@ impl Default for MessageStyle {
             mark_side: MarkSide::Left,
             band_align: BandAlign::Right,
             band_padding: 0,
+            hide_label: false,
+            mark_image: String::new(),
         }
     }
 }
@@ -375,6 +387,11 @@ impl MessageStyle {
     /// Room for the longest emoji sequences (a family, a flag with its tag characters).
     pub const MAX_EMOJI_CHARS: usize = 16;
     pub const MAX_BAND_PADDING: u8 = 48;
+    /// Bytes of the band's own image: it travels in every message, beside up to
+    /// `images::MAX_TOTAL` of the message's own images, under Graph's 4 MB per request.
+    pub const MAX_MARK_IMAGE: usize = 100_000;
+    /// Pixels of the own image's longest side.
+    pub const MAX_MARK_IMAGE_SIDE: u32 = 1024;
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
@@ -399,6 +416,8 @@ impl MessageStyle {
         fields["mark_side"] = serde_json::to_value(style.mark_side).unwrap_or_default();
         fields["band_align"] = serde_json::to_value(style.band_align).unwrap_or_default();
         fields["band_padding"] = style.band_padding.into();
+        fields["hide_label"] = style.hide_label.into();
+        fields["mark_image"] = style.mark_image.clone().into();
         fields
     }
     fn default_emoji(emoji: &str) -> bool {
@@ -448,6 +467,19 @@ impl MessageStyle {
             self.band_padding <= Self::MAX_BAND_PADDING,
             "the message style band padding is 0 to 48 pixels"
         );
+        ensure!(
+            !self.hide_label || self.kuroko || self.icon,
+            "a message style band without text shows its icon"
+        );
+        if !self.mark_image.is_empty() {
+            let image = self.own_mark().context(
+                "the message style image is a PNG or JPEG of up to 100 KB and 1024 pixels a side",
+            )?;
+            ensure!(
+                image.0.len() <= Self::MAX_MARK_IMAGE,
+                "the message style image is a PNG or JPEG of up to 100 KB and 1024 pixels a side"
+            );
+        }
         // Emoji are not ASCII, but for the digits, `#` and `*` of keycaps; this keeps words,
         // spaces and Markdown out of the band.
         let emoji = self.emoji.trim();
@@ -461,6 +493,21 @@ impl MessageStyle {
             "the message style emoji is one emoji"
         );
         Ok(())
+    }
+    /// The band's own image, when it holds a PNG or JPEG of an accepted size: its bytes, its
+    /// type and its width and height in pixels.
+    pub fn own_mark(&self) -> Option<(Vec<u8>, crate::adapters::images::Kind, u32, u32)> {
+        use crate::adapters::images::{Kind, detect};
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(self.mark_image.trim())
+            .ok()?;
+        let (kind, width, height) = detect(&bytes)?;
+        let sides = 1..=Self::MAX_MARK_IMAGE_SIDE;
+        (matches!(kind, Kind::Png | Kind::Jpeg)
+            && sides.contains(&width)
+            && sides.contains(&height))
+        .then_some((bytes, kind, width, height))
     }
     /// The emoji before the band's text: the configured one or the robot.
     pub fn emoji(&self) -> &str {

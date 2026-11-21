@@ -35,7 +35,7 @@ import { browserMicrosoftLogin } from './dialogs.js';
  *   'machine_directories' | 'machine_disconnect' | 'machine_join_command' | 'machine_list' | 'machine_login' |
  *   'machine_login_cancel' | 'machine_login_finish' | 'machine_revoke' | 'machine_save' |
  *   'machine_settings' | 'machine_teams' | 'machine_update' | 'machine_upgrade' | 'notes_list' | 'notes_remove' |
- *   'notes_save' | 'open_github_login' | 'open_work_item' |
+ *   'mark_image_prepare' | 'notes_save' | 'open_github_login' | 'open_work_item' |
  *   'portable_status' | 'question_associate' | 'restart' | 'save_settings' | 'self_chat_disable' |
  *   'self_chat_enable' | 'self_chat_status' | 'service_install' | 'service_status' | 'service_uninstall' | 'setup_readiness' | 'snapshot' | 'start_assistant' |
  *   'stop_assistant' | 'teams_chats' | 'test_self_chat' | 'update_github_repository' | 'variable_consumer_bind' |
@@ -87,7 +87,7 @@ const rawInvoke = transport.invoke;
 // Also the answer operations: they do not depend on the profile files, so they neither check
 // nor advance the form's revision.
 /** @type {Method[]} */
-const READS = ['snapshot', 'chat', 'github_repositories', 'self_chat_status', 'llm_providers', 'azure_cli_status', 'github_cli_status', 'audit', 'activity_status', 'activity_history', 'activity_pending', 'answer_refine', 'answer_send', 'list_azure_hus', 'list_github_epics', 'list_github_issues', 'get_azure_hu', 'get_azure_task', 'list_azure_tasks', 'get_github_epic', 'get_github_issue', 'open_work_item', 'teams_chats'];
+const READS = ['snapshot', 'chat', 'github_repositories', 'self_chat_status', 'llm_providers', 'azure_cli_status', 'github_cli_status', 'audit', 'activity_status', 'activity_history', 'activity_pending', 'answer_refine', 'answer_send', 'list_azure_hus', 'list_github_epics', 'list_github_issues', 'get_azure_hu', 'get_azure_task', 'list_azure_tasks', 'get_github_epic', 'get_github_issue', 'open_work_item', 'teams_chats', 'mark_image_prepare'];
 // Revision of the profile files the last reply saw. The form's own revision (`current.revision`)
 // changes only when it reloads or writes, so saving a stale form fails instead of overwriting
 // changes made elsewhere (e.g. with `kuroko`).

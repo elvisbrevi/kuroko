@@ -3,7 +3,7 @@
 import { transport } from './transport.js';
 import { t, tx } from './i18n.js';
 import { invoke } from './control.js';
-import { $, el, field, lines, names } from './dom.js';
+import { $, el, field, lines, names, numberSteppers } from './dom.js';
 import { current, dirty, session, setSession, tab } from './state.js';
 import { chooseLook, DEFAULT_PALETTE, DEFAULT_STYLE, PALETTE_KEY, STYLE_KEY, THEME_KEY } from './appearance.js';
 import { busy, done, fail, notify } from './notices.js';
@@ -15,7 +15,7 @@ import { loadAgentHistory, openRequest } from './todo-request.js';
 import { chooseDirectories } from './directory-sheet.js';
 import { loadMachines, machineRoots, renderMachineRoots, setMachineRoots } from './settings-machines.js';
 import { applying, refreshLive, reload, save, startAssistant } from './profile.js';
-import { renderChatList, renderStylePreview, STYLE_PRESETS } from './settings-general.js';
+import { chooseMarkImage, removeMarkImage, renderChatList, renderStylePreview, STYLE_PRESETS } from './settings-general.js';
 import { leaveAccount, loadAccountConfig, loadReadiness } from './settings-account.js';
 import { loadVariables } from './settings-variables.js';
 import { llmCatalog, llmRows, renderChain, setLlmCatalog } from './settings-models.js';
@@ -141,8 +141,25 @@ $('#style-preset').addEventListener('change', () => {
   renderStylePreview();
   $('#style-preset').value = chosen;
 });
-['#style-label', '#style-position', '#style-accent', '#style-band', '#style-label-color', '#style-icon', '#style-kuroko', '#style-animated', '#style-site-link', '#style-link-underline', '#style-emoji', '#style-stripe-width', '#style-band-height', '#style-mark-side', '#style-band-align', '#style-band-padding', '#style-mark-size', '#style-text-size', '#style-label-size', '#llm-language']
+['#style-label', '#style-hide-label', '#style-position', '#style-accent', '#style-band', '#style-label-color', '#style-icon', '#style-kuroko', '#style-animated', '#style-site-link', '#style-link-underline', '#style-emoji', '#style-stripe-width', '#style-band-height', '#style-mark-side', '#style-band-align', '#style-band-padding', '#style-mark-size', '#style-text-size', '#style-label-size', '#llm-language']
   .forEach(id => $(id).addEventListener('input', renderStylePreview));
+// The band's own image: a file of this device, read here; the save sends it with the style.
+$('#style-image-choose').addEventListener('click', () => $('#style-image-file').click());
+$('#style-image-file').addEventListener('change', async () => {
+  const input = /** @type {HTMLInputElement} */ ($('#style-image-file'));
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  await busy($('#style-image-choose'), async () => {
+    await chooseMarkImage(file, data => invoke('mark_image_prepare', { data }));
+    markDirty({ target: $('#style-image-choose') });
+  });
+});
+$('#style-image-remove').addEventListener('click', () => {
+  removeMarkImage();
+  markDirty({ target: $('#style-image-choose') });
+  $('#style-image-choose').focus();
+});
 // A suggested emoji fills the field as if typed, so it marks the section edited and redraws the preview.
 document.querySelectorAll('#style-emoji-choices button').forEach(button => {
   button.addEventListener('click', () => {
@@ -485,6 +502,14 @@ $('#chat-form').onsubmit = async event => {
     send.disabled = false;
   }
 };
+
+// Every number field, static or drawn later, gets its − and + buttons.
+numberSteppers(document.body);
+new MutationObserver(changes => {
+  for (const change of changes) {
+    for (const node of change.addedNodes) if (node instanceof Element) numberSteppers(node);
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 reload().then(async () => { await loadActivity(); await loadRegistration(); if (activityWindow) showTab('registration'); }).catch(fail);
 

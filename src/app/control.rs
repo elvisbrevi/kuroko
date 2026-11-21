@@ -904,6 +904,39 @@ pub(crate) async fn dispatch(host: &Arc<Host>, request: Request) -> Reply {
     }
     reply
 }
+/// The band's own image as the style will keep it (`card::prepare_mark`): a GIF as its animated
+/// PNG, and one too large reduced with its animation, so the GUI shows what will be sent.
+async fn mark_image_prepare(args: &Value) -> Reply {
+    let Some(data) = args.get("data").and_then(Value::as_str) else {
+        return Reply::error("invalid_input", 2, "data must be the image in base64.");
+    };
+    let mut style = crate::config::MessageStyle {
+        mark_image: data.to_owned(),
+        ..Default::default()
+    };
+    let prepared = tokio::task::spawn_blocking(move || {
+        crate::adapters::card::prepare_mark(&mut style).map(|()| style.mark_image)
+    })
+    .await;
+    match prepared {
+        Ok(Ok(data)) => {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&data)
+                .unwrap_or_default();
+            let (kind, width, height) = crate::adapters::images::detect(&bytes)
+                .map_or(("", 0, 0), |(kind, width, height)| {
+                    (kind.content_type(), width, height)
+                });
+            Reply::success(json!({"data": data, "type": kind, "bytes": bytes.len(),
+                "width": width, "height": height,
+                "animated": crate::adapters::images::animated_png(&bytes)}))
+        }
+        Ok(Err(message)) => Reply::error("invalid_input", 2, message),
+        Err(_) => Reply::error("operation_failed", 1, "The image could not be prepared."),
+    }
+}
+
 async fn dispatch_inner(host: &Arc<Host>, request: Request) -> Reply {
     if request.contract != CONTRACT {
         return Reply::error(
@@ -921,6 +954,10 @@ async fn dispatch_inner(host: &Arc<Host>, request: Request) -> Reply {
     // enabled Azure source's personal access token.
     if request.method == "azure_cli_status" {
         return Reply::success(json!(azure_pat::status(state, None).await));
+    }
+    if request.method == "mark_image_prepare" {
+        // A pure conversion for the band's own image, outside the profile and its lock.
+        return mark_image_prepare(&request.args).await;
     }
     if RETIRED_AZURE_SIGN_IN.contains(&request.method.as_str()) {
         return Reply::error("not_ready", 3, AZURE_SIGN_IN_RETIRED);
