@@ -50,6 +50,7 @@ fn coding(id: u64, at: i64, implementation: &str) -> Run {
             started: true,
             state: Some("running".into()),
             failure: None,
+            time_limit_minutes: None,
         }),
         ..Default::default()
     }];

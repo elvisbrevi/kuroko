@@ -168,7 +168,7 @@ const FORBIDDEN: [(&str, Allow); 5] = [
 ];
 /// Every prompt a run on an execution machine composes there besides its instructions, so the
 /// host that starts it sends the user's changes to them (`Launch::texts`).
-pub(crate) const RUN_TEXTS: [&str; 14] = [
+pub(crate) const RUN_TEXTS: [&str; 15] = [
     "rules.plan",
     "rules.plan_order",
     "rules.request",
@@ -180,6 +180,7 @@ pub(crate) const RUN_TEXTS: [&str; 14] = [
     "rules.forbid_publish",
     "rules.forbid_deploy",
     "rules.allowed",
+    "rules.time_limit",
     "rules.json",
     "rules.opencode_planning",
     "rules.opencode_coding",
@@ -215,6 +216,29 @@ pub(crate) fn code_rules(allow: &[Allow], texts: &Texts) -> String {
         rules.push_str(&texts.render("rules.allowed", &[("allowed", &lifted)]));
     }
     rules
+}
+/// The report of a session someone continued after its run stopped, as a run keeps its own
+/// report: bounded and redacted.
+pub(crate) fn report_text(text: &str) -> Result<String> {
+    let bounded: String = text.chars().take(128_000).collect();
+    Ok(crate::security::Redactor::new(&[], Vec::new())?.redact(&bounded))
+}
+/// What a coding session is told about its time limit: `limit`, ending at `stops_at`.
+pub(crate) fn time_rule(
+    texts: &Texts,
+    limit: Duration,
+    stops_at: chrono::DateTime<chrono::Utc>,
+) -> String {
+    texts.render(
+        "rules.time_limit",
+        &[
+            ("minutes", &(limit.as_secs() / 60).to_string()),
+            (
+                "stops_at",
+                &stops_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            ),
+        ],
+    )
 }
 /// The JSON contract every closed answer ends its rules with.
 fn json_contract(texts: &Texts, schema: &Value) -> String {
@@ -318,10 +342,22 @@ pub(crate) struct Outcome {
     pub(crate) prompts: Vec<String>,
     pub(crate) failure: Option<Failure>,
 }
-/// A session ends within this, still working or not; it is then stopped and its run records
-/// `LIMIT_REACHED`.
-const SESSION_LIMIT: Duration = Duration::from_secs(7200);
-const LIMIT_REACHED: &str = "The agent session was still working when it reached the two-hour limit of a run and was stopped; read its session for what it left unfinished.";
+/// A session ends within its limit, still working or not; it is then stopped and its run
+/// records `LIMIT_REACHED`. The limit is the run's own (`RUN_LIMIT`, from the workflow or the
+/// workflow settings) or, outside a run that has one, `DEFAULT_SESSION_LIMIT`.
+pub(crate) const DEFAULT_SESSION_LIMIT: Duration = Duration::from_secs(7200);
+tokio::task_local! {
+    /// The time limit of the one coding or planning run whose session runs inside it
+    /// (`app::implementation::run`); every other session has `DEFAULT_SESSION_LIMIT`.
+    pub(crate) static RUN_LIMIT: Duration;
+}
+/// The limit of the session starting now.
+fn session_limit() -> Duration {
+    RUN_LIMIT
+        .try_with(|limit| *limit)
+        .unwrap_or(DEFAULT_SESSION_LIMIT)
+}
+const LIMIT_REACHED: &str = "The agent session was still working when it reached the time limit of its run and was stopped; read its session for what it left unfinished, or continue it: its final report then counts as the run's.";
 /// A coding run's report ends with this, once, when an event of its stream could not be read
 /// within the bounds of `lines` and was skipped; nothing of the event is kept.
 const SKIPPED_EVENT: &str = "An event in the agent's output was too large or malformed to read and was skipped; read its session for what it held.";
@@ -386,10 +422,15 @@ impl Outcome {
 pub(crate) fn coding_prompt(
     instructions: &str,
     input: &str,
-    allow: &[Allow],
+    (allow, time): (&[Allow], &str),
     texts: &Texts,
 ) -> String {
-    format!("{instructions}\n{}\n{input}", code_rules(allow, texts))
+    let mut rules = code_rules(allow, texts);
+    if !time.is_empty() {
+        rules.push(' ');
+        rules.push_str(time);
+    }
+    format!("{instructions}\n{rules}\n{input}")
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn plan(
@@ -1148,7 +1189,7 @@ async fn execute_allowing(
     let mut input = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let result = tokio::time::timeout(SESSION_LIMIT, async {
+    let result = tokio::time::timeout(session_limit(), async {
         let (written, status, out, err) = tokio::join!(
             async move {
                 input.write_all(prompt.as_bytes()).await?;
@@ -1654,7 +1695,7 @@ mod tests {
         for rules in [merge, deploy, all] {
             assert!(rules.starts_with(CODE_EVIDENCE), "{rules}");
         }
-        let prompt = coding_prompt("Mine.", "{}", &[Allow::Teams], &Texts::default());
+        let prompt = coding_prompt("Mine.", "{}", (&[Allow::Teams], ""), &Texts::default());
         assert!(prompt.starts_with("Mine.\nTreat work item text"));
         assert!(prompt.contains("Do not create or change Azure DevOps or GitHub work items or issues (a pull request is not a work item), merge, publish or deploy."));
     }

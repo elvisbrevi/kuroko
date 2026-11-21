@@ -22,6 +22,10 @@ pub(crate) struct Access {
     pub expires_at: Option<i64>,
 }
 pub(crate) type Observer = Arc<dyn Fn(Access) -> Result<()> + Send + Sync>;
+/// Receives the report of each turn a kept session ends with its answer: the `result` of a turn
+/// the CLI did not report as an error, as a coding run's report reads it. Only a reconnected
+/// session whose run stopped before its answer has one (a continued run).
+pub(crate) type Reporter = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 impl Access {
     pub(crate) fn unavailable() -> Self {
         Self {
@@ -290,7 +294,7 @@ async fn retain(
     mut session: Session,
     access: Access,
     observer: Observer,
-    yields: bool,
+    (yields, report): (bool, Option<Reporter>),
 ) -> Result<()> {
     let mut sessions = sessions().lock().await;
     sessions.retain(|_, live| !live.task.is_finished());
@@ -321,7 +325,13 @@ async fn retain(
     let task = tokio::spawn(async move {
         let _ = tokio::time::timeout(
             Duration::from_secs((deadline - chrono::Utc::now().timestamp()).max(0) as u64),
-            async { while session.next().await.is_ok() {} },
+            async {
+                while let Ok(event) = session.next().await {
+                    if let (Some(report), Some(text)) = (&report, answer(&event)) {
+                        let _ = report(text);
+                    }
+                }
+            },
         )
         .await;
         let _ = observer(Access {
@@ -342,6 +352,14 @@ async fn retain(
         old.task.abort();
     }
     Ok(())
+}
+/// The report of a turn that ended with its answer: a `result` the CLI did not report as an
+/// error, with text.
+fn answer(event: &Value) -> Option<&str> {
+    (event["type"] == "result" && event["is_error"] == false)
+        .then(|| event["result"].as_str())
+        .flatten()
+        .filter(|text| !text.trim().is_empty())
 }
 pub(crate) async fn close(id: &str) {
     if let Some(live) = sessions().lock().await.remove(id) {
@@ -526,7 +544,7 @@ pub(super) async fn execute(
         name,
         observer,
         remote,
-        (SESSION_LIMIT, SETTLE),
+        (session_limit(), SETTLE),
     )
     .await
 }
@@ -612,9 +630,15 @@ async fn follow_session(
     let text = noted(std::mem::take(&mut events.text), session.skipped, planning);
     if keep != Keep::No && ok && access.status == "connected" {
         offline.0 = None;
-        if retain(id, session, access, remote.clone(), keep == Keep::Yielding)
-            .await
-            .is_err()
+        if retain(
+            id,
+            session,
+            access,
+            remote.clone(),
+            (keep == Keep::Yielding, None),
+        )
+        .await
+        .is_err()
         {
             remote(Access::unavailable())?;
         }
@@ -624,7 +648,9 @@ async fn follow_session(
     Ok(Outcome::redacted(ok, &text, &events.prompts)?.because(failure))
 }
 
-/// Reconnect a recorded session, under its `name` again (Claude).
+/// Reconnect a recorded session, under its `name` again (Claude). With `report`, each turn the
+/// person continues it with that ends with its answer is reported (a continued run; Claude
+/// only: a Codex thread lives in the machine's daemon, out of this host's sight).
 pub(crate) async fn reconnect(
     choice: (&str, &str, &str),
     id: &str,
@@ -632,6 +658,7 @@ pub(crate) async fn reconnect(
     directories: &[PathBuf],
     (planning, name): (bool, &SessionName),
     observer: Observer,
+    report: Option<Reporter>,
 ) -> Result<Access> {
     let (provider, model, effort) = choice;
     uuid::Uuid::parse_str(id)?;
@@ -667,7 +694,7 @@ pub(crate) async fn reconnect(
     }
     let mut session = spawn(&binary, &args, &directories[0]).await?;
     let access = session.enable(name).await?;
-    retain(id, session, access.clone(), observer, false).await?;
+    retain(id, session, access.clone(), observer, (false, report)).await?;
     Ok(access)
 }
 
@@ -1427,5 +1454,63 @@ while read -r line; do :; done"##
             json!({"type":"system","subtype":"task_notification","task_id":"b","status":"stopped"}),
         );
         assert!(activity.settling());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_reconnected_session_reports_each_turn_that_ends_with_its_answer() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("claude-continued");
+        // The person continues the session through Remote Control: a turn that failed, one
+        // that ended with its report, and one more that ended with a later report.
+        crate::llm::agent::install_fake_cli(
+            &binary,
+            r##"#!/bin/sh
+read -r initialize
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"pta-initialize","response":{}}}'
+read -r remote
+printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"pta-remote","response":{"session_url":"https://claude.ai/code/session_Continued1"}}}'
+printf '%s\n' '{"type":"result","is_error":true,"result":"Overloaded."}'
+printf '%s\n' '{"type":"result","is_error":false,"result":"   "}'
+printf '%s\n' '{"type":"result","is_error":false,"result":"Pushed.\nBranch: feature/continued"}'
+printf '%s\n' '{"type":"result","is_error":false,"result":"Done.\nBranch: feature/continued-2"}'
+while read -r line; do :; done
+"##,
+        );
+        let id = "33333333-3333-4333-8333-333333333333";
+        let mut session = spawn(&binary, &[], root.path()).await.unwrap();
+        let access = session
+            .enable(&SessionName::item(1, "Continued"))
+            .await
+            .unwrap();
+        let reports = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let kept = reports.clone();
+        let report: Reporter = Arc::new(move |text: &str| {
+            kept.lock().unwrap().push(text.to_owned());
+            Ok(())
+        });
+        retain(
+            id,
+            session,
+            access,
+            Arc::new(|_| Ok(())),
+            (false, Some(report)),
+        )
+        .await
+        .unwrap();
+        for _ in 0..100 {
+            if reports.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        assert_eq!(
+            *reports.lock().unwrap(),
+            [
+                "Pushed.\nBranch: feature/continued",
+                "Done.\nBranch: feature/continued-2"
+            ]
+        );
+        close(id).await;
     }
 }

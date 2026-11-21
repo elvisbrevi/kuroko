@@ -40,13 +40,21 @@ const LABELS = {
 function runStateLabel(state) {
   return (LABELS[state] ?? (() => tx(state)))();
 }
+/** The stages whose state word says the run waits there, named as stages for the timeline. */
+const STAGE_LABELS = {
+  pull_requests: () => t('Pull requests'),
+};
+/** A stage of the timeline in words: a stage the run stopped in is not one it waits in. */
+function stageLabel(stage) {
+  return (STAGE_LABELS[stage] ?? (() => runStateLabel(stage)))();
+}
 
 /** Why an agent session did not end with its answer (`failure.cause`), with the next action. */
 const CAUSES = {
   cli_missing: () => t('The selected CLI is not installed on the machine. Install it there, sign in and start again.'),
   model_unavailable: () => t('The machine\'s CLI does not offer the selected model or effort. Choose one it offers and start again.'),
   output_limit: () => t('The agent\'s final report was too large to read. Read the session for its report.'),
-  timeout: () => t('The session reached its time limit and was stopped. Read the session for what it left unfinished.'),
+  timeout: () => t('The session reached its time limit and was stopped. Read the session for what it left unfinished, or continue it: its final report then counts as the run\'s.'),
   cancelled: () => t('The run was cancelled.'),
   permission_prompt: () => t('The agent stopped on a permission prompt nobody could answer. Read the recorded prompt, remove its cause and start again.'),
   invalid_answer: () => t('The agent\'s answer was not the JSON it was asked for. Try again, or choose another model.'),
@@ -83,4 +91,4 @@ function failureText(failure) {
   return (CAUSES[failure.cause] ?? CAUSES.unknown)();
 }
 
-export { ALLOWS, allowNames, failureText, runStateLabel };
+export { ALLOWS, allowNames, failureText, runStateLabel, stageLabel };

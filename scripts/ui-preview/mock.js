@@ -317,7 +317,7 @@
   const crowd = Array.from({ length: 24 }, (_, i) => `Synthetic member ${String(i + 1).padStart(2, '0')}`);
   teamsChats.push({ id: '19:crowd@thread.v2', type: 'group', topic: crowd.join(', '), members: crowd, last_updated: '2026-10-12T10:00:00Z', readable: false });
   let workflowSettings = { ready_states: scenario === 'full' ? [{ organization: org, project: 'Payments', states: ['Ready for development'] }] : [],
-    watch_interval_minutes: 5, concurrency: 2, pull_request_wait_days: 7, director: { machine: '11111111-1111-4111-8111-111111111111', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
+    watch_interval_minutes: 5, concurrency: 2, pull_request_wait_days: 7, coding_time_limit_minutes: 120, planning_time_limit_minutes: 120, director: { machine: '11111111-1111-4111-8111-111111111111', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' },
     project_directors: [],
     // The workflow supervisor (src/workflows/director.rs `Supervisor`): on in the full scenario.
     supervisor: { enabled: scenario === 'full', ...(scenario === 'full' ? { machine: '11111111-1111-4111-8111-111111111111', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } : {}),
@@ -687,8 +687,8 @@
     workflow_settings: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_settings', ...structuredClone(args) });
       const reply = { settings: structuredClone(workflowSettings), directors: directors(), editable: true,
-        defaults: { watch_interval_minutes: 5, concurrency: 2, pull_request_wait_days: 7, director: null, ready_states: [], supervisor: structuredClone(SUPERVISOR_DEFAULTS) },
-        bounds: { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60], ready_states_per_project: 20, projects_with_ready_states: 50,
+        defaults: { watch_interval_minutes: 5, concurrency: 2, pull_request_wait_days: 7, coding_time_limit_minutes: 120, planning_time_limit_minutes: 120, director: null, ready_states: [], supervisor: structuredClone(SUPERVISOR_DEFAULTS) },
+        bounds: { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60], coding_time_limit_minutes: [30, 480], planning_time_limit_minutes: [30, 480], ready_states_per_project: 20, projects_with_ready_states: 50,
           supervisor: { looks_per_day: [1, 100], min_interval_minutes: [10, 1440], wait_hours: [1, 48], offline_minutes: [5, 240], session_seconds: [60, 600] } },
         // The ready-state watcher on this computer (src/app/workflows/watcher.rs `view`).
         watcher: window.__ptaWatcher ?? (workflowSettings.ready_states.some(r => r.states.length)
@@ -705,7 +705,7 @@
     // Only the fields given change; each project's ready states replace that project's.
     workflow_settings_update: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_settings_update', ...structuredClone(args) });
-      for (const field of ['watch_interval_minutes', 'concurrency', 'pull_request_wait_days']) if (field in args) workflowSettings[field] = args[field];
+      for (const field of ['watch_interval_minutes', 'concurrency', 'pull_request_wait_days', 'coding_time_limit_minutes', 'planning_time_limit_minutes']) if (field in args) workflowSettings[field] = args[field];
       if ('director' in args) workflowSettings.director = args.director;
       if ('supervisor' in args) {
         const next = args.supervisor === null ? structuredClone(SUPERVISOR_DEFAULTS) : { ...workflowSettings.supervisor, ...args.supervisor };

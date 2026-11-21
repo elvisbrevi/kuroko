@@ -31,6 +31,10 @@ pub const DEFAULT_PULL_REQUEST_WAIT_DAYS: u32 = 7;
 pub const PULL_REQUEST_WAIT_DAYS: std::ops::RangeInclusive<u32> = 1..=60;
 pub const DEFAULT_DEPENDENCY_WAIT_DAYS: u32 = 14;
 pub const DEPENDENCY_WAIT_DAYS: std::ops::RangeInclusive<u32> = 1..=90;
+/// How long an implementation session may take, in minutes: a coding run's (and its review
+/// rounds') and a planning run's by default, and the range a setting or a workflow may choose.
+pub const DEFAULT_TIME_LIMIT_MINUTES: u32 = 120;
+pub const TIME_LIMIT_MINUTES: std::ops::RangeInclusive<u32> = 30..=480;
 /// At most this many projects have ready states, with at most this many states each.
 pub const MAX_READY_PROJECTS: usize = 50;
 pub const MAX_READY_STATES: usize = 20;
@@ -64,6 +68,14 @@ pub struct Settings {
     /// (1 to 90). Left out while it is the default, so an older host keeps loading the map.
     #[serde(skip_serializing_if = "is_default_dependency_wait")]
     pub dependency_wait_days: u32,
+    /// Minutes a coding session (a run's or a review round's) may take before it is stopped
+    /// (30 to 480), unless its workflow sets its own (`Agent::time_limit_minutes`). Left out
+    /// while it is the default.
+    #[serde(skip_serializing_if = "is_default_time_limit")]
+    pub coding_time_limit_minutes: u32,
+    /// Minutes a planning session may take (30 to 480), unless its workflow sets its own.
+    #[serde(skip_serializing_if = "is_default_time_limit")]
+    pub planning_time_limit_minutes: u32,
     /// The model-backed selector and summarizer; none until the user chooses it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub director: Option<Director>,
@@ -84,6 +96,8 @@ impl Default for Settings {
             concurrency: DEFAULT_CONCURRENCY,
             pull_request_wait_days: DEFAULT_PULL_REQUEST_WAIT_DAYS,
             dependency_wait_days: DEFAULT_DEPENDENCY_WAIT_DAYS,
+            coding_time_limit_minutes: DEFAULT_TIME_LIMIT_MINUTES,
+            planning_time_limit_minutes: DEFAULT_TIME_LIMIT_MINUTES,
             director: None,
             ready_states: Vec::new(),
             project_directors: Vec::new(),
@@ -94,9 +108,23 @@ impl Default for Settings {
 fn is_default_dependency_wait(days: &u32) -> bool {
     *days == DEFAULT_DEPENDENCY_WAIT_DAYS
 }
+fn is_default_time_limit(minutes: &u32) -> bool {
+    *minutes == DEFAULT_TIME_LIMIT_MINUTES
+}
 impl Settings {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+    /// The time limit of a session of `workflow` (or of none), in minutes: the workflow's own,
+    /// else these settings' for its kind.
+    pub fn time_limit_minutes(&self, workflow: Option<&Workflow>, planning: bool) -> u32 {
+        workflow
+            .and_then(|w| w.agent.time_limit_minutes)
+            .unwrap_or(if planning {
+                self.planning_time_limit_minutes
+            } else {
+                self.coding_time_limit_minutes
+            })
     }
 }
 
@@ -295,6 +323,7 @@ impl Director {
             provider: self.provider.clone(),
             model: self.model.clone(),
             effort: self.effort.clone(),
+            time_limit_minutes: None,
         }
     }
 }
@@ -329,6 +358,23 @@ pub fn validate(settings: &Settings) -> Result<()> {
         DEPENDENCY_WAIT_DAYS.start(),
         DEPENDENCY_WAIT_DAYS.end()
     );
+    for (name, minutes) in [
+        (
+            "coding_time_limit_minutes",
+            settings.coding_time_limit_minutes,
+        ),
+        (
+            "planning_time_limit_minutes",
+            settings.planning_time_limit_minutes,
+        ),
+    ] {
+        ensure!(
+            TIME_LIMIT_MINUTES.contains(&minutes),
+            "{name} is between {} and {} minutes.",
+            TIME_LIMIT_MINUTES.start(),
+            TIME_LIMIT_MINUTES.end()
+        );
+    }
     ensure!(
         settings.ready_states.len() <= MAX_READY_PROJECTS,
         "At most {MAX_READY_PROJECTS} projects have ready states."

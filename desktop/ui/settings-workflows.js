@@ -34,9 +34,12 @@ const processStates = new Map();
 const agentCatalogs = new Map();
 let loadGeneration = 0;
 /** The numbers of the form and their host field; their bounds come with the settings. */
-const FIELDS = [['#workflow-interval', 'watch_interval_minutes'], ['#workflow-concurrency', 'concurrency'], ['#workflow-pr-wait', 'pull_request_wait_days']];
-const FALLBACK = { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60] };
+const FIELDS = [['#workflow-interval', 'watch_interval_minutes'], ['#workflow-concurrency', 'concurrency'], ['#workflow-pr-wait', 'pull_request_wait_days'],
+  ['#workflow-coding-limit', 'coding_time_limit_minutes'], ['#workflow-planning-limit', 'planning_time_limit_minutes']];
+const FALLBACK = { watch_interval_minutes: [1, 60], concurrency: [1, 4], pull_request_wait_days: [1, 60], coding_time_limit_minutes: [30, 480], planning_time_limit_minutes: [30, 480] };
 const range = field => workflowSettings?.bounds?.[field] ?? FALLBACK[field];
+/** The fields this host has: one before the time limits sends neither, and its form hides them. */
+const offered = field => field in (workflowSettings?.settings ?? {});
 /** The supervisor's numbers and their host field. */
 const SUPERVISOR_FIELDS = [['#workflow-supervisor-looks', 'looks_per_day'], ['#workflow-supervisor-interval', 'min_interval_minutes'],
   ['#workflow-supervisor-wait', 'wait_hours'], ['#workflow-supervisor-offline', 'offline_minutes'], ['#workflow-supervisor-seconds', 'session_seconds']];
@@ -46,6 +49,8 @@ const RANGE_TEXT = {
   watch_interval_minutes: bounds => t('Check every {min} to {max} minutes.', bounds),
   concurrency: bounds => t('Let {min} to {max} runs advance at once.', bounds),
   pull_request_wait_days: bounds => t('Wait {min} to {max} days for pull requests.', bounds),
+  coding_time_limit_minutes: bounds => t('Give a coding session {min} to {max} minutes.', bounds),
+  planning_time_limit_minutes: bounds => t('Give a planning session {min} to {max} minutes.', bounds),
   looks_per_day: bounds => t('Let the supervisor look {min} to {max} times a day.', bounds),
   min_interval_minutes: bounds => t('Leave {min} to {max} minutes between two looks at a run.', bounds),
   wait_hours: bounds => t('Look at a waiting run after {min} to {max} hours.', bounds),
@@ -242,6 +247,7 @@ function renderWorkflowSettings({ director = true } = {}) {
   for (const [id, field] of FIELDS) {
     const [min, max] = range(field);
     const input = $(id);
+    /** @type {HTMLElement} */ (input.closest('label')).hidden = !offered(field);
     input.value = String(form[field] ?? '');
     input.min = String(min); input.max = String(max);
     input.disabled = !editable;
@@ -315,7 +321,7 @@ function renderSupervisor(editable) {
 /** What would be refused, checked before the save bar writes anything; it opens the category. */
 function checkWorkflowSettings() {
   if (!pending || !form) return;
-  const wrong = FIELDS.map(([, field]) => field).filter(field => {
+  const wrong = FIELDS.map(([, field]) => field).filter(offered).filter(field => {
     const [min, max] = range(field);
     return !Number.isInteger(form[field]) || form[field] < min || form[field] > max;
   }).map(field => { const [min, max] = range(field); return RANGE_TEXT[field]({ min, max }); });
@@ -344,7 +350,7 @@ async function saveWorkflowSettings() {
   checkWorkflowSettings();
   const saved = workflowSettings.settings;
   const args = {};
-  for (const [, field] of FIELDS) if (form[field] !== saved[field]) args[field] = form[field];
+  for (const [, field] of FIELDS) if (offered(field) && form[field] !== saved[field]) args[field] = form[field];
   if (directorTouched) {
     const director = form.director?.machine ? { machine: form.director.machine, provider: form.director.provider, model: form.director.model, effort: form.director.effort } : null;
     if (JSON.stringify(director) !== JSON.stringify(saved.director ?? null)) args.director = director;

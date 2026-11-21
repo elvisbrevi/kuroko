@@ -40,6 +40,24 @@ pub(crate) enum Cause {
     #[serde(other)]
     Unknown,
 }
+impl Cause {
+    /// A session that stopped while it worked: the person may continue it to its final report
+    /// (`implementation_mobile_session`, or the provider's own resume), and that report is then
+    /// the run's (a continued run). A run that was cancelled, never started its session, or
+    /// whose answer was not the one asked for is not continued.
+    pub(crate) fn continuable(self) -> bool {
+        matches!(
+            self,
+            Cause::Timeout
+                | Cause::StreamEnded
+                | Cause::HostRestarted
+                | Cause::AgentError
+                | Cause::NoReport
+                | Cause::OutputLimit
+                | Cause::PermissionPrompt
+        )
+    }
+}
 
 /// What the first line of a CLI's stderr said when it exited at once, matched against a short
 /// list of known patterns; the line itself is never kept.
@@ -154,7 +172,7 @@ impl Failure {
             ),
             Cause::StreamEnded => format!("The CLI stopped{code} before its session finished. Read the session for what it did, then start again."),
             Cause::OutputLimit => "The agent's final report was too large to read. Read the session for its report.".into(),
-            Cause::Timeout => "The session reached its time limit and was stopped. Read the session for what it left unfinished.".into(),
+            Cause::Timeout => "The session reached its time limit and was stopped. Read the session for what it left unfinished, or continue it: its final report then counts as the run's.".into(),
             Cause::Cancelled => "The run was cancelled.".into(),
             Cause::PermissionPrompt => "The agent stopped on a permission prompt nobody could answer. Read the recorded prompt, remove its cause and start again.".into(),
             Cause::InvalidAnswer => "The agent's answer was not the JSON it was asked for. Try again, or choose another model.".into(),

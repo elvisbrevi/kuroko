@@ -421,7 +421,8 @@ workflow settings.
    `description` (what the director will read to choose it), `enabled`, `auto_start`,
    `organization` (`https://dev.azure.com/NAME`), `project`, `repositories` `[{id, name}]` as
    listed, `machine`, `checkouts` `{REPOSITORY_ID: DIRECTORY}` (one per repository),
-   `agent` `{provider: codex|claude|opencode, model, effort}`, `instructions` (at most 20000
+   `agent` `{provider: codex|claude|opencode, model, effort, time_limit_minutes?}` (the limit, 30-480
+   minutes, of each session of its runs; without it the workflow settings' limit for its kind), `instructions` (at most 20000
    characters), `blocks` (existing block IDs, at most 20, in order) and `allow`: what the
    workflow's coding runs may do that the fixed rules otherwise forbid, each at most once:
    `work_items` (create and change work items and issues: state, fields, comments), `teams`
@@ -552,7 +553,9 @@ Requires host and CLI `workflow_director_support: true`.
 
 - **Read them:** `kuroko workflows settings` (MCP `workflow_settings`) shows
   `watch_interval_minutes` (default 5), `concurrency` (workflow runs that plan, code or act at
-  once, first in, first out; classifying takes no slot; default 2), `pull_request_wait_days` (default 7), the account's `director` (`machine`,
+  once, first in, first out; classifying takes no slot; default 2), `pull_request_wait_days` (default 7),
+  `coding_time_limit_minutes` and `planning_time_limit_minutes` (default 120: how long a coding
+  session or review round, and a planning session, may take before it is stopped), the account's `director` (`machine`,
   `provider`, `model`, `effort`; none until chosen), `ready_states` and `project_directors` (a
   project's own director) per organization and project, `directors` (for each project, the
   director that classifies and summarizes its items and its `source`: `project` its own,
@@ -568,7 +571,9 @@ Requires host and CLI `workflow_director_support: true`.
   for its requirement, bug and task types. Choose ready states only from that list.
 - **Change them:** `kuroko workflows settings --set KEY VALUE [--set KEY VALUE…]` (MCP
   `workflow_settings_update` with only the fields to change). Keys: `watch_interval_minutes`
-  (1-60), `concurrency` (1-4), `pull_request_wait_days` (1-60); `director.machine` (a
+  (1-60), `concurrency` (1-4), `pull_request_wait_days` (1-60), `dependency_wait_days` (1-90),
+  `coding_time_limit_minutes` and `planning_time_limit_minutes` (30-480; a workflow's
+  `agent.time_limit_minutes` overrides both for its runs); `director.machine` (a
   `machine_list` ID; the coordinator's own row for it), `director.provider`
   (codex|claude|opencode), `director.model`, `director.effort` (the host merges the fields given
   with the stored director; a new director needs all four, and the refusal names the missing
@@ -678,8 +683,20 @@ run (any state but `done` and `cancelled`).
   stopped it: a new planning run replaces one that did not end ready, the children that were
   created are coded, a child whose coding run did not end done is left as it ended and the next
   one is coded, an abandoned pull request no longer stops the run, and the pull-request wait starts
-  again; a run that delivered nothing ends done without pull requests. It never submits a plan again, never starts a coding run that was started, and writes
+  again; a run that delivered nothing ends done without pull requests, unless a child's
+  continued session (below) has reported its branches since: then they are waited for. A child
+  whose coding run has since ended done is delivered, not accepted. It never submits a plan again, never starts a coding run that was started, and writes
   nothing to Azure DevOps. Resume only after the user looked at the cause.
+- **Continued sessions:** a coding session stopped while it worked (its time limit, a stream that
+  ended, a restart, an agent error, no report, a permission prompt) can be continued by the
+  person: reconnect it (`implementation_mobile_session`, Claude) and continue it, or resume it in
+  the CLI on that machine. Its final report then becomes the coding run's (`done`, with
+  `continued_at`), and a waiting workflow run takes it by itself within five minutes: the child
+  is delivered with the `Branch:` lines of that report and its pull requests are waited for (a
+  run stopped as `nothing_delivered` goes back to waiting for them). Nothing to do but wait, or
+  resume. `workflows status` shows a running child's `stops_at` and `seconds_left`, and
+  `item.state` as Azure DevOps has it now (`state_read_at`; `state_when_taken` is the state the
+  run took it in).
 - **Blocks that act:** the engine runs a run's notification and launcher blocks by itself at
   their stage (`before_planning`, `plan_ready` while the run waits for the plan review,
   `children_created`, `coding_started` once per coding run its machine accepted (a task's own,

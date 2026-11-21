@@ -1038,3 +1038,80 @@ fn windows_and_home_variable_paths_lose_every_directory() {
         assert_eq!(scrubber.scrub(text), kept, "{text}");
     }
 }
+
+#[test]
+fn the_final_report_of_a_continued_claude_session_is_its_last_answer_after_the_stop() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "44444444-4444-4444-8444-444444444444";
+    let path = root
+        .path()
+        .join(format!("projects/D--code-payments/{id}.jsonl"));
+    let line = |kind: &str, message: &str, text: &str, minutes: u64| json!({"type":kind,"sessionId":id,"message":{"id":message,"role":kind,"content":[{"type":"text","text":text}]},"timestamp":at(minutes)});
+    let stopped = at(10);
+    // Before the stop, then continued: a request, a tool call, and the report in two lines.
+    write_lines(
+        &path,
+        &[
+            line("user", "", "Implement it.", 0),
+            line("assistant", "m1", "Working on it.", 5),
+            line("user", "", "Continue and finish.", 20),
+            json!({"type":"assistant","sessionId":id,"message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push"}}]},"timestamp":at(21)}),
+            json!({"type":"user","sessionId":id,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"pushed"}]},"timestamp":at(21)}),
+            line(
+                "assistant",
+                "m3",
+                "Pushed and opened the pull requests.",
+                22,
+            ),
+            line(
+                "assistant",
+                "m3",
+                "Branch: feature/continued\nBranch payments-web: feature/web",
+                22,
+            ),
+        ],
+    );
+    let report = claude_final_answer(root.path(), id, &stopped).unwrap();
+    assert_eq!(
+        report.as_deref(),
+        Some(
+            "Pushed and opened the pull requests.\nBranch: feature/continued\nBranch payments-web: feature/web"
+        )
+    );
+    // Nothing after the stop, a session whose last message is a request, an unknown session
+    // and one marked private give none.
+    assert_eq!(claude_final_answer(root.path(), id, &at(30)).unwrap(), None);
+    let waiting = "55555555-5555-4555-8555-555555555555";
+    write_lines(
+        &root
+            .path()
+            .join(format!("projects/D--code-payments/{waiting}.jsonl")),
+        &[
+            line("assistant", "m1", "Branch: feature/early", 20),
+            line("user", "", "And the tests?", 21),
+        ],
+    );
+    assert_eq!(
+        claude_final_answer(root.path(), waiting, &stopped).unwrap(),
+        None
+    );
+    let unknown = "66666666-6666-4666-8666-666666666666";
+    assert_eq!(
+        claude_final_answer(root.path(), unknown, &stopped).unwrap(),
+        None
+    );
+    let private = "77777777-7777-4777-8777-777777777777";
+    write_lines(
+        &root
+            .path()
+            .join(format!("projects/D--code-payments/{private}.jsonl")),
+        &[
+            line("user", "", "#private continue", 20),
+            line("assistant", "m1", "Branch: feature/secret", 21),
+        ],
+    );
+    assert_eq!(
+        claude_final_answer(root.path(), private, &stopped).unwrap(),
+        None
+    );
+}
