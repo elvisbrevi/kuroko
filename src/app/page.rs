@@ -36,6 +36,9 @@ const SESSION_LIFETIME: Duration = Duration::from_secs(12 * 3600);
 /// The shortest time between two browser openings, so a loop cannot flood the desktop.
 const OPEN_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_CODES: usize = 4;
+/// Bytes of a GUI request: the band's own image (`mark_image_prepare`) is the largest, up to
+/// `images::MAX_TOTAL` in base64 (3.7 MB); every other request stays far below.
+pub(super) const CONTROL_BODY_LIMIT: usize = 4_000_000;
 const MAX_SESSIONS: usize = 16;
 /// Below every operating system's ephemeral range, so the derived port is usually free.
 const PORTS: std::ops::Range<u16> = 21_000..30_000;
@@ -366,7 +369,11 @@ fn router(host: Arc<Host>) -> Router {
         .route("/open", get(exchange))
         .route("/signed-out", get(|| async { signed_out() }))
         .route("/api/session", get(session))
-        .route("/api/control", post(command));
+        // Room for the band's own image (`mark_image_prepare`): up to 2.8 MB in base64.
+        .route(
+            "/api/control",
+            post(command).layer(DefaultBodyLimit::max(CONTROL_BODY_LIMIT)),
+        );
     // The GUI's modules need this page's session; its other files need none (`gui_assets::ASSETS`).
     let router = gui_assets::session_scripts().fold(router, |router, asset| {
         router.route(

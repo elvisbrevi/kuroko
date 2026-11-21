@@ -190,6 +190,12 @@ nav button, .status-row, .activity-row, .segmented button, .subnav [role=tab], .
 .icon-button { min-height: 0; padding: .3rem; border: 0; border-radius: var(--radius-button); background: none; color: inherit; }
 .actions { display: flex; align-items: center; gap: .6rem; margin-top: 1rem; flex-wrap: wrap; }
 .actions input:not([type=checkbox]):not([type=radio]) { max-width: 520px; margin: 0; flex: 1; min-width: 200px; }
+/* A number field with its − and + buttons (`numberSteppers`); the native spinner is hidden. */
+.stepper { display: flex; align-items: stretch; gap: .35rem; margin-top: .35rem; min-width: 0; }
+.stepper input:not([type=checkbox]):not([type=radio]) { flex: 1; min-width: 0; margin-top: 0; appearance: textfield; -moz-appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.stepper-button { flex: none; width: 2.75rem; min-height: 2.75rem; margin: 0; padding: 0; font-size: var(--fs-lg); line-height: 1; }
+.actions .stepper { margin-top: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Status */
@@ -966,6 +972,10 @@ body.directory-picker-open { overflow: hidden; }
 .teams-band img { width: var(--mark-size, 1.25em); height: var(--mark-size, 1.25em); border-radius: 22%; }
 /* The animated mark is a figure on a transparent background, not a rounded app icon. */
 .teams-band img[src="kuroko-mark.png"] { border-radius: 0; }
+/* The band's own image keeps its proportions and its own corners. */
+.teams-band img.own { width: auto; max-width: calc(var(--mark-size, 1.25em) * 4); border-radius: 0; }
+#style-image-field legend small { display: block; font-weight: 400; font-size: var(--fs-sm); color: var(--muted); }
+.style-image-actions { margin-top: .35rem; }
 .teams-card.mark-right .teams-band > img, .teams-card.mark-right .teams-band > #style-preview-icon { order: 1; }
 .teams-card.align-left .teams-band { justify-content: flex-start; }
 .teams-card.align-center .teams-band { justify-content: center; }
@@ -1218,3 +1228,4 @@ body.directory-picker-open { overflow: hidden; }
 .run-restart-note { width: 100%; min-height: 10rem; }
 .run-handover-text { margin: .4rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-pause .actions { margin-top: .4rem; }
+

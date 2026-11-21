@@ -20,6 +20,7 @@ use crate::config::{
 use crate::llm::LlmProvider;
 use base64::Engine;
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 mod blocks;
@@ -34,10 +35,71 @@ const BAND: &str = "pta-band";
 /// sent as the message's last hosted content when the style asks for it.
 pub const MARK: &[u8] = crate::app::gui_assets::KUROKO_MARK;
 
-/// The bytes of the band's animated mark, when a message in `style` carries it.
-pub fn hosted_mark(style: &MessageStyle) -> Option<&'static [u8]> {
-    (style.kuroko && style.animated).then_some(MARK)
+/// The bytes and type of the band's hosted image, when a message in `style` carries one: the
+/// user's own image when the band shows an icon, otherwise a signed band's animated mark.
+pub fn hosted_mark(style: &MessageStyle) -> Option<(Cow<'static, [u8]>, &'static str)> {
+    if let Some((bytes, kind, ..)) = own_mark(style) {
+        return Some((Cow::Owned(bytes), kind.content_type()));
+    }
+    (style.kuroko && style.animated).then_some((Cow::Borrowed(MARK), "image/png"))
 }
+/// The user's own image, when the band shows it: signed, or with its icon on.
+fn own_mark(style: &MessageStyle) -> Option<(Vec<u8>, super::images::Kind, u32, u32)> {
+    (style.kuroko || style.icon)
+        .then(|| style.own_mark())
+        .flatten()
+}
+/// Sides, in pixels, a band's image that does not fit is reduced to, largest first.
+const MARK_SIDES: [u32; 5] = [192, 144, 112, 80, 64];
+
+/// Makes `style`'s own image one a message can carry: a GIF becomes its animated PNG, as a
+/// message's images do (Graph refuses GIF hosted contents), and a GIF or PNG that exceeds
+/// [`MessageStyle::MAX_MARK_IMAGE`] or its side is reduced, keeping its animation, to the
+/// largest of [`MARK_SIDES`] that fits. `Err` holds a fixed explanation that is safe to show.
+pub fn prepare_mark(style: &mut MessageStyle) -> Result<(), &'static str> {
+    use super::images::{Kind, detect, gif_to_png, reduced_png};
+    let data = style.mark_image.trim();
+    if data.is_empty() {
+        style.mark_image.clear();
+        return Ok(());
+    }
+    // A string longer than the largest source is refused before decoding it.
+    if data.len() > super::images::MAX_TOTAL.div_ceil(3) * 4 + 4 {
+        return Err(MARK_SOURCE_TOO_LARGE);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| MARK_UNSUPPORTED)?;
+    let (kind, width, height) = detect(&bytes).ok_or(MARK_UNSUPPORTED)?;
+    let fits = |image: &[u8]| {
+        image.len() <= MessageStyle::MAX_MARK_IMAGE
+            && detect(image).is_some_and(|(_, width, height)| {
+                width.max(height) <= MessageStyle::MAX_MARK_IMAGE_SIDE
+            })
+    };
+    let whole = match kind {
+        Kind::Gif if width.max(height) <= MessageStyle::MAX_MARK_IMAGE_SIDE => {
+            gif_to_png(&bytes).ok()
+        }
+        Kind::Gif => None,
+        Kind::Png | Kind::Jpeg => Some(bytes.clone()),
+    };
+    let ready = match whole.filter(|image| fits(image)) {
+        Some(image) => image,
+        None if kind == Kind::Jpeg => return Err(MARK_JPEG_TOO_LARGE),
+        None => MARK_SIDES
+            .iter()
+            .find_map(|side| reduced_png(&bytes, *side).ok().filter(|image| fits(image)))
+            .ok_or(MARK_TOO_LARGE)?,
+    };
+    style.mark_image = base64::engine::general_purpose::STANDARD.encode(ready);
+    style.validate().map_err(|_| MARK_UNSUPPORTED)
+}
+const MARK_UNSUPPORTED: &str = "The band's image is a PNG, JPEG or GIF.";
+const MARK_SOURCE_TOO_LARGE: &str = "The band's image is a file of up to 2.8 MB.";
+const MARK_JPEG_TOO_LARGE: &str = "A JPEG for the band is up to 100 KB and 1024 pixels a side; the app reduces PNG and GIF files.";
+const MARK_TOO_LARGE: &str =
+    "The band's image does not fit in 100 KB even at 64 pixels; choose a shorter or simpler one.";
 /// Stands for `](` in a link this module wrote; every other `](` is broken up so the card's
 /// Markdown never turns text into a link the pipeline did not check.
 const LINK: char = '\u{e002}';
@@ -374,23 +436,34 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value, mark: Option<u
     let site = (style.kuroko && style.site_link).then(
         || json!({"type": "Action.OpenUrl", "title": "Kuroko", "url": MessageStyle::KUROKO_URL}),
     );
-    let icon = if style.kuroko {
+    let own = own_mark(style).map(|(_, _, width, height)| (width, height));
+    let icon = if style.kuroko || own.is_some() {
         // The still mark goes inside the card (about 1 KB, no request leaves it); the animated
-        // one is one of the message's own hosted contents.
-        let side = format!("{}px", style.mark_pixels());
+        // one and the user's own image are one of the message's own hosted contents.
+        let tall = u32::from(style.mark_pixels());
+        // The own image keeps its proportions, as tall as the mark would be.
+        let wide = own.map_or(tall, |(width, height)| {
+            (tall * width).div_ceil(height).clamp(1, tall * 4)
+        });
+        let (width, height) = (format!("{wide}px"), format!("{tall}px"));
         let url = match mark {
             Some(at) => format!("../hostedContents/{at}/$value"),
             None => badge(),
         };
-        let mut image = json!({"type": "Image", "url": url, "width": side, "height": side,
-            "altText": "Kuroko"});
+        let mut image = json!({"type": "Image", "url": url, "width": width, "height": height});
+        // The own image of an unsigned band is decoration beside its text, or says it alone.
+        if style.kuroko {
+            image["altText"] = json!("Kuroko");
+        } else if style.hide_label {
+            image["altText"] = json!(label);
+        }
         if let Some(open) = &site {
             image["selectAction"] = open.clone();
         }
         // As wide as the mark: Teams on iPhone lays the band out before a hosted image loads, and
         // an `auto` column then has no width and the mark spills over the text.
         let mut mark = column(image);
-        mark["width"] = json!(side);
+        mark["width"] = json!(width);
         Some(mark)
     } else {
         // Plain text: Teams does not draw the card `Icon` element in chat messages.
@@ -398,13 +471,17 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value, mark: Option<u
     };
     // Drawn as a link only when asked: clients underline links, and the column opens the site
     // anyway.
-    let mut words = column(text(&match site {
-        Some(_) if style.link_underline => site_link(&label),
-        _ => label,
-    }));
-    if let Some(open) = site {
-        words["selectAction"] = open;
-    }
+    // A band without text shows only its icon, which validation requires.
+    let words = (!style.hide_label).then(|| {
+        let mut words = column(text(&match site {
+            Some(_) if style.link_underline => site_link(&label),
+            _ => label,
+        }));
+        if let Some(open) = site {
+            words["selectAction"] = open;
+        }
+        words
+    });
     let mut columns = Vec::new();
     // Free space at the band's ends: a column that holds nothing but takes that width.
     let padding = (style.band_padding > 0).then(
@@ -412,8 +489,8 @@ fn band(style: &MessageStyle, language: Language, stripe: &Value, mark: Option<u
     );
     columns.extend(padding.clone());
     match style.mark_side {
-        MarkSide::Left => columns.extend(icon.into_iter().chain([words])),
-        MarkSide::Right => columns.extend([words].into_iter().chain(icon)),
+        MarkSide::Left => columns.extend(icon.into_iter().chain(words)),
+        MarkSide::Right => columns.extend(words.into_iter().chain(icon)),
     }
     columns.extend(padding);
     let mut band = json!({"type": "Container", "id": BAND,
@@ -1040,7 +1117,10 @@ mod tests {
             mark_size: 45,
             ..style()
         };
-        assert_eq!(hosted_mark(&animated), Some(MARK));
+        assert_eq!(
+            hosted_mark(&animated),
+            Some((Cow::Borrowed(MARK), "image/png"))
+        );
         assert!(hosted_mark(&style()).is_none());
         // Only a signed band carries it.
         assert!(
@@ -1068,6 +1148,171 @@ mod tests {
             "../hostedContents/1/$value"
         );
         assert!(card.to_string().len() < 2_000);
+    }
+    #[test]
+    fn the_own_image_is_the_bands_icon_in_its_proportions() {
+        use super::super::images::tests::{gif, png};
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let wide = MessageStyle {
+            mark_image: encode(&png(200, 100, 64)),
+            mark_size: 30,
+            ..style()
+        };
+        wide.validate().unwrap();
+        // It takes the emoji's place, twice as wide as tall, and travels as a hosted content.
+        let (bytes, kind) = hosted_mark(&wide).unwrap();
+        assert_eq!((bytes.len(), kind), (64, "image/png"));
+        let sent = message("Hola", &wide, Language::Es, "", &[], &["Uno"]).unwrap();
+        let card = posted(&sent);
+        let icon = &card["body"][2]["items"][0]["columns"][0];
+        assert_eq!(icon["width"], "60px");
+        assert_eq!(icon["items"][0]["url"], "../hostedContents/2/$value");
+        assert_eq!(icon["items"][0]["height"], "30px");
+        assert!(icon["items"][0].get("altText").is_none());
+        assert!(!card.to_string().contains('🤖'));
+        // Signed, it replaces the Kuroko mark, even the animated one.
+        let signed = MessageStyle {
+            kuroko: true,
+            animated: true,
+            ..wide.clone()
+        };
+        assert_eq!(hosted_mark(&signed).unwrap().0.len(), 64);
+        let image = &sent_card(&signed)["body"][1]["items"][0]["columns"][0]["items"][0];
+        assert_eq!(image["altText"], "Kuroko");
+        assert_eq!(image["selectAction"]["url"], MessageStyle::KUROKO_URL);
+        // Unsigned with the icon off, the band shows no icon and carries no image.
+        let off = MessageStyle {
+            icon: false,
+            ..wide.clone()
+        };
+        assert!(hosted_mark(&off).is_none());
+        assert_eq!(
+            sent_card(&off)["body"][1]["items"][0]["columns"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        // A GIF is kept as its animated PNG; other files and oversized images are refused.
+        let mut moving = MessageStyle {
+            mark_image: encode(&gif(4, 4, 0)),
+            ..style()
+        };
+        prepare_mark(&mut moving).unwrap();
+        assert!(matches!(
+            moving.own_mark(),
+            Some((_, super::super::images::Kind::Png, 4, 4))
+        ));
+        for refused in [
+            encode(b"<svg/>"),
+            "not base64".into(),
+            encode(&png(2000, 10, 64)),
+            encode(&png(10, 10, MessageStyle::MAX_MARK_IMAGE + 1)),
+        ] {
+            let mut style = MessageStyle {
+                mark_image: refused,
+                ..style()
+            };
+            assert!(style.validate().is_err());
+            assert!(prepare_mark(&mut style).is_err());
+        }
+        let mut none = MessageStyle {
+            mark_image: " ".into(),
+            ..style()
+        };
+        prepare_mark(&mut none).unwrap();
+        assert!(none.is_default());
+    }
+    #[test]
+    fn a_large_image_is_reduced_keeping_its_animation() {
+        use super::super::images::{
+            Kind, animated_png, detect, gif_to_png, reduced_png, tests::gif,
+        };
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        // A GIF wider than 1024 pixels becomes an animated PNG of at most 192, in proportion.
+        let mut wide = MessageStyle {
+            mark_image: encode(&gif(1500, 1000, 0)),
+            ..style()
+        };
+        prepare_mark(&mut wide).unwrap();
+        let (bytes, kind, width, height) = wide.own_mark().unwrap();
+        assert_eq!((kind, width, height), (Kind::Png, 192, 128));
+        assert!(animated_png(&bytes));
+        // An animated PNG is reduced frame by frame too, and never enlarged.
+        let apng = gif_to_png(&gif(400, 300, 0)).unwrap();
+        assert!(animated_png(&apng));
+        let small = reduced_png(&apng, 100).unwrap();
+        assert_eq!(detect(&small), Some((Kind::Png, 100, 75)));
+        assert!(animated_png(&small));
+        assert_eq!(
+            detect(&reduced_png(&apng, 600).unwrap()),
+            Some((Kind::Png, 400, 300))
+        );
+        // A still PNG that does not fit at 192 pixels takes the next side that does.
+        let mut seed = 7u32;
+        let noise: Vec<u8> = (0..300 * 300 * 4)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (seed >> 16) as u8
+            })
+            .collect();
+        let mut still = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut still, 300, 300);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&noise).unwrap();
+        }
+        assert!(still.len() > MessageStyle::MAX_MARK_IMAGE);
+        let mut noisy = MessageStyle {
+            mark_image: encode(&still),
+            ..style()
+        };
+        prepare_mark(&mut noisy).unwrap();
+        let (bytes, _, width, _) = noisy.own_mark().unwrap();
+        assert!(width < 192 && bytes.len() <= MessageStyle::MAX_MARK_IMAGE);
+        assert!(!animated_png(&bytes));
+    }
+    fn sent_card(style: &MessageStyle) -> Value {
+        posted(&message("Hola", style, Language::Es, "", &[], &[]).unwrap())
+    }
+
+    #[test]
+    fn a_band_without_text_shows_only_its_icon() {
+        let bare = MessageStyle {
+            hide_label: true,
+            ..style()
+        };
+        bare.validate().unwrap();
+        let columns = card("Hola", &bare, Language::Es)["body"][1]["items"][0]["columns"].clone();
+        assert_eq!(columns.as_array().unwrap().len(), 1);
+        assert_eq!(columns[0]["items"][0]["text"], "🤖");
+        assert!(
+            !card("Hola", &bare, Language::Es)
+                .to_string()
+                .contains("Respuesta generada")
+        );
+        // Signed, the mark alone still opens the site.
+        let signed = MessageStyle {
+            kuroko: true,
+            ..bare.clone()
+        };
+        let columns = card("Hola", &signed, Language::Es)["body"][1]["items"][0]["columns"].clone();
+        assert_eq!(columns.as_array().unwrap().len(), 1);
+        assert_eq!(
+            columns[0]["items"][0]["selectAction"]["url"],
+            MessageStyle::KUROKO_URL
+        );
+        // A band with neither text nor icon would say nothing.
+        assert!(
+            MessageStyle {
+                icon: false,
+                ..bare
+            }
+            .validate()
+            .is_err()
+        );
     }
     fn detect_png(bytes: &[u8]) -> bool {
         matches!(

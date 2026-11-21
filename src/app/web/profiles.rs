@@ -553,6 +553,7 @@ pub(super) const PORTAL_METHODS: &[&str] = &[
     "stop_assistant",
     "restart",
     "validate",
+    "mark_image_prepare",
     "save_settings",
     "import_existing",
     "set_credential",

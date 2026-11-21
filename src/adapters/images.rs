@@ -4,7 +4,8 @@
 //! the bytes to the host, which checks them again. The type comes only from the bytes (PNG,
 //! JPEG, GIF), never from a name, an extension or a declared type. Graph caps a write request at
 //! 4 MB and base64 adds a third, so all the images of a message share [`MAX_TOTAL`] bytes, which
-//! leaves room for the band's animated mark (`card::MARK`).
+//! leaves room for the band's hosted image (`card::MARK` or the user's own, up to
+//! `MessageStyle::MAX_MARK_IMAGE`).
 //!
 //! Graph refuses every GIF hosted content (HTTP 400, whatever its size), and Teams draws an
 //! animated PNG, so a GIF becomes the animated PNG of its frames ([`gif_to_png`]) before it is
@@ -167,18 +168,7 @@ impl Image {
     }
     /// Reads a regular file, refusing one larger than an image may be before reading it.
     pub fn read(path: &Path, alt: &str) -> Result<Self, ImageRefusal> {
-        let file = std::fs::File::open(path).map_err(|_| ImageRefusal::Unreadable)?;
-        let metadata = file.metadata().map_err(|_| ImageRefusal::Unreadable)?;
-        if !metadata.is_file() {
-            return Err(ImageRefusal::Unreadable);
-        }
-        if metadata.len() > MAX_TOTAL as u64 {
-            return Err(ImageRefusal::TooLarge);
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_TOTAL as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ImageRefusal::Unreadable)?;
+        let bytes = read_bytes(path)?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -297,6 +287,23 @@ pub fn from_list(
     Ok(images)
 }
 
+/// The bytes of a regular file of at most [`MAX_TOTAL`], refused before reading a larger one.
+pub fn read_bytes(path: &Path) -> Result<Vec<u8>, ImageRefusal> {
+    let file = std::fs::File::open(path).map_err(|_| ImageRefusal::Unreadable)?;
+    let metadata = file.metadata().map_err(|_| ImageRefusal::Unreadable)?;
+    if !metadata.is_file() {
+        return Err(ImageRefusal::Unreadable);
+    }
+    if metadata.len() > MAX_TOTAL as u64 {
+        return Err(ImageRefusal::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_TOTAL as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ImageRefusal::Unreadable)?;
+    Ok(bytes)
+}
+
 /// The limits of one message's images together.
 pub fn check(images: &[Image]) -> Result<(), ImageRefusal> {
     if images.len() > MAX_IMAGES {
@@ -312,6 +319,271 @@ pub fn check(images: &[Image]) -> Result<(), ImageRefusal> {
 /// says, with its delay (a delay of 0 or 1 hundredths plays at 10, as browsers do) and its
 /// repetitions. Decoded twice, counting frames first, so only one canvas is ever held.
 pub fn gif_to_png(bytes: &[u8]) -> Result<Vec<u8>, ImageRefusal> {
+    gif_frames(bytes, None)
+}
+
+/// The image as a PNG at most `side` pixels on its longest side, never enlarged: a GIF or an
+/// animated PNG keeps its frames, delays and repetitions, each frame averaged down. A JPEG is
+/// `Unsupported` (the GUI, which can draw one, reduces a still image itself).
+pub fn reduced_png(bytes: &[u8], side: u32) -> Result<Vec<u8>, ImageRefusal> {
+    match detect(bytes).map(|(kind, ..)| kind) {
+        Some(Kind::Gif) => gif_frames(bytes, Some(side)),
+        Some(Kind::Png) => png_frames(bytes, side),
+        _ => Err(ImageRefusal::Unsupported),
+    }
+}
+
+/// Whether a PNG is animated: an `acTL` chunk before its image data.
+pub fn animated_png(bytes: &[u8]) -> bool {
+    let mut at = 8;
+    while let Some(header) = bytes.get(at..at + 8) {
+        let length = u32::from_be_bytes(header[..4].try_into().expect("4 bytes")) as usize;
+        match &header[4..] {
+            b"acTL" => return true,
+            b"IDAT" => return false,
+            _ => at = at.saturating_add(12).saturating_add(length),
+        }
+    }
+    false
+}
+
+/// `size` fitted within `side` pixels on its longest side, keeping its proportions; never larger.
+fn fitted((width, height): (usize, usize), side: Option<u32>) -> (usize, usize) {
+    let long = width.max(height);
+    match side.map(|side| side as usize) {
+        Some(side) if long > side => (
+            ((width * side + long / 2) / long).max(1),
+            ((height * side + long / 2) / long).max(1),
+        ),
+        _ => (width, height),
+    }
+}
+
+/// An RGBA canvas of `from` pixels averaged down to `to` (each output pixel the mean of the
+/// source pixels it covers, weighted by their opacity so transparent ones lend no color).
+fn scaled(canvas: &[u8], from: (usize, usize), to: (usize, usize)) -> Vec<u8> {
+    if from == to {
+        return canvas.to_vec();
+    }
+    let ((width, height), (out_width, out_height)) = (from, to);
+    let mut out = vec![0u8; out_width * out_height * 4];
+    for oy in 0..out_height {
+        let (y0, y1) = (
+            oy * height / out_height,
+            ((oy + 1) * height / out_height).max(oy * height / out_height + 1),
+        );
+        for ox in 0..out_width {
+            let (x0, x1) = (
+                ox * width / out_width,
+                ((ox + 1) * width / out_width).max(ox * width / out_width + 1),
+            );
+            let mut sum = [0u64; 4];
+            for y in y0..y1.min(height) {
+                let row = &canvas[(y * width + x0) * 4..(y * width + x1.min(width)) * 4];
+                for pixel in row.as_chunks::<4>().0 {
+                    let alpha = u64::from(pixel[3]);
+                    for channel in 0..3 {
+                        sum[channel] += u64::from(pixel[channel]) * alpha;
+                    }
+                    sum[3] += alpha;
+                }
+            }
+            let count = ((y1.min(height) - y0) * (x1.min(width) - x0)) as u64;
+            if sum[3] > 0 && count > 0 {
+                let to = (oy * out_width + ox) * 4;
+                for channel in 0..3 {
+                    out[to + channel] = (sum[channel] / sum[3]) as u8;
+                }
+                out[to + 3] = (sum[3] / count) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// The PNG writer of a conversion: every frame is the whole canvas, scaled to its output size.
+struct Frames<'a> {
+    writer: png::Writer<&'a mut Capped>,
+    size: (usize, usize),
+    out: (usize, usize),
+    animated: bool,
+}
+impl<'a> Frames<'a> {
+    fn start(
+        target: &'a mut Capped,
+        size: (usize, usize),
+        out: (usize, usize),
+        frames: u32,
+        plays: u32,
+    ) -> Result<Self, ImageRefusal> {
+        let failed = |_| ImageRefusal::Unsupported;
+        let mut encoder = png::Encoder::new(target, out.0 as u32, out.1 as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        if frames > 1 {
+            encoder.set_animated(frames, plays).map_err(failed)?;
+        }
+        Ok(Self {
+            writer: encoder.write_header().map_err(failed)?,
+            size,
+            out,
+            animated: frames > 1,
+        })
+    }
+    /// One frame shown for `delay` (numerator, denominator) seconds.
+    fn frame(&mut self, canvas: &[u8], delay: (u16, u16)) -> Result<(), ImageRefusal> {
+        let failed = |_| ImageRefusal::Unsupported;
+        if self.animated {
+            self.writer
+                .set_frame_delay(delay.0, delay.1)
+                .map_err(failed)?;
+        }
+        self.writer
+            .write_image_data(&scaled(canvas, self.size, self.out))
+            .map_err(failed)
+    }
+    fn finish(self) -> Result<(), ImageRefusal> {
+        self.writer.finish().map_err(|_| ImageRefusal::Unsupported)
+    }
+}
+
+/// The frames of an animated or still PNG, composed as APNG says and written at most `side`
+/// pixels on their longest side. Decoded twice, counting first, like a GIF.
+fn png_frames(bytes: &[u8], side: u32) -> Result<Vec<u8>, ImageRefusal> {
+    let failed = |_| ImageRefusal::Unsupported;
+    let open = || {
+        let mut decoder = png::Decoder::new_with_limits(
+            std::io::Cursor::new(bytes),
+            png::Limits {
+                bytes: 8 * MAX_GIF_CANVAS,
+            },
+        );
+        decoder.set_transformations(png::Transformations::normalize_to_color8());
+        decoder.read_info().map_err(|_| ImageRefusal::Unsupported)
+    };
+    let mut reader = open()?;
+    let info = reader.info();
+    let (width, height) = (info.width as usize, info.height as usize);
+    let canvas_pixels = width * height;
+    if canvas_pixels == 0 {
+        return Err(ImageRefusal::Unsupported);
+    }
+    if canvas_pixels > MAX_GIF_CANVAS {
+        return Err(ImageRefusal::GifTooLarge);
+    }
+    // Without `fcTL` before the image data, the default image is not one of the frames.
+    let (frames, plays, skip_default) = match &info.animation_control {
+        Some(animation) => (
+            animation.num_frames.max(1),
+            animation.num_plays,
+            info.frame_control.is_none(),
+        ),
+        None => (1, 0, false),
+    };
+    if frames as usize * canvas_pixels > MAX_GIF_PIXELS {
+        return Err(ImageRefusal::GifTooLarge);
+    }
+    let mut buffer = vec![
+        0u8;
+        reader
+            .output_buffer_size()
+            .ok_or(ImageRefusal::GifTooLarge)?
+    ];
+    if skip_default {
+        reader.next_frame(&mut buffer).map_err(failed)?;
+    }
+    let mut out = Capped::default();
+    let written = (|| {
+        let mut writer = Frames::start(
+            &mut out,
+            (width, height),
+            fitted((width, height), Some(side)),
+            frames,
+            plays,
+        )?;
+        let mut canvas = vec![0u8; canvas_pixels * 4];
+        for at in 0..frames {
+            let output = reader.next_frame(&mut buffer).map_err(failed)?;
+            let control = reader.info().frame_control.unwrap_or(png::FrameControl {
+                width: width as u32,
+                height: height as u32,
+                ..Default::default()
+            });
+            let (left, top) = (control.x_offset as usize, control.y_offset as usize);
+            let (frame_width, frame_height) = (output.width as usize, output.height as usize);
+            let channels = match output.color_type {
+                png::ColorType::Grayscale => 1,
+                png::ColorType::GrayscaleAlpha => 2,
+                png::ColorType::Rgb => 3,
+                png::ColorType::Rgba => 4,
+                png::ColorType::Indexed => return Err(ImageRefusal::Unsupported),
+            };
+            // The first frame's «previous» is the cleared canvas, as APNG says.
+            let previous = (control.dispose_op == png::DisposeOp::Previous).then(|| {
+                if at == 0 {
+                    vec![0u8; canvas.len()]
+                } else {
+                    canvas.clone()
+                }
+            });
+            for y in 0..frame_height.min(height.saturating_sub(top)) {
+                let row = &buffer[y * output.line_size..];
+                for x in 0..frame_width.min(width.saturating_sub(left)) {
+                    let sample = &row[x * channels..x * channels + channels];
+                    let pixel = match channels {
+                        1 => [sample[0], sample[0], sample[0], 255],
+                        2 => [sample[0], sample[0], sample[0], sample[1]],
+                        3 => [sample[0], sample[1], sample[2], 255],
+                        _ => [sample[0], sample[1], sample[2], sample[3]],
+                    };
+                    let to = ((top + y) * width + left + x) * 4;
+                    let below = &mut canvas[to..to + 4];
+                    if control.blend_op == png::BlendOp::Source || pixel[3] == 255 {
+                        below.copy_from_slice(&pixel);
+                    } else if pixel[3] > 0 {
+                        // Over: the frame's pixel drawn on what is below it.
+                        let (top_alpha, under) = (u32::from(pixel[3]), u32::from(below[3]));
+                        let alpha = top_alpha * 255 + under * (255 - top_alpha);
+                        for channel in 0..3 {
+                            below[channel] = ((u32::from(pixel[channel]) * top_alpha * 255
+                                + u32::from(below[channel]) * under * (255 - top_alpha))
+                                / alpha) as u8;
+                        }
+                        below[3] = (alpha / 255) as u8;
+                    }
+                }
+            }
+            let delay = match (control.delay_num, control.delay_den) {
+                (0, _) => (1, 10),
+                (num, 0) => (num, 100),
+                delay => delay,
+            };
+            writer.frame(&canvas, delay)?;
+            match (control.dispose_op, previous) {
+                (png::DisposeOp::Background, _) => {
+                    for y in top..(top + frame_height).min(height) {
+                        let row = y * width;
+                        canvas[(row + left.min(width)) * 4
+                            ..(row + (left + frame_width).min(width)) * 4]
+                            .fill(0);
+                    }
+                }
+                (png::DisposeOp::Previous, Some(previous)) => canvas = previous,
+                _ => {}
+            }
+        }
+        writer.finish()
+    })();
+    if out.full {
+        return Err(ImageRefusal::GifTooLarge);
+    }
+    written?;
+    Ok(out.bytes)
+}
+
+/// The frames of a GIF as a PNG, at most `side` pixels on their longest side when one is given.
+fn gif_frames(bytes: &[u8], side: Option<u32>) -> Result<Vec<u8>, ImageRefusal> {
     let open = || {
         let mut options = gif::DecodeOptions::new();
         options.set_color_output(gif::ColorOutput::RGBA);
@@ -352,7 +624,14 @@ pub fn gif_to_png(bytes: &[u8]) -> Result<Vec<u8>, ImageRefusal> {
     let mut decoder = open()?;
     let mut out = Capped::default();
     // Writing stops at the first byte past what a message carries.
-    let encoded = encode_frames(&mut decoder, &mut out, (width, height), frames, plays);
+    let encoded = encode_frames(
+        &mut decoder,
+        &mut out,
+        (width, height),
+        fitted((width, height), side),
+        frames,
+        plays,
+    );
     if out.full {
         return Err(ImageRefusal::GifTooLarge);
     }
@@ -384,18 +663,11 @@ fn encode_frames(
     decoder: &mut gif::Decoder<&[u8]>,
     out: &mut Capped,
     (width, height): (usize, usize),
+    size: (usize, usize),
     frames: u32,
     plays: u32,
 ) -> Result<(), ImageRefusal> {
-    let failed = |_| ImageRefusal::Unsupported;
-    let mut encoder = png::Encoder::new(out, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::High);
-    if frames > 1 {
-        encoder.set_animated(frames, plays).map_err(failed)?;
-    }
-    let mut writer = encoder.write_header().map_err(failed)?;
+    let mut writer = Frames::start(out, (width, height), size, frames, plays)?;
     let mut canvas = vec![0u8; width * height * 4];
     while let Some(frame) = decoder
         .read_next_frame()
@@ -419,11 +691,8 @@ fn encode_frames(
                 }
             }
         }
-        if frames > 1 {
-            let delay = if frame.delay <= 1 { 10 } else { frame.delay };
-            writer.set_frame_delay(delay, 100).map_err(failed)?;
-        }
-        writer.write_image_data(&canvas).map_err(failed)?;
+        let delay = if frame.delay <= 1 { 10 } else { frame.delay };
+        writer.frame(&canvas, (delay, 100))?;
         match (frame.dispose, previous) {
             (gif::DisposalMethod::Background, _) => {
                 for y in top..(top + frame_height).min(height) {
@@ -437,7 +706,7 @@ fn encode_frames(
             _ => {}
         }
     }
-    writer.finish().map_err(failed)
+    writer.finish()
 }
 
 /// The type and size of an image, read from its header; `None` for anything else.

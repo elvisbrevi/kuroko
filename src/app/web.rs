@@ -520,7 +520,10 @@ fn router(portal: Arc<Portal>) -> Router {
         .route("/login", get(login))
         .route("/api/session", get(session))
         .route("/api/logout", post(logout))
-        .route("/api/control", post(command))
+        .route(
+            "/api/control",
+            post(command).layer(DefaultBodyLimit::max(super::page::CONTROL_BODY_LIMIT)),
+        )
         .route("/api/machines", post(machine_command))
         .route("/api/enrollment", post(enrollment::browser))
         // The remote MCP endpoint for agents: the same edge identity, never the session cookie.
