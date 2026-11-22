@@ -410,7 +410,10 @@ pub(in crate::app) async fn tick(
     // A run that waits for the person after a coding session stopped while it worked: the
     // session they continue to its final report is delivered by itself (`watch_continued`).
     for run in state.db.list(&[Phase::NeedsAttention], None, -1)? {
-        if unrecovered.contains(&run.id) || !state.inflight.lock().unwrap().insert(run.id.clone()) {
+        if unrecovered.contains(&run.id)
+            || !continued_due(&run, now, poll)
+            || !state.inflight.lock().unwrap().insert(run.id.clone())
+        {
             continue;
         }
         let guard = Inflight(host.clone(), run.id.clone());
@@ -630,6 +633,12 @@ pub(super) fn time_limit(
                 .time_limit_minutes
                 .unwrap_or(crate::workflows::director::DEFAULT_TIME_LIMIT_MINUTES)
         })
+}
+/// The time limit a launched session's record keeps: none for the default two hours, so the
+/// record stays readable by a host from before the limit was configurable
+/// (`deny_unknown_fields`); a status reads none as the default.
+pub(super) fn recorded_limit(minutes: u32) -> Option<u32> {
+    (minutes != crate::workflows::director::DEFAULT_TIME_LIMIT_MINUTES).then_some(minutes)
 }
 /// `ended {state}`, with the cause's sentence when there is one.
 pub(super) fn ended(state: &str, failure: Option<crate::llm::implementation::Failure>) -> String {
@@ -1402,7 +1411,7 @@ async fn planning(
             Ok(_) => {
                 if let Some(p) = run.planning.as_mut() {
                     p.started = true;
-                    p.time_limit_minutes = Some(limit);
+                    p.time_limit_minutes = recorded_limit(limit);
                 }
                 run.error = None;
                 Ok(true)
@@ -2270,7 +2279,7 @@ async fn coding(
                 let child = &mut run.children[index];
                 if let Some(c) = child.coding.as_mut() {
                     c.started = true;
-                    c.time_limit_minutes = Some(limit);
+                    c.time_limit_minutes = recorded_limit(limit);
                 }
                 child.repository = Some(repository);
                 child.directory = Some(directory);
@@ -2544,32 +2553,59 @@ async fn recover_continued(host: &Arc<Host>, run: &mut Run, now: i64) -> Vec<Val
         if observed["state"] != "done" {
             continue;
         }
-        let mut delivered = child.clone();
-        record_branches(
-            &mut delivered,
-            &workflow,
-            task,
-            observed["output"].as_str().unwrap_or_default(),
-        );
-        if !delivered.reported() {
+        let output = observed["output"].as_str().unwrap_or_default();
+        let Some(delivered) = continued_delivery(child, &workflow, task, output, now) else {
             continue;
-        }
-        delivered.outcome = Some("done".into());
-        delivered.finished_at = Some(now);
-        if let Some(c) = delivered.coding.as_mut() {
-            c.state = Some("done".into());
-            c.failure = None;
-        }
+        };
         recovered.push(json!({"child": delivered.url, "coding_run": coding.id, "continued": true}));
         run.children[index] = delivered;
     }
     recovered
 }
 
+/// The child as a continued session delivered it: `done` with the branches its final report
+/// names, its coding run `done` without its failure. None when the report names no branch: a
+/// session that ended without delivering is left for the person, who may continue it again.
+fn continued_delivery(
+    child: &Child,
+    workflow: &crate::workflows::Workflow,
+    task: bool,
+    output: &str,
+    now: i64,
+) -> Option<Child> {
+    let mut delivered = child.clone();
+    record_branches(&mut delivered, workflow, task, output);
+    if !delivered.reported() {
+        return None;
+    }
+    delivered.outcome = Some("done".into());
+    delivered.finished_at = Some(now);
+    if let Some(c) = delivered.coding.as_mut() {
+        c.state = Some("done".into());
+        c.failure = None;
+    }
+    Some(delivered)
+}
+
+/// How long after a run stopped its continued session is watched (`watch_continued`): three
+/// days. Later, resuming the run by hand still recovers a report the session wrote.
+const CONTINUED_WATCH: i64 = 3 * 24 * 60 * 60;
+
+/// Whether a run waiting for the person is due a look at its continued session: stopped in its
+/// coding stage or because nothing was delivered, within `CONTINUED_WATCH` of its stop and not
+/// read in the last `poll` seconds. Decided before any task is spawned or machine called.
+fn continued_due(run: &Run, now: i64, poll: i64) -> bool {
+    let nothing_delivered = run.cause.as_deref() == Some("nothing_delivered");
+    let coding = run.stopped_in == Some(Phase::Coding) && run.cause.is_none();
+    (nothing_delivered || coding)
+        && now - run.updated_at < CONTINUED_WATCH
+        && run.checked_at.is_none_or(|at| now - at >= poll)
+}
+
 /// A run stopped on a coding session that did not end with its answer, while it waits for the
-/// person: the session they continue to its final report (`Cause::continuable`) is delivered by
-/// itself, read at most every `poll` seconds. Stopped in its coding stage, the child is `done`
-/// with its report and the run codes on; stopped because nothing was delivered, the branches
+/// person: the session they continue to a final report that names its branches
+/// (`Cause::continuable`) is delivered by itself, read at most every `poll` seconds. Stopped in
+/// its coding stage, the child is `done` with its report and the run codes on; stopped because nothing was delivered, the branches
 /// it reports are waited for. Returns whether the run changed.
 async fn watch_continued(
     host: &Arc<Host>,
@@ -2578,11 +2614,10 @@ async fn watch_continued(
     now: i64,
     poll: i64,
 ) -> bool {
-    let nothing_delivered = run.cause.as_deref() == Some("nothing_delivered");
-    let coding = run.stopped_in == Some(Phase::Coding) && run.cause.is_none();
-    if !(nothing_delivered || coding) || run.checked_at.is_some_and(|at| now - at < poll) {
+    if !continued_due(run, now, poll) {
         return false;
     }
+    let nothing_delivered = run.cause.as_deref() == Some("nothing_delivered");
     let watched = |c: &Child| {
         c.coding
             .as_ref()
@@ -2624,21 +2659,12 @@ async fn watch_continued(
     let (Some(workflow), task) = (run.definition.clone(), run.task()) else {
         return true;
     };
-    {
-        let child = &mut run.children[index];
-        record_branches(
-            child,
-            &workflow,
-            task,
-            observed["output"].as_str().unwrap_or_default(),
-        );
-        child.outcome = Some("done".into());
-        child.finished_at = Some(now);
-        if let Some(c) = child.coding.as_mut() {
-            c.state = Some("done".into());
-            c.failure = None;
-        }
-    }
+    let output = observed["output"].as_str().unwrap_or_default();
+    let Some(delivered) = continued_delivery(&run.children[index], &workflow, task, output, now)
+    else {
+        return true;
+    };
+    run.children[index] = delivered;
     let _ = detect(host, azure, run, index).await;
     run.advance(Phase::Coding, now, "continued");
     run.checked_at = None;

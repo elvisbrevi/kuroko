@@ -487,7 +487,7 @@ pub(super) async fn step(
             Ok(_) => {
                 if let Some(c) = round.coding.as_mut() {
                     c.started = true;
-                    c.time_limit_minutes = Some(limit);
+                    c.time_limit_minutes = super::engine::recorded_limit(limit);
                 }
                 set_round(run, index, round);
                 run.error = None;

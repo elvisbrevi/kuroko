@@ -895,8 +895,9 @@ fn text_of(content: &Value, kinds: &[&str]) -> String {
 /// A Claude Code line as the user's own request (`true`) or the agent's answer, with its text;
 /// none for side chains, meta and compaction summaries, tool results, and lines whose text is
 /// only what Claude Code injects (shell input and output, commands, task notifications).
-fn claude_message(line: &Value) -> Option<(bool, String)> {
-    if [
+/// A line of the conversation's own thread: not a subagent's, a meta line or a summary.
+fn claude_shown(line: &Value) -> bool {
+    ![
         "isSidechain",
         "isMeta",
         "isCompactSummary",
@@ -904,7 +905,9 @@ fn claude_message(line: &Value) -> Option<(bool, String)> {
     ]
     .iter()
     .any(|flag| line[*flag] == true)
-    {
+}
+fn claude_message(line: &Value) -> Option<(bool, String)> {
+    if !claude_shown(line) {
         return None;
     }
     let user = match line["type"].as_str() {
@@ -918,8 +921,10 @@ fn claude_message(line: &Value) -> Option<(bool, String)> {
     (!own.is_empty() && !own.starts_with("[Request interrupted")).then(|| (user, own.to_owned()))
 }
 /// The final report of Claude session `session` under `root` (`projects/<directory>/<session>.jsonl`)
-/// written after `after` (RFC 3339): its last message, when that is an answer of the agent (its
-/// consecutive text lines of one message joined) and was written after that time. None when the
+/// written after `after` (RFC 3339): its last message, when that is an answer of the agent that
+/// ended its turn (its consecutive text lines of one message joined, the last one with
+/// `stop_reason` `end_turn`, and no tool call or result after it) and was written after that
+/// time. A text the agent wrote before calling a tool is progress, not a report. None when the
 /// file is not there, is marked private, or ends otherwise. Unscrubbed: the caller keeps it as a
 /// run's report, redacted and bounded like one.
 pub fn claude_final_answer(root: &Path, session: &str, after: &str) -> Result<Option<String>> {
@@ -940,29 +945,41 @@ pub fn claude_final_answer(root: &Path, session: &str, after: &str) -> Result<Op
         return Ok(None);
     }
     let after = chrono::DateTime::parse_from_rfc3339(after)?;
-    // The last message: who wrote it, its message ID, its text and when.
-    let mut last: Option<(bool, String, String, String)> = None;
+    // The last message: who wrote it, its message ID, its text, when, and whether it ended the turn.
+    let mut last: Option<(bool, String, String, String, bool)> = None;
     for line in json_lines(&path)? {
-        let Some((user, text)) = claude_message(&line) else {
+        if !claude_shown(&line) || !matches!(line["type"].as_str(), Some("user" | "assistant")) {
             continue;
-        };
+        }
         let id = line["message"]["id"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
+        let ended = line["message"]["stop_reason"] == "end_turn";
+        let Some((user, text)) = claude_message(&line) else {
+            // A tool call or result (or an interruption) after the text: the turn went on. A
+            // line of the same answer without text (its thinking) changes nothing.
+            if !matches!(&last, Some((false, previous, ..)) if !id.is_empty() && *previous == id) {
+                last = None;
+            }
+            continue;
+        };
         let at = line["timestamp"].as_str().unwrap_or_default().to_owned();
         match &mut last {
-            Some((false, previous, joined, when)) if !user && !id.is_empty() && *previous == id => {
+            Some((false, previous, joined, when, done))
+                if !user && !id.is_empty() && *previous == id =>
+            {
                 joined.push('\n');
                 joined.push_str(&text);
                 *when = at;
+                *done = ended;
             }
-            _ => last = Some((user, id, text, at)),
+            _ => last = Some((user, id, text, at, ended)),
         }
     }
-    Ok(last.and_then(|(user, _, text, at)| {
+    Ok(last.and_then(|(user, _, text, at, ended)| {
         let at = chrono::DateTime::parse_from_rfc3339(&at).ok()?;
-        (!user && at > after).then_some(text)
+        (!user && ended && at > after).then_some(text)
     }))
 }
 /// Claude Code: one JSON-lines file per session under `projects/<directory>/`.

@@ -235,6 +235,25 @@ async fn older_delivery(host: &Arc<Host>, workflow: &Workflow) -> Option<String>
     })
 }
 
+/// A workflow with its own session time limit is refused by a host from before it (0.19.1 or
+/// older, `deny_unknown_fields`): the save names the account's machines that report one.
+async fn older_time_limit(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
+    workflow.agent.time_limit_minutes?;
+    let older = implementation::machines_until(host, core::OLDER_TIME_LIMIT_UNTIL)
+        .await
+        .unwrap_or_default();
+    (!older.is_empty()).then(|| {
+        format!(
+            "Workflow {} has its own session time limit, which hosts of release {} or older cannot read: {} {} the account's configuration while this workflow is in it (keeping the copy {} have) until updated.",
+            workflow.id,
+            core::OLDER_TIME_LIMIT_UNTIL,
+            older.join(", "),
+            if older.len() == 1 { "refuses" } else { "refuse" },
+            if older.len() == 1 { "it" } else { "they" }
+        )
+    })
+}
+
 async fn older_hosts(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
     let characters = workflow.instructions.chars().count();
     if characters <= core::OLDER_MAX_INSTRUCTIONS
@@ -542,6 +561,7 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             warnings.extend(older_hosts(host, &saved).await);
             warnings.extend(older_supervisors(host, &saved).await);
             warnings.extend(older_delivery(host, &saved).await);
+            warnings.extend(older_time_limit(host, &saved).await);
             Ok(json!({"workflow":shown(&saved),"saved":true,"usage":used,"warnings":warnings}))
         }
         _ => Err(invalid(

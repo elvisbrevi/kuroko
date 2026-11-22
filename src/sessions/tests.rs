@@ -1046,7 +1046,7 @@ fn the_final_report_of_a_continued_claude_session_is_its_last_answer_after_the_s
     let path = root
         .path()
         .join(format!("projects/D--code-payments/{id}.jsonl"));
-    let line = |kind: &str, message: &str, text: &str, minutes: u64| json!({"type":kind,"sessionId":id,"message":{"id":message,"role":kind,"content":[{"type":"text","text":text}]},"timestamp":at(minutes)});
+    let line = |kind: &str, message: &str, text: &str, minutes: u64| json!({"type":kind,"sessionId":id,"message":{"id":message,"role":kind,"content":[{"type":"text","text":text}],"stop_reason":(kind == "assistant").then_some("end_turn")},"timestamp":at(minutes)});
     let stopped = at(10);
     // Before the stop, then continued: a request, a tool call, and the report in two lines.
     write_lines(
@@ -1055,7 +1055,7 @@ fn the_final_report_of_a_continued_claude_session_is_its_last_answer_after_the_s
             line("user", "", "Implement it.", 0),
             line("assistant", "m1", "Working on it.", 5),
             line("user", "", "Continue and finish.", 20),
-            json!({"type":"assistant","sessionId":id,"message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push"}}]},"timestamp":at(21)}),
+            json!({"type":"assistant","sessionId":id,"message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git push"}}],"stop_reason":"tool_use"},"timestamp":at(21)}),
             json!({"type":"user","sessionId":id,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"pushed"}]},"timestamp":at(21)}),
             line(
                 "assistant",
@@ -1093,6 +1093,35 @@ fn the_final_report_of_a_continued_claude_session_is_its_last_answer_after_the_s
     );
     assert_eq!(
         claude_final_answer(root.path(), waiting, &stopped).unwrap(),
+        None
+    );
+    // A session still working: its last text came before a tool call, or did not end the turn.
+    let working = "88888888-8888-4888-8888-888888888888";
+    let working_path = root
+        .path()
+        .join(format!("projects/D--code-payments/{working}.jsonl"));
+    write_lines(
+        &working_path,
+        &[
+            line("user", "", "Continue and finish.", 20),
+            json!({"type":"assistant","sessionId":working,"message":{"id":"m4","role":"assistant","content":[{"type":"text","text":"Now I'll run the tests."}],"stop_reason":"tool_use"},"timestamp":at(21)}),
+            json!({"type":"assistant","sessionId":working,"message":{"id":"m4","role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"cargo test"}}],"stop_reason":"tool_use"},"timestamp":at(21)}),
+            json!({"type":"user","sessionId":working,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]},"timestamp":at(22)}),
+        ],
+    );
+    assert_eq!(
+        claude_final_answer(root.path(), working, &stopped).unwrap(),
+        None
+    );
+    write_lines(
+        &working_path,
+        &[
+            line("user", "", "Continue and finish.", 20),
+            json!({"type":"assistant","sessionId":working,"message":{"id":"m4","role":"assistant","content":[{"type":"text","text":"Now I'll run the tests."}],"stop_reason":null},"timestamp":at(21)}),
+        ],
+    );
+    assert_eq!(
+        claude_final_answer(root.path(), working, &stopped).unwrap(),
         None
     );
     let unknown = "66666666-6666-4666-8666-666666666666";

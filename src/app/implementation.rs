@@ -1330,9 +1330,11 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
         }
         "implementation_runs" => {
             // The workflow engine asks for one run's continued report before it accepts that
-            // the run delivered nothing; reading never fails for it.
+            // the run delivered nothing. Recording it changes the run, so only an invocation that
+            // may execute recovers; reading never fails for it.
             if args["recover"] == true
                 && let Some(id) = args["id"].as_str()
+                && authority::require_execution(&host.state).is_ok()
             {
                 let _ = recover(host, id);
             }

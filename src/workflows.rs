@@ -44,6 +44,9 @@ pub const MAX_CONTEXT: usize = 100_000;
 pub const OLDER_LIMITS_UNTIL: &str = "0.12.22";
 /// The newest release whose hosts cannot read a workflow's `delivery`.
 pub const OLDER_DELIVERY_UNTIL: &str = "0.14.1";
+/// The newest release whose hosts cannot read a session time limit (a workflow's
+/// `agent.time_limit_minutes`, the settings' `coding_`/`planning_time_limit_minutes`).
+pub const OLDER_TIME_LIMIT_UNTIL: &str = "0.19.1";
 pub const OLDER_MAX_WORKFLOW_BLOCKS: usize = 10;
 pub const OLDER_MAX_INSTRUCTIONS: usize = 8000;
 pub const MAX_MENTIONS: usize = 20;

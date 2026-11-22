@@ -719,6 +719,10 @@ pub(super) async fn update(
         });
     }
     // The final list, with the projects the catalog resolved: re-setting a project replaces it.
+    let stored_limits = (
+        stored.coding_time_limit_minutes,
+        stored.planning_time_limit_minutes,
+    );
     let mut candidate = stored;
     apply(&mut candidate, &args, &resolved);
     core::validate(&candidate).map_err(invalid)?;
@@ -755,6 +759,31 @@ pub(super) async fn update(
                 "{} {} a version that predates the workflow supervisor: until updated, {} the account's configuration with these settings.",
                 older.join(", "),
                 if older.len() == 1 { "runs" } else { "run" },
+                if older.len() == 1 { "it refuses" } else { "they refuse" }
+            ));
+        }
+    }
+    // And one whose session time limits are not the default.
+    let limits = (
+        candidate.coding_time_limit_minutes,
+        candidate.planning_time_limit_minutes,
+    );
+    if limits != stored_limits
+        && limits
+            != (
+                core::DEFAULT_TIME_LIMIT_MINUTES,
+                core::DEFAULT_TIME_LIMIT_MINUTES,
+            )
+    {
+        let older = implementation::machines_until(host, crate::workflows::OLDER_TIME_LIMIT_UNTIL)
+            .await
+            .map_err(fail)?;
+        if !older.is_empty() {
+            warnings.push(format!(
+                "{} {} release {} or older, which cannot read session time limits: until updated, {} the account's configuration with these settings.",
+                older.join(", "),
+                if older.len() == 1 { "runs" } else { "run" },
+                crate::workflows::OLDER_TIME_LIMIT_UNTIL,
                 if older.len() == 1 { "it refuses" } else { "they refuse" }
             ));
         }
