@@ -44,6 +44,9 @@ pub const MAX_CONTEXT: usize = 100_000;
 pub const OLDER_LIMITS_UNTIL: &str = "0.12.22";
 /// The newest release whose hosts cannot read a workflow's `delivery`.
 pub const OLDER_DELIVERY_UNTIL: &str = "0.14.1";
+/// The newest release whose hosts cannot read a session time limit (a workflow's
+/// `agent.time_limit_minutes`, the settings' `coding_`/`planning_time_limit_minutes`).
+pub const OLDER_TIME_LIMIT_UNTIL: &str = "0.19.1";
 pub const OLDER_MAX_WORKFLOW_BLOCKS: usize = 10;
 pub const OLDER_MAX_INSTRUCTIONS: usize = 8000;
 pub const MAX_MENTIONS: usize = 20;
@@ -327,6 +330,11 @@ pub struct Agent {
     pub provider: String,
     pub model: String,
     pub effort: String,
+    /// Minutes each session of its runs (planning, coding, a review round) may take before it
+    /// is stopped (30 to 480); none takes the workflow settings' for its kind. Left out while
+    /// unset, so a workflow without it loads on an older host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_limit_minutes: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -656,6 +664,15 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<()> {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-'),
         "Workflow {id} needs its coding agent: provider (codex, claude or opencode), model and effort."
     );
+    if let Some(minutes) = agent.time_limit_minutes {
+        let range = director::TIME_LIMIT_MINUTES;
+        ensure!(
+            range.contains(&minutes),
+            "Workflow {id}'s agent.time_limit_minutes is between {} and {} minutes.",
+            range.start(),
+            range.end()
+        );
+    }
     ensure!(
         workflow.blocks.len() <= MAX_WORKFLOW_BLOCKS,
         "Workflow {id} has at most {MAX_WORKFLOW_BLOCKS} blocks (it lists {}).",
@@ -1225,6 +1242,7 @@ pub(crate) mod tests {
                 provider: "codex".into(),
                 model: "gpt-6.1-sol".into(),
                 effort: "medium".into(),
+                time_limit_minutes: None,
             },
             instructions: "Start from feature/222.".into(),
             ..Default::default()

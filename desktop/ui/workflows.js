@@ -331,8 +331,17 @@ function workflowEditor(draft, saved, renderFacts) {
   const model = el('select', {});
   const effort = el('select', {});
   const agentNote = el('p', { class: 'hint', role: 'status' });
+  // Each session of its runs; empty takes the workflow settings' limit for its kind.
+  const timeLimit = el('input', { type: 'number', min: 30, max: 480, step: 1, inputMode: 'numeric', placeholder: t('From the workflow settings'),
+    value: draft.agent.time_limit_minutes ? String(draft.agent.time_limit_minutes) : '', 'data-agent': 'time_limit_minutes' });
+  timeLimit.oninput = () => {
+    const minutes = Number.parseInt(timeLimit.value, 10);
+    if (Number.isInteger(minutes)) draft.agent.time_limit_minutes = minutes; else delete draft.agent.time_limit_minutes;
+    draft.changed = true;
+    changed();
+  };
   const fillAgent = providers => fillAgentChoices({ provider, model, effort }, providers, { ...draft.agent }, (agent, byUser) => {
-    draft.agent = agent;
+    draft.agent = { ...agent, ...(draft.agent.time_limit_minutes ? { time_limit_minutes: draft.agent.time_limit_minutes } : {}) };
     if (byUser) draft.changed = true;
     changed();
   });
@@ -542,7 +551,8 @@ function workflowEditor(draft, saved, renderFacts) {
       sources.length ? null : el('p', { class: 'hint', textContent: t('Enable an Azure DevOps source in Knowledge first: workflows read its projects and repositories.') }), projectProblem),
     el('label', {}, t('Execution machine'), el('small', { textContent: t('The computer the coding agent works on; each repository needs its checkout there.') }), machine),
     el('fieldset', {}, el('legend', { textContent: t('Repositories and checkouts') }), repositories, repositoryProblem, el('div', { class: 'actions' }, chooseRepos)),
-    el('div', { class: 'grid' }, el('label', {}, t('CLI'), provider), el('label', {}, t('Model'), model), el('label', {}, t('Effort'), effort)), agentNote,
+    el('div', { class: 'grid' }, el('label', {}, t('CLI'), provider), el('label', {}, t('Model'), model), el('label', {}, t('Effort'), effort),
+      el('label', {}, t('Session time limit (minutes)'), el('small', { textContent: t('From 30 to 480, for each planning, coding or review session of its runs.') }), timeLimit)), agentNote,
     instructions,
     el('fieldset', {}, el('legend', { textContent: t('Blocks, in order') }), blockList, blockCount,
       el('div', { class: 'workflow-add' }, el('label', {}, t('Block from the library'), addChoice), addBlock), el('div', { class: 'actions' }, library)),
@@ -569,6 +579,8 @@ function missingFields(draft, saved) {
   const without = draft.repositories.filter(r => !draft.checkouts[r.id.toLowerCase()]);
   if (without.length) missing.push(t('Choose the checkout of {names}.', { names: without.map(r => r.name).join(', ') }));
   if (!draft.agent.provider || !draft.agent.model || !draft.agent.effort) missing.push(t('Choose the coding agent, its model and effort.'));
+  const limit = draft.agent.time_limit_minutes;
+  if (limit !== undefined && !(Number.isInteger(limit) && limit >= 30 && limit <= 480)) missing.push(t('Give the session time limit between 30 and 480 minutes, or leave it empty.'));
   if ([...draft.instructions].length > LIMITS.instructions) missing.push(t('Shorten the instructions.'));
   if (draft.blocks.length > LIMITS.blocks) missing.push(t('Keep at most {n} blocks.', { n: LIMITS.blocks }));
   return missing;

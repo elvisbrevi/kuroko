@@ -265,6 +265,7 @@ pub(super) async fn operation(
             let run = found(&host.state, &a.run)?;
             let mut view = placed(run.view(), &run, &places(&host.state)?);
             sessions(host, &mut view).await;
+            item_state(host, azure, &run, &mut view).await;
             view["supervising"] = json!(super::supervisor::queued(&host.state, &run.id));
             Ok(json!({ "run": view }))
         }
@@ -497,7 +498,88 @@ async fn sessions(host: &Arc<Host>, view: &mut Value) {
     for index in 0..view["children"].as_array().map_or(0, Vec::len) {
         if view["children"][index]["coding"].is_object() {
             mark(host, &mut view["children"][index]["coding"]).await;
+            stops(&mut view["children"][index], now());
         }
+    }
+}
+/// How long the item's state read for a run's status is kept: a run's detail is read every few
+/// seconds while it is open. A read that failed is kept `ITEM_STATE_FAILED_SECONDS`, so a slow
+/// or failing Azure DevOps is not asked again on every poll.
+const ITEM_STATE_SECONDS: i64 = 300;
+const ITEM_STATE_FAILED_SECONDS: i64 = 60;
+/// The work item's state as Azure DevOps has it now (`item.state`, read at most every
+/// `ITEM_STATE_SECONDS` per run, with `state_read_at`); the record keeps the state the run took
+/// it in (`state_when_taken`). When it cannot be read, `item.state` is that one and
+/// `state_read_at` is null.
+async fn item_state(host: &Arc<Host>, azure: &Azure, run: &Run, view: &mut Value) {
+    type Reads = BTreeMap<String, (i64, Option<String>)>;
+    static READ: std::sync::OnceLock<std::sync::Mutex<Reads>> = std::sync::OnceLock::new();
+    let read = READ.get_or_init(Default::default);
+    let fresh = |now: i64, (at, state): &(i64, Option<String>)| {
+        now - at
+            < if state.is_some() {
+                ITEM_STATE_SECONDS
+            } else {
+                ITEM_STATE_FAILED_SECONDS
+            }
+    };
+    view["item"]["state_when_taken"] = json!(run.item.state);
+    view["item"]["state_read_at"] = Value::Null;
+    let now = now();
+    let cached = read
+        .lock()
+        .unwrap()
+        .get(&run.id)
+        .filter(|entry| fresh(now, entry))
+        .cloned();
+    let found = match cached {
+        Some(found) => found,
+        None => {
+            let state = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                azure.item(
+                    &host.state,
+                    run.item.source.as_deref(),
+                    Some(&run.item.project),
+                    run.item.id,
+                ),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map(|detail| detail.item.state);
+            let found = (now, state);
+            let mut read = read.lock().unwrap();
+            read.retain(|_, entry| fresh(now, entry));
+            read.insert(run.id.clone(), found.clone());
+            found
+        }
+    };
+    let current = found.1.map(|state| (found.0, state));
+    if let Some((at, state)) = current {
+        view["item"]["state"] = json!(state);
+        view["item"]["state_read_at"] = json!(at);
+    }
+}
+/// While a child's coding session runs: its time limit (none recorded is the default two hours,
+/// `engine::recorded_limit`), when it stops the session (`stops_at`, Unix seconds, from when
+/// its machine accepted the launch) and the seconds left.
+fn stops(child: &mut Value, now: i64) {
+    let coding = &child["coding"];
+    let running = coding["started"] == true
+        && matches!(coding["state"].as_str(), None | Some("running"))
+        && child["outcome"].is_null();
+    let Some(started) = child["started_at"].as_i64() else {
+        return;
+    };
+    let minutes = coding["time_limit_minutes"].as_i64().unwrap_or(i64::from(
+        crate::workflows::director::DEFAULT_TIME_LIMIT_MINUTES,
+    ));
+    if running {
+        let stops_at = started + minutes * 60;
+        child["coding"]["time_limit_minutes"] = json!(minutes);
+        child["coding"]["stops_at"] = json!(stops_at);
+        child["coding"]["seconds_left"] = json!((stops_at - now).max(0));
     }
 }
 

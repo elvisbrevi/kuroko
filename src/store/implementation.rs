@@ -14,6 +14,14 @@ use serde_json::{Value, json};
 
 /// States of an agent run that has not finished.
 pub(crate) const RUNS_IN_FLIGHT: [&str; 2] = ["running", "planning"];
+/// The final states of an agent run whose session stopped before its answer while it worked;
+/// with a continuable cause (`Cause::continuable`) the person may continue it.
+pub(crate) const STOPPED_WHILE_WORKING: [&str; 4] = [
+    "needs_attention",
+    "failed",
+    "interrupted",
+    "permission_prompt",
+];
 /// States of a request run that has not finished.
 pub(crate) const REQUESTS_IN_FLIGHT: [&str; 2] = ["generating", "sending"];
 

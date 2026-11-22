@@ -327,6 +327,22 @@ pub(crate) struct Launch {
     /// field, or a prompt not listed, uses that machine's default.
     #[serde(default, skip_serializing_if = "crate::agent_prompts::Texts::is_empty")]
     pub(crate) texts: crate::agent_prompts::Texts,
+    /// How long the run's session may take, in minutes (`Workflow::agent`'s, else the workflow
+    /// settings' for its kind); a launch from an older host has none and takes
+    /// `llm::implementation::DEFAULT_SESSION_LIMIT`, and a worker that predates the field
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) time_limit_minutes: Option<u32>,
+}
+impl Launch {
+    /// The time limit of its session.
+    pub(crate) fn time_limit(&self) -> Duration {
+        self.time_limit_minutes
+            .filter(|m| crate::workflows::director::TIME_LIMIT_MINUTES.contains(m))
+            .map_or(crate::llm::implementation::DEFAULT_SESSION_LIMIT, |m| {
+                Duration::from_secs(u64::from(m) * 60)
+            })
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Run {
@@ -353,6 +369,26 @@ pub(crate) struct Run {
     /// (`llm::implementation::Failure`); none in a record from an older host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<crate::llm::implementation::Failure>,
+    /// When the person continued its session after the run stopped before its answer and that
+    /// session ended with its final report, which is now the run's (RFC 3339; `continued`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) continued_at: Option<String>,
+}
+impl Run {
+    /// A coding run whose session the person may continue to its final report, which then
+    /// becomes the run's: one stopped while its session worked (`Cause::continuable`), or one
+    /// already continued (a later report of that session replaces the earlier one).
+    pub(crate) fn continuable(&self) -> bool {
+        use crate::store::implementation::STOPPED_WHILE_WORKING;
+        !self.launch.planning
+            && self.session_id.is_some()
+            && if self.continued_at.is_some() {
+                self.state == "done"
+            } else {
+                STOPPED_WHILE_WORKING.contains(&self.state.as_str())
+                    && self.failure.is_some_and(|f| f.cause.continuable())
+            }
+    }
 }
 /// The final state of a coding run that stopped on a permission prompt, recorded with its text
 /// so its cause can be removed; distinct from `needs_attention`.
@@ -961,6 +997,7 @@ fn build_launch(
         azure_token,
         texts: crate::agent_prompts::Texts::new(&map.agent_prompts)
             .only(&crate::llm::implementation::RUN_TEXTS),
+        time_limit_minutes: Some(map.workflow_settings.time_limit_minutes(None, planning)),
     })
 }
 
@@ -1025,6 +1062,8 @@ pub(super) struct Planned {
     /// A review round (`Launch::round`), continuing `resume` (a native session ID) when set.
     pub round: bool,
     pub resume: Option<String>,
+    /// Its session's time limit (`Launch::time_limit_minutes`).
+    pub time_limit_minutes: u32,
 }
 /// Launch a run the engine planned, through the same `implementation_launch` call as
 /// `implementation_start`. The call is idempotent by run ID: asking again for a run the machine
@@ -1054,6 +1093,7 @@ pub(super) async fn launch_planned(host: &Arc<Host>, planned: Planned) -> Result
         effort: planned.effort,
     };
     let mut launch = build_launch(host, planned.id, request, planned.detail, planned.planning)?;
+    launch.time_limit_minutes = Some(planned.time_limit_minutes);
     if !planned.planning {
         launch.allow = planned.allow;
         launch.round = planned.round;
@@ -1082,6 +1122,46 @@ pub(super) async fn observe(host: &Arc<Host>, machine: &str, id: &str) -> Result
         .as_array()
         .and_then(|runs| runs.iter().find(|run| run["id"] == id))
         .cloned())
+}
+/// `observe`, after its machine looked for the final report of a stopped coding run's session
+/// that the person continued where the host did not follow it (`recover`); a machine that
+/// predates it just reads the run.
+pub(super) async fn observe_recovering(
+    host: &Arc<Host>,
+    machine: &str,
+    id: &str,
+) -> Result<Option<Value>> {
+    uuid(id)?;
+    let runs = fleet::call(
+        host,
+        machine,
+        "implementation_runs",
+        json!({"machine":machine,"id":id,"recover":true}),
+    )
+    .await?;
+    Ok(runs["runs"]
+        .as_array()
+        .and_then(|runs| runs.iter().find(|run| run["id"] == id))
+        .cloned())
+}
+/// A stopped coding run's session continued to its final report (`Database::continued`), as
+/// the person's continued session would record it (tests).
+#[cfg(all(test, unix))]
+pub(super) fn test_continue(host: &Host, id: &str, report: &str) -> bool {
+    host.state.implementation.db.continued(id, report).unwrap()
+}
+/// A coding run stopped at its time limit, as its machine records it (tests).
+#[cfg(all(test, unix))]
+pub(super) fn test_time_out(host: &Host, id: &str) {
+    let db = &host.state.implementation.db;
+    db.failure(
+        id,
+        &crate::llm::implementation::Failure::of(crate::llm::implementation::Cause::Timeout),
+    )
+    .unwrap();
+    LocalImplementation::new(db)
+        .finish_run(id, "needs_attention", "The agent session was still working when it reached the time limit of its run and was stopped.", None)
+        .unwrap();
 }
 /// Cancel an implementation run on its machine (`implementation_cancel`).
 pub(super) async fn cancel_run(host: &Arc<Host>, machine: &str, id: &str) -> Result<()> {
@@ -1249,6 +1329,15 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
             browse_directories(args["path"].as_str(), &allowed)
         }
         "implementation_runs" => {
+            // The workflow engine asks for one run's continued report before it accepts that
+            // the run delivered nothing. Recording it changes the run, so only an invocation that
+            // may execute recovers; reading never fails for it.
+            if args["recover"] == true
+                && let Some(id) = args["id"].as_str()
+                && authority::require_execution(&host.state).is_ok()
+            {
+                let _ = recover(host, id);
+            }
             let mut runs = Vec::new();
             let mut size = 0;
             let mut partial = false;
@@ -1257,7 +1346,8 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
                 .db
                 .list(args["work_item_url"].as_str(), args["id"].as_str(), false)?
             {
-                let mut value = json!({"id":run.launch.id,"item":run.launch.detail.item,"planning":run.launch.planning,"state":run.state,"created_at":run.created_at,"started_at":run.started_at,"finished_at":run.finished_at,"session_id":run.session_id,"remote":run.remote,"provider":run.launch.request.provider,"model":run.launch.request.model,"effort":run.launch.request.effort,"machine":run.launch.request.machine,"output":run.output,"plan":run.plan,"permission_mode":run.permission_mode,"prompts":run.prompts,"failure":run.failure});
+                let mut value = json!({"id":run.launch.id,"item":run.launch.detail.item,"planning":run.launch.planning,"state":run.state,"created_at":run.created_at,"started_at":run.started_at,"finished_at":run.finished_at,"session_id":run.session_id,"remote":run.remote,"provider":run.launch.request.provider,"model":run.launch.request.model,"effort":run.launch.request.effort,"machine":run.launch.request.machine,"output":run.output,"plan":run.plan,"permission_mode":run.permission_mode,"prompts":run.prompts,"failure":run.failure,"continued_at":run.continued_at});
+                time_limit(&mut value, &run);
                 with_failure(&mut value);
                 mark_session(&mut value, &own).await;
                 size += serde_json::to_vec(&value)?.len();
@@ -1362,6 +1452,7 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
                     .into(),
                 ),
                 prompts: Vec::new(),
+                continued_at: None,
             })?;
             let host = host.clone();
             let task = tokio::spawn(async move {
@@ -1383,6 +1474,46 @@ fn remote_observer(host: &Arc<Host>, id: &str) -> crate::llm::implementation::mo
     })
 }
 
+/// Records each final report of a continued run's session (`Database::continued`).
+fn continued_reporter(host: &Arc<Host>, id: &str) -> crate::llm::implementation::mobile::Reporter {
+    let host = host.clone();
+    let id = id.to_owned();
+    Arc::new(move |report| {
+        authority::require_execution(&host.state)?;
+        host.state
+            .implementation
+            .db
+            .continued(&id, report)
+            .map(|_| ())
+    })
+}
+
+/// The final report of a stopped coding run's session that was continued where this host did
+/// not follow it (the provider's own resume, or a host before continued runs), read from the
+/// provider's transcript on this machine (Claude): the last answer written after the run
+/// stopped, when it is the session's last message. Returns whether the run changed.
+fn recover(host: &Host, id: &str) -> Result<bool> {
+    let db = &host.state.implementation.db;
+    let Some(run) = db.get(id)? else {
+        return Ok(false);
+    };
+    if !run.continuable() || run.state == "done" || run.launch.request.provider != "claude" {
+        return Ok(false);
+    }
+    let (Some(session), Some(after)) = (run.session_id.as_deref(), run.finished_at.as_deref())
+    else {
+        return Ok(false);
+    };
+    uuid(session)?;
+    let Some(root) = crate::sessions::Roots::from_env().claude else {
+        return Ok(false);
+    };
+    match crate::sessions::claude_final_answer(&root, session, after)? {
+        Some(report) => db.continued(id, &report),
+        None => Ok(false),
+    }
+}
+
 async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
     use crate::llm::implementation::mobile;
     ensure!(
@@ -1392,9 +1523,10 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
     let id = args["id"].as_str().context("Choose a recorded run.")?;
     uuid(id)?;
     let db = &host.state.implementation.db;
-    let (provider, model, effort, session, working, planning, active, reported, name) =
+    let (provider, model, effort, session, working, planning, active, reported, name, continued) =
         if let Some(run) = db.get(id)? {
             let name = run_name(&run.launch);
+            let continued = run.continuable();
             let request = run.launch.request;
             ensure!(
                 request.machine == host.state.implementation.registry.lock().await.id,
@@ -1410,6 +1542,7 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
                 ["running", "planning"].contains(&run.state.as_str()),
                 run.remote,
                 name,
+                continued,
             )
         } else {
             let record = db
@@ -1426,6 +1559,7 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
                 record["state"] == "generating",
                 serde_json::from_value::<mobile::Access>(record["remote"].clone()).ok(),
                 recorded_name(&record),
+                false,
             )
         };
     let session = session.context("The agent has not reported a session ID yet.")?;
@@ -1471,6 +1605,9 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
                 !active,
                 "Remote Control did not connect when this run started. Let the current run finish before reconnecting it."
             );
+            // A coding run that stopped while its session worked: what the person continues it
+            // to is its final report (a continued run).
+            let report = continued.then(|| continued_reporter(host, id));
             let access = mobile::reconnect(
                 (&provider, &model, &effort),
                 &session,
@@ -1478,6 +1615,7 @@ async fn mobile_session(host: &Arc<Host>, args: &Value) -> Result<Value> {
                 &working,
                 (planning, &name),
                 observer.clone(),
+                report,
             )
             .await?;
             observer(access.clone())?;
@@ -1569,83 +1707,92 @@ async fn run(host: &Arc<Host>, launch: Launch) {
     let remote = remote_observer(host, &launch.id);
     let name = run_name(&launch);
     let credentials = run_credentials(host, &launch).await;
-    let result = crate::llm::agent::RUN_CREDENTIALS
-        .scope(credentials, async {
-            if launch.planning {
-                async {
-                    let plan = crate::llm::implementation::plan(
-                        (&request.provider, &request.model, &request.effort),
+    // The session learns its limit, so it leaves its work pushed and reported before it.
+    let limit = launch.time_limit();
+    let stops_at = chrono::Utc::now()
+        + chrono::Duration::from_std(limit).unwrap_or_else(|_| chrono::Duration::hours(2));
+    let time_rule = crate::llm::implementation::time_rule(&texts, limit, stops_at);
+    let result = crate::llm::implementation::RUN_LIMIT
+        .scope(
+            limit,
+            crate::llm::agent::RUN_CREDENTIALS.scope(credentials, async {
+                if launch.planning {
+                    async {
+                        let plan = crate::llm::implementation::plan(
+                            (&request.provider, &request.model, &request.effort),
+                            &request.directories,
+                            &instructions,
+                            &input,
+                            &texts,
+                            &name,
+                            &observer,
+                            remote.clone(),
+                        )
+                        .await?;
+                        let children =
+                            plan["children"].as_array().context("Invalid child plan.")?;
+                        ensure!(
+                            (1..=20).contains(&children.len()),
+                            "Invalid child plan size."
+                        );
+                        for child in children {
+                            validate_child(child)?;
+                        }
+                        validate_order(children)?;
+                        Ok((true, String::new(), Some(plan), Vec::new(), None))
+                    }
+                    .await
+                } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
+                    // One more turn of the session that coded the child: it has the item, the
+                    // instructions and its earlier work; this turn gets the fixed rules and the round.
+                    let prompt = format!(
+                        "{} {time_rule}\n{}",
+                        crate::llm::implementation::code_rules(&launch.allow, &texts),
+                        request.context
+                    );
+                    crate::llm::implementation::execute_resumed(
+                        &request.provider,
+                        &request.model,
+                        &request.effort,
                         &request.directories,
-                        &instructions,
-                        &input,
-                        &texts,
+                        (&prompt, &texts),
+                        &launch.allow,
+                        session,
                         &name,
                         &observer,
-                        remote.clone(),
+                        remote,
                     )
-                    .await?;
-                    let children = plan["children"].as_array().context("Invalid child plan.")?;
-                    ensure!(
-                        (1..=20).contains(&children.len()),
-                        "Invalid child plan size."
+                    .await
+                    .map(|outcome| {
+                        let failure = outcome.failure;
+                        (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                    })
+                } else {
+                    let prompt = crate::llm::implementation::coding_prompt(
+                        &instructions,
+                        &input,
+                        (&launch.allow, &time_rule),
+                        &texts,
                     );
-                    for child in children {
-                        validate_child(child)?;
-                    }
-                    validate_order(children)?;
-                    Ok((true, String::new(), Some(plan), Vec::new(), None))
+                    crate::llm::implementation::execute(
+                        &request.provider,
+                        &request.model,
+                        &request.effort,
+                        &request.directories,
+                        (&prompt, &texts),
+                        &launch.allow,
+                        &name,
+                        &observer,
+                        remote,
+                    )
+                    .await
+                    .map(|outcome| {
+                        let failure = outcome.failure;
+                        (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                    })
                 }
-                .await
-            } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
-                // One more turn of the session that coded the child: it has the item, the
-                // instructions and its earlier work; this turn gets the fixed rules and the round.
-                let prompt = format!(
-                    "{}\n{}",
-                    crate::llm::implementation::code_rules(&launch.allow, &texts),
-                    request.context
-                );
-                crate::llm::implementation::execute_resumed(
-                    &request.provider,
-                    &request.model,
-                    &request.effort,
-                    &request.directories,
-                    (&prompt, &texts),
-                    &launch.allow,
-                    session,
-                    &name,
-                    &observer,
-                    remote,
-                )
-                .await
-                .map(|outcome| {
-                    let failure = outcome.failure;
-                    (outcome.ok, outcome.text, None, outcome.prompts, failure)
-                })
-            } else {
-                let prompt = crate::llm::implementation::coding_prompt(
-                    &instructions,
-                    &input,
-                    &launch.allow,
-                    &texts,
-                );
-                crate::llm::implementation::execute(
-                    &request.provider,
-                    &request.model,
-                    &request.effort,
-                    &request.directories,
-                    (&prompt, &texts),
-                    &launch.allow,
-                    &name,
-                    &observer,
-                    remote,
-                )
-                .await
-                .map(|outcome| {
-                    let failure = outcome.failure;
-                    (outcome.ok, outcome.text, None, outcome.prompts, failure)
-                })
-            }
-        })
+            }),
+        )
         .await;
     use crate::llm::implementation::{Cause, Failure};
     let (status, output, plan, prompts, failure) = match result {
@@ -1701,6 +1848,23 @@ async fn run(host: &Arc<Host>, launch: Launch) {
 /// up to two hours, and belongs to the user: a coding run `done`, a planning run `plan_ready`.
 const KEPT_AFTER: [&str; 2] = ["done", "plan_ready"];
 
+/// Give a recorded run its session's time limit (`time_limit_minutes`) and, while it runs,
+/// when that limit stops it (`stops_at`, Unix seconds) and the seconds left.
+fn time_limit(value: &mut Value, run: &Run) {
+    let limit = run.launch.time_limit();
+    value["time_limit_minutes"] = json!(limit.as_secs() / 60);
+    let started = run
+        .started_at
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+    if crate::store::implementation::RUNS_IN_FLIGHT.contains(&run.state.as_str())
+        && let Some(started) = started
+    {
+        let stops_at = started.timestamp() + limit.as_secs() as i64;
+        value["stops_at"] = json!(stops_at);
+        value["seconds_left"] = json!((stops_at - now()).max(0));
+    }
+}
 /// Give a recorded run or session its `failure` as operations show it: the identifiers and the
 /// sentence (`Failure::view`), read within the vocabulary; for a record from before causes
 /// that did not end with its answer, what its state says or `unknown`.

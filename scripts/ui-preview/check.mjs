@@ -2498,7 +2498,7 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForTimeout(600);
   const update = (await calls()).find(c => c.method === 'workflow_settings_update');
   check(`workflow settings ${label}: the save bar saves only what changed: ready states, watcher and director`, update?.watch_interval_minutes === 10 && update.concurrency === 3
-    && !('pull_request_wait_days' in update) && !('project_directors' in update) && JSON.stringify(update.ready_states) === '[{"organization":"https://dev.azure.com/contoso","project":"Exports","states":["Approved"]}]'
+    && !('pull_request_wait_days' in update) && !('coding_time_limit_minutes' in update) && !('project_directors' in update) && JSON.stringify(update.ready_states) === '[{"organization":"https://dev.azure.com/contoso","project":"Exports","states":["Approved"]}]'
     && update.director.model === 'claude-opus-5-5' && update.director.machine === '11111111-1111-4111-8111-111111111111', JSON.stringify(update));
   check(`workflow settings ${label}: saving clears the save bar`, await page.isHidden('#savebar') && await page.isHidden('#settings-tab-workflows .flag.edited'));
   // The supervisor: on with its agent in this scenario; turning it off sends only that, and its prompt opens.

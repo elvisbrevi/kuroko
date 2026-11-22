@@ -397,6 +397,7 @@ pub(super) async fn step(
             started: false,
             state: None,
             failure: None,
+            time_limit_minutes: None,
         });
         set_round(run, index, round);
         return Ok(true);
@@ -460,6 +461,7 @@ pub(super) async fn step(
                 _ => workflow.checkouts.values().cloned().collect(),
             },
         };
+        let limit = engine::time_limit(host, workflow, false);
         let launched = implementation::launch_planned(
             host,
             implementation::Planned {
@@ -477,6 +479,7 @@ pub(super) async fn step(
                 allow: workflow.allow.clone(),
                 round: true,
                 resume,
+                time_limit_minutes: limit,
             },
         )
         .await;
@@ -484,6 +487,7 @@ pub(super) async fn step(
             Ok(_) => {
                 if let Some(c) = round.coding.as_mut() {
                     c.started = true;
+                    c.time_limit_minutes = super::engine::recorded_limit(limit);
                 }
                 set_round(run, index, round);
                 run.error = None;

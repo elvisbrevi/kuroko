@@ -355,7 +355,10 @@ async function implementationRuns(form) {
   form.runs.replaceChildren(...runs.map(run => {
     const panel = el('article', { class: 'implementation-run' }, badge(tx(run.state), ['done', 'completed', 'created'].includes(run.state) ? 'ok' : ['permission_prompt', 'needs_attention', 'failed'].includes(run.state) ? 'warn' : 'info'), el('strong', { textContent: `${providerNames[run.provider] || run.provider || ''} · ${run.model || ''}` }),
       el('dl', { class: 'todo-fields' }, ...[[t('Requested at'), run.created_at], [t('Started at'), run.started_at], [t('Finished at'), run.finished_at]].map(([label, value]) => el('div', {}, el('dt', { textContent: label }), el('dd', { textContent: value ? new Date(value).toLocaleString(uiLocale()) : t('Not recorded') }))),
-        el('div', {}, el('dt', { textContent: t('Permission mode') }), el('dd', { class: 'implementation-permission-mode', textContent: permissionMode(run.permission_mode) }))));
+        el('div', {}, el('dt', { textContent: t('Permission mode') }), el('dd', { class: 'implementation-permission-mode', textContent: permissionMode(run.permission_mode) })),
+        ...(run.time_limit_minutes ? [el('div', {}, el('dt', { textContent: t('Time limit') }), el('dd', { class: 'implementation-time-limit',
+          textContent: run.stops_at ? t('{minutes} minutes; stops at {time}', { minutes: String(run.time_limit_minutes), time: new Date(run.stops_at * 1000).toLocaleString(uiLocale()) }) : t('{minutes} minutes', { minutes: String(run.time_limit_minutes) }) }))] : [])));
+    if (run.continued_at) panel.append(el('p', { class: 'callout info run-continued', textContent: t('Its session was continued after the run stopped; its final report of {time} is the run\'s.', { time: new Date(run.continued_at).toLocaleString(uiLocale()) }) }));
     if (run.failure) panel.append(el('p', { class: 'callout warn run-failure', textContent: failureText(run.failure) }));
     if (run.prompts?.length) panel.append(el('div', { class: 'callout warn implementation-prompts' }, el('div', {},
       el('p', { textContent: t('The coding CLI still stopped on a permission prompt, which nobody answered. Remove its cause on that computer:') }),

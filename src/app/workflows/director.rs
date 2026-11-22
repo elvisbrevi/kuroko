@@ -134,6 +134,10 @@ struct UpdateArgs {
     pull_request_wait_days: Option<u32>,
     #[serde(default)]
     dependency_wait_days: Option<u32>,
+    #[serde(default)]
+    coding_time_limit_minutes: Option<u32>,
+    #[serde(default)]
+    planning_time_limit_minutes: Option<u32>,
     /// The director's fields to change, merged with the stored director; `null` clears it.
     #[serde(default)]
     director: Option<DirectorChange>,
@@ -167,6 +171,8 @@ fn view(settings: &Settings) -> Value {
         "concurrency": settings.concurrency,
         "pull_request_wait_days": settings.pull_request_wait_days,
         "dependency_wait_days": settings.dependency_wait_days,
+        "coding_time_limit_minutes": settings.coding_time_limit_minutes,
+        "planning_time_limit_minutes": settings.planning_time_limit_minutes,
         "director": settings.director,
         "ready_states": settings.ready_states,
         "project_directors": settings.project_directors,
@@ -224,6 +230,8 @@ fn bounds() -> Value {
         "concurrency": range(core::CONCURRENCY),
         "pull_request_wait_days": range(core::PULL_REQUEST_WAIT_DAYS),
         "dependency_wait_days": range(core::DEPENDENCY_WAIT_DAYS),
+        "coding_time_limit_minutes": range(core::TIME_LIMIT_MINUTES),
+        "planning_time_limit_minutes": range(core::TIME_LIMIT_MINUTES),
         "ready_states_per_project": core::MAX_READY_STATES,
         "projects_with_ready_states": core::MAX_READY_PROJECTS,
         "supervisor": {
@@ -310,6 +318,12 @@ fn apply(settings: &mut Settings, args: &UpdateArgs, resolved: &Resolved) {
     }
     if let Some(value) = args.dependency_wait_days {
         settings.dependency_wait_days = value;
+    }
+    if let Some(value) = args.coding_time_limit_minutes {
+        settings.coding_time_limit_minutes = value;
+    }
+    if let Some(value) = args.planning_time_limit_minutes {
+        settings.planning_time_limit_minutes = value;
     }
     if let Some(director) = &resolved.director {
         settings.director = director.clone();
@@ -563,6 +577,8 @@ pub(super) async fn update(
         && args.concurrency.is_none()
         && args.pull_request_wait_days.is_none()
         && args.dependency_wait_days.is_none()
+        && args.coding_time_limit_minutes.is_none()
+        && args.planning_time_limit_minutes.is_none()
         && args.director.is_none()
         && !clear_director
         && args.ready_states.is_empty()
@@ -571,7 +587,7 @@ pub(super) async fn update(
         && !clear_supervisor
     {
         return Err(invalid(
-            "Give at least one setting to change: watch_interval_minutes, concurrency, pull_request_wait_days, dependency_wait_days, director, ready_states, project_directors or supervisor.",
+            "Give at least one setting to change: watch_interval_minutes, concurrency, pull_request_wait_days, dependency_wait_days, coding_time_limit_minutes, planning_time_limit_minutes, director, ready_states, project_directors or supervisor.",
         ));
     }
     let map = state.settings.map().map_err(fail)?;
@@ -703,6 +719,10 @@ pub(super) async fn update(
         });
     }
     // The final list, with the projects the catalog resolved: re-setting a project replaces it.
+    let stored_limits = (
+        stored.coding_time_limit_minutes,
+        stored.planning_time_limit_minutes,
+    );
     let mut candidate = stored;
     apply(&mut candidate, &args, &resolved);
     core::validate(&candidate).map_err(invalid)?;
@@ -739,6 +759,31 @@ pub(super) async fn update(
                 "{} {} a version that predates the workflow supervisor: until updated, {} the account's configuration with these settings.",
                 older.join(", "),
                 if older.len() == 1 { "runs" } else { "run" },
+                if older.len() == 1 { "it refuses" } else { "they refuse" }
+            ));
+        }
+    }
+    // And one whose session time limits are not the default.
+    let limits = (
+        candidate.coding_time_limit_minutes,
+        candidate.planning_time_limit_minutes,
+    );
+    if limits != stored_limits
+        && limits
+            != (
+                core::DEFAULT_TIME_LIMIT_MINUTES,
+                core::DEFAULT_TIME_LIMIT_MINUTES,
+            )
+    {
+        let older = implementation::machines_until(host, crate::workflows::OLDER_TIME_LIMIT_UNTIL)
+            .await
+            .map_err(fail)?;
+        if !older.is_empty() {
+            warnings.push(format!(
+                "{} {} release {} or older, which cannot read session time limits: until updated, {} the account's configuration with these settings.",
+                older.join(", "),
+                if older.len() == 1 { "runs" } else { "run" },
+                crate::workflows::OLDER_TIME_LIMIT_UNTIL,
                 if older.len() == 1 { "it refuses" } else { "they refuse" }
             ));
         }
