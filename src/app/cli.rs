@@ -57,11 +57,15 @@ Configuration
                            message_style.label \"text\" (and .position, .accent, .band, .label_color,
                            .icon, .emoji, .band_height, .stripe_width, .text_size, .label_size, .kuroko,
                            .animated, .mark_size, .site_link, .link_underline, .mark_side, .band_align,
-                           .band_padding).
+                           .band_padding, .hide_label).
                            Teams chats every computer of the account may read on request (follows the
                            account): config set teams_reading.all_chats true (and .personal_chat,
                            .chats [\"CHAT_ID\",...]). graph.discover_all_chats, graph.allowed_chats and
                            the personal chat stay this computer's own reception.
+  config mark-image FILE|none  The band's own icon instead of the Kuroko mark or the emoji: a PNG,
+                           JPEG or GIF of up to 2.8 MB. A GIF is kept as its animated PNG; a PNG or
+                           GIF over 100 KB or 1024 pixels a side is reduced with its animation (a
+                           JPEG must already fit). none removes it.
   config apply|validate    Applies or validates {config,map,tunnel_config} as JSON or TOML on stdin.
   config import FILE       Imports an existing config.toml (with the assistant stopped).
   credentials list         This installation's internal credentials and their origin, without values. For `is the secret X
@@ -2657,6 +2661,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["config", "show" | "apply" | "validate"]
             | ["config", "get" | "import", _]
             | ["config", "set", _, _]
+            | ["config", "mark-image", _]
             | ["mode", "show" | "observe" | "active"]
             | ["self-chat", "status" | "enable" | "disable"]
             | ["self-chat", "enable", _]
@@ -3713,6 +3718,20 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 key,
                 serde_json::from_str(positional(&args, 3)?)?,
             )?
+        }
+        ("config", "mark-image") => {
+            // The band's own icon, read here; the host keeps a GIF as its animated PNG and reduces
+            // one too large, keeping its animation.
+            use base64::Engine;
+            let file = positional(&args, 2)?;
+            with_default_sections(&mut data["config"])?;
+            data["config"]["message_style"]["mark_image"] = if file == "none" {
+                json!("")
+            } else {
+                let bytes = crate::adapters::images::read_bytes(std::path::Path::new(file))
+                    .map_err(|refusal| anyhow::anyhow!("{refusal}"))?;
+                json!(base64::engine::general_purpose::STANDARD.encode(bytes))
+            };
         }
         ("config", "apply" | "validate") => {
             data = input()?;

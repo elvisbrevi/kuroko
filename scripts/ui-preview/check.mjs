@@ -4,9 +4,12 @@
 // It exits 1 when an interaction check fails or any scan finds a violation (CI runs it).
 // --axe-only only reports, and also works against an older copy of the GUI, for a before/after comparison.
 import fs from 'node:fs';
+import path from 'node:path';
 import { axePath, launch } from './deps.mjs';
 
 const axeSource = fs.readFileSync(axePath(), 'utf8');
+// The GUI files, for a real image to choose as the band's icon.
+const ui = path.join(path.dirname(new URL(import.meta.url).pathname), '../../desktop/ui');
 const [port, out, flag] = process.argv.slice(2);
 fs.mkdirSync(out, { recursive: true });
 const browser = await launch();
@@ -792,6 +795,26 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   await page.waitForTimeout(300);
   check('a Kuroko icon under 16 px is refused before saving', await page.isVisible('#notice.error'));
   await page.fill('#style-mark-size', '45');
+  // A number field steps with its − and + buttons, within its bounds.
+  await page.locator('#style-band-padding ~ .stepper-button').last().click();
+  await page.locator('#style-band-padding ~ .stepper-button').first().click();
+  await page.locator('#style-band-padding ~ .stepper-button').first().click();
+  check('a number field steps with its buttons', await page.inputValue('#style-band-padding') === '11', await page.inputValue('#style-band-padding'));
+  await page.fill('#style-band-padding', '12');
+  // A band without text: the text field and the preview's text hide.
+  await page.check('#style-hide-label');
+  check('a band without text hides its text', !await page.isVisible('#style-label') && !await page.isVisible('#style-preview-label'));
+  await page.uncheck('#style-hide-label');
+  // The own icon: a PNG that fits is kept as it is; a GIF goes to the host, which reduces it.
+  await page.setInputFiles('#style-image-file', path.join(ui, 'favicon.png'));
+  await page.waitForFunction(() => document.querySelector('#style-preview-mark').classList.contains('own'));
+  check('an own PNG becomes the band icon as it is', await page.evaluate(() => document.querySelector('#style-preview-mark').getAttribute('src').startsWith('data:image/png;base64,iVBOR')
+    && !window.__ptaMarkPrepared && !document.querySelector('#style-image-remove').hidden));
+  await page.setInputFiles('#style-image-file', { name: 'moving.gif', mimeType: 'image/gif', buffer: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') });
+  await page.waitForFunction(() => window.__ptaMarkPrepared);
+  check('a GIF is prepared by the host, keeping its animation', await page.evaluate(() => window.__ptaMarkPrepared === 'R0lGOD'));
+  await page.click('#style-image-remove');
+  check('removing the own icon brings the Kuroko mark back', await page.evaluate(() => !document.querySelector('#style-preview-mark').classList.contains('own')) && await page.isHidden('#style-image-remove'));
   await page.fill('#style-label', label);
   await page.uncheck('#style-kuroko');
   check('the Kuroko options hide without the signature', !await page.isVisible('#style-animated') && !await page.isVisible('#style-mark-size'));
@@ -801,7 +824,7 @@ check('axe: no WCAG 2.2 AA violations in any scan', !Object.keys(totals).length,
   check('the message style is saved', await page.evaluate(() => JSON.stringify(window.__ptaLastSave?.config?.message_style)) === JSON.stringify({
     enabled: true, label: 'Escrito por mi asistente', position: 'top', accent: '#13A10E', band: 'emphasis', label_color: 'good', icon: true,
     emoji: '✨', band_height: 56, stripe_width: 8, text_size: 'large', label_size: 'medium', kuroko: false,
-    animated: true, mark_size: 45, site_link: false, link_underline: true, mark_side: 'right', band_align: 'left', band_padding: 12 }));
+    animated: true, mark_size: 45, site_link: false, link_underline: true, mark_side: 'right', band_align: 'left', band_padding: 12, hide_label: false, mark_image: '' }));
   check('message style has no page errors', errors.length === 0, errors.join(' | '));
   await context.close();
 }

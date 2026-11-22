@@ -1200,6 +1200,8 @@ async fn commit_settings(
         .map_err(anyhow::Error::from)
         .and_then(|text| KnowledgeMap::parse(&text))
         .map_err(|e| format!("[invalid_input] The knowledge map is invalid: {e}."))?;
+    crate::adapters::card::prepare_mark(&mut config.message_style)
+        .map_err(|e| format!("[invalid_input] {e}"))?;
     validate_local(&config, &map)
         .map_err(|_| "[invalid_input] Configuration or knowledge map is invalid.".to_string())?;
     protect_identity(&previous, &config)

@@ -1,4 +1,5 @@
 // Building nodes under the CSP (no innerHTML): elements, icons, badges and small form helpers.
+import { t } from './i18n.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -31,4 +32,44 @@ function rowText(primary, secondary, extra) {
   return el('div', {}, el('strong', {}, primary, extra), el('small', { textContent: secondary }));
 }
 
-export { $, el, icon, badge, field, lines, names, sleep, rowText };
+/**
+ * One step of a number field, as if typed: from its value, or from its placeholder (the value an
+ * empty field stands for) or its minimum when empty, kept within its bounds.
+ * @param {HTMLInputElement} input
+ * @param {number} direction 1 or -1
+ */
+function stepNumber(input, direction) {
+  if (input.disabled || input.readOnly) return;
+  const by = Number(input.step) > 0 ? Number(input.step) : 1;
+  const min = input.min === '' ? -Infinity : Number(input.min);
+  const max = input.max === '' ? Infinity : Number(input.max);
+  const typed = input.value.trim() === '' ? NaN : Number(input.value);
+  const shown = input.placeholder.trim() === '' ? NaN : Number(input.placeholder);
+  const floor = Number.isFinite(min) ? min : 0;
+  const next = Number.isFinite(typed) ? typed + direction * by
+    : Number.isFinite(shown) ? shown + direction * by
+      : floor;
+  const decimals = (String(input.step).split('.')[1] || '').length;
+  input.value = String(Number(Math.min(max, Math.max(min, next)).toFixed(decimals)));
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+/**
+ * Gives every number field under `root` its − and + buttons: phones show no spinner, and a tap
+ * is easier than typing. The buttons come after the field, so its label still names the field.
+ * @param {Element} root
+ */
+function numberSteppers(root) {
+  const inputs = root instanceof HTMLInputElement ? [root] : [...root.querySelectorAll('input')];
+  for (const input of inputs) {
+    if (input.type !== 'number') continue;
+    if (input.parentElement?.classList.contains('stepper')) continue;
+    const button = (/** @type {number} */ direction, /** @type {string} */ text, /** @type {string} */ label) =>
+      el('button', { type: 'button', class: 'secondary stepper-button', textContent: text, 'aria-label': label, onclick: () => stepNumber(input, direction) });
+    const wrap = el('span', { class: 'stepper' });
+    input.replaceWith(wrap);
+    wrap.append(input, button(-1, '−', t('Decrease')), button(1, '+', t('Increase')));
+  }
+}
+
+export { $, el, icon, badge, field, lines, names, sleep, rowText, numberSteppers };

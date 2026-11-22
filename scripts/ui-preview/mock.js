@@ -893,6 +893,8 @@
     },
     list_github_issues: args => handlers.list_github_epics(args),
     open_work_item: args => { window.__ptaOpenedWorkItem = args.url; return { url: args.url }; },
+    // The host reduces the band's image; here it answers with a 1×1 animated-looking PNG.
+    mark_image_prepare: args => { window.__ptaMarkPrepared = args.data.slice(0, 6); return { data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', type: 'image/png', bytes: 70, width: 1, height: 1, animated: false }; },
     snapshot: () => structuredClone(snapshot),
     llm_providers: () => sharedAccount ? { providers: providers.providers.filter(p => p.transport === 'api') } : providers,
     audit: () => audit,

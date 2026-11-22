@@ -301,16 +301,26 @@
             <p class="hint">Messages also use card blocks where they fit: facts, buttons, badges, progress, charts, details and callouts.</p>
             <div id="style-fields">
               <div class="grid">
-                <label>Band text <small>Empty uses the default in the reply language.</small><input id="style-label" class="cfg" maxlength="80"></label>
+                <label id="style-label-field">Band text <small>Empty uses the default in the reply language.</small><input id="style-label" class="cfg" maxlength="80"></label>
                 <label>Band position<select id="style-position" class="cfg"><option value="bottom">Below the text</option><option value="top">Above the text</option></select></label>
                 <label>Color combination<select id="style-preset" class="cfg"><option value="teams">Teams purple</option><option value="blue">Blue</option><option value="green">Green</option><option value="amber">Amber</option><option value="red">Red</option><option value="gray">Gray</option><option value="custom">Custom</option></select></label>
               </div>
+              <label class="check"><input id="style-hide-label" class="cfg" type="checkbox"> Band without text, only its icon</label>
               <label class="check"><input id="style-kuroko" class="cfg" type="checkbox"> Sign the band as Kuroko, with the app's icon</label>
               <div id="style-kuroko-fields">
                 <label class="check"><input id="style-animated" class="cfg" type="checkbox"> Animate the icon <small>It travels inside each message as a small image (about 76 KB).</small></label>
                 <label class="check"><input id="style-site-link" class="cfg" type="checkbox"> Open the Kuroko site from the band's text and icon</label>
                 <label class="check" id="style-link-underline-field"><input id="style-link-underline" class="cfg" type="checkbox"> Show the text as a link (underlined) <small>Off, the text keeps the band's look and still opens the site.</small></label>
               </div>
+              <fieldset id="style-image-field">
+                <legend>Own icon <small>A PNG, JPEG or GIF file in place of the Kuroko icon or the emoji. One over 100 KB is reduced, keeping its animation.</small></legend>
+                <input id="style-image-file" type="file" accept="image/png,image/jpeg,image/gif" hidden>
+                <div class="actions style-image-actions">
+                  <button type="button" class="secondary" id="style-image-choose">Choose an image</button>
+                  <button type="button" class="secondary" id="style-image-remove" hidden>Remove the image</button>
+                  <small id="style-image-status" class="hint" role="status"></small>
+                </div>
+              </fieldset>
               <details class="fold" id="style-custom">
                 <summary>Colors and sizes <small>Advanced</small></summary>
                 <div class="grid">
@@ -326,7 +336,7 @@
                   <label>Icon position<select id="style-mark-side" class="cfg"><option value="left">Left of the text</option><option value="right">Right of the text</option></select></label>
                   <label>Band content<select id="style-band-align" class="cfg"><option value="right">On the right</option><option value="center">Centered</option><option value="left">On the left</option></select></label>
                   <label>Band padding <small>Space at each end of the band, in pixels, from 0 to 48.</small><input id="style-band-padding" class="cfg" type="number" min="0" max="48" step="1" inputmode="numeric" placeholder="0"></label>
-                  <label id="style-mark-size-field">Kuroko icon size <small>In pixels, from 16 to 64. Empty follows the band text size.</small><input id="style-mark-size" class="cfg" type="number" min="16" max="64" step="1" inputmode="numeric"></label>
+                  <label id="style-mark-size-field">Icon size <small>In pixels, from 16 to 64. Empty follows the band text size.</small><input id="style-mark-size" class="cfg" type="number" min="16" max="64" step="1" inputmode="numeric"></label>
                 </div>
                 <div class="grid">
                   <label>Message text size<select id="style-text-size" class="cfg"><option value="small">Small</option><option value="default">Normal</option><option value="medium">Medium</option><option value="large">Large</option><option value="extralarge">Extra large</option></select></label>
