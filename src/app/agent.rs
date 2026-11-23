@@ -31,6 +31,8 @@ const CUSTODY: &str =
     "The account store's keys, installations and lifecycle stay with the person in the GUI.";
 const MIGRATION: &str = "Moving a computer's own credentials is done at that computer.";
 const PORTAL: &str = "The portal does not offer this operation to the account.";
+const LEAD_TALK: &str =
+    "A person talks with a workflow lead in the Claude app; connect it from Kuroko yourself.";
 
 /// Every tool of the catalog, offered or denied. A test walks the catalog against this list.
 pub(super) const TOOLS: &[(&str, Remote)] = &[
@@ -206,6 +208,8 @@ pub(super) const TOOLS: &[(&str, Remote)] = &[
     ("workflow_lead_shifts", Offered),
     ("workflow_lead_wake", Offered),
     ("workflow_lead_answer", Offered),
+    ("workflow_lead_connect", Denied(LEAD_TALK)),
+    ("workflow_lead_disconnect", Offered),
     ("workflow_finding_resolve", Offered),
     ("workflow_finding_dismiss", Offered),
     ("workflow_run_cancel", Offered),
@@ -354,6 +358,8 @@ pub(super) const METHODS: &[&str] = &[
     "workflow_lead_shifts",
     "workflow_lead_wake",
     "workflow_lead_answer",
+    "workflow_lead_connect",
+    "workflow_lead_disconnect",
     "workflow_finding_resolve",
     "workflow_finding_dismiss",
     "workflow_run_cancel",

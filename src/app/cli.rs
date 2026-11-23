@@ -537,6 +537,10 @@ Knowledge
                            only), findings and questions for you, and its record once ended (in brief
                            without LEAD, whole with it; --run, what was recorded about one run). wake
                            asks it to look at its next tick.
+  workflows leads connect LEAD --confirmed | leads disconnect LEAD
+                           Talk with a lead in its own conversation, live through Remote Control (its
+                           url opens it in the Claude app); its turns wait meanwhile. disconnect ends
+                           it and the lead keeps what it recorded.
   workflows leads answer LEAD QUESTION --note TEXT
                            Answers one of a lead's open questions (its ID from leads shifts LEAD or
                            status); the answer reaches the lead at its next turn, never as an approval.
@@ -1395,6 +1399,13 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
             ("workflow_lead_shifts", body)
         }
         (Some("leads"), Some("wake")) => ("workflow_lead_wake", json!({"lead": id(3)?})),
+        (Some("leads"), Some("connect")) => (
+            "workflow_lead_connect",
+            json!({"lead": id(3)?, "confirmed": args.iter().any(|a| a == "--confirmed")}),
+        ),
+        (Some("leads"), Some("disconnect")) => {
+            ("workflow_lead_disconnect", json!({"lead": id(3)?}))
+        }
         (Some("leads"), Some("answer")) => (
             "workflow_lead_answer",
             json!({"lead": id(3)?, "question": id(4)?, "answer": option(args, "--note").ok_or_else(|| anyhow::anyhow!("Give the answer with --note TEXT."))?}),
@@ -2941,7 +2952,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | [
                 "workflows",
                 "leads",
-                "show" | "remove" | "wake" | "shifts",
+                "show" | "remove" | "wake" | "shifts" | "connect" | "disconnect",
                 _
             ]
             | ["workflows", "leads", "shifts"]

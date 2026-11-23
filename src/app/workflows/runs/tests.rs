@@ -40,6 +40,15 @@ if printf '%s\n' "$@" | grep -qx -- '--strict-mcp-config'; then
   printf '%s\n' "$@" > "$LOG/lead_args.$(wc -l < "$LOG/leads" 2>/dev/null | tr -d ' ')"
   echo x >> "$LOG/leads"
   read -r initialize
+  # The person's live talk (Remote Control): connected, then open until it is closed.
+  case "$initialize" in *pta-initialize*)
+    printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"pta-initialize","response":{}}}'
+    read -r remote
+    printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"pta-remote","response":{"session_url":"https://claude.ai/code/session_Lead123"}}}'
+    echo x >> "$LOG/lead_live"
+    while read -r line; do :; done
+    exit 0;;
+  esac
   printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"lead-initialize","response":{}}}'
   read -r user; printf '%s\n' "$user" >> "$LOG/lead_prompts"
   printf '%s\n' '{"type":"system","subtype":"init","session_id":"ses_lead"}'

@@ -705,6 +705,9 @@ run (any state but `done` and `cancelled`).
   question: it shows on Home and in Settings › Workflows, and `kuroko workflows leads answer LEAD
   QUESTION --note TEXT` (MCP `workflow_lead_answer`) gives your answer, which reaches it at once.
   An answer is information, never an approval.
+  `kuroko workflows leads connect LEAD --confirmed` (MCP `workflow_lead_connect`, confirmed) opens
+  the lead's own conversation live through Remote Control (its `url` opens the Claude app); its
+  turns wait while you talk, and `leads disconnect LEAD` (MCP `workflow_lead_disconnect`) ends it.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may

@@ -2487,6 +2487,19 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForSelector('#workflow-leads [data-question="q1"]', { state: 'detached' });
   check(`workflow settings ${label}: an answer goes to the lead once and its question leaves the list`,
     await page.evaluate(() => window.__ptaWorkflowCalls.filter(c => c.method === 'workflow_lead_answer' && c.answer === 'Yes, keep it.').length) === 1);
+  // Talking to it: a second press connects, the Claude app opens, and the lead says it talks with you.
+  await page.evaluate(() => { window.open = () => null; });
+  const talk = page.locator('#workflow-leads [data-lead="pagos"] button', { hasText: 'Hablar con Pagos' });
+  await talk.click();
+  await page.locator('#workflow-leads [data-lead="pagos"] button', { hasText: 'Confirma' }).click();
+  await page.waitForSelector('#workflow-leads [data-lead="pagos"] .lead-shift:text("Hablando contigo")');
+  check(`workflow settings ${label}: talking to a lead needs a second press, then says it talks with you and links the talk`,
+    await page.evaluate(() => window.__ptaWorkflowCalls.filter(c => c.method === 'workflow_lead_connect' && c.confirmed === true).length) === 1
+    && await page.locator('#workflow-leads [data-lead="pagos"] a[href="https://claude.ai/code/session_Lead123"]').count() === 1);
+  await page.locator('#workflow-leads [data-lead="pagos"] button', { hasText: 'Terminar la conversación' }).click();
+  await page.waitForSelector('#workflow-leads [data-lead="pagos"] .lead-shift:text("Siguiendo sus ejecuciones")');
+  check(`workflow settings ${label}: ending the talk lets the lead go on`,
+    await page.evaluate(() => window.__ptaWorkflowCalls.filter(c => c.method === 'workflow_lead_disconnect').length) === 1);
   check(`workflow settings ${label}: the workflow leads list each lead with its agent and workflows`,
     /Claude · claude-opus-5-5 · high/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()) && /payments-features/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
   check(`workflow settings ${label}: the category passes axe`, (await scan(page)).length === 0, JSON.stringify(await scan(page)));

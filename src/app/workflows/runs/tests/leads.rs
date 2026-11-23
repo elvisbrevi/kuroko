@@ -285,3 +285,78 @@ async fn a_turn_the_host_did_not_finish_is_marked_and_taken_again() {
     );
     bench.release();
 }
+
+#[tokio::test]
+async fn the_person_talks_with_a_lead_live_and_its_turns_wait_meanwhile() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    bench
+        .until(&id, |r| {
+            r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    turns(&bench, 1).await;
+    let talk = |method: &'static str, args: Value| {
+        let (host, azure) = (bench.host.clone(), bench.azure.clone());
+        async move { super::super::shifts::talk(&host, method, &args, &azure).await }
+    };
+    // Confirmed first, then its own conversation, live.
+    let unconfirmed = talk("workflow_lead_connect", json!({"lead": "Pagos"}))
+        .await
+        .unwrap_err();
+    assert!(unconfirmed.contains("Confirm"), "{unconfirmed}");
+    let connected = talk(
+        "workflow_lead_connect",
+        json!({"lead": "Pagos", "confirmed": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(connected["url"], "https://claude.ai/code/session_Lead123");
+    // A second connect gets the same talk, never a second process on the conversation.
+    let again = talk(
+        "workflow_lead_connect",
+        json!({"lead": "Pagos", "confirmed": true}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["url"], connected["url"]);
+    assert_eq!(
+        fs::read_to_string(bench.log.join("lead_live"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    // Marked like a turn while it lasts.
+    assert!(shift(&bench).turn_started.is_some());
+    let args = fs::read_to_string(bench.log.join("lead_args.1")).unwrap();
+    assert!(
+        args.contains("--resume\nses_lead") && args.contains("--strict-mcp-config"),
+        "{args}"
+    );
+    let listed =
+        super::super::shifts::operation(&bench.host, "workflow_lead_shifts", &json!({})).unwrap();
+    assert_eq!(listed["shifts"][0]["talking"], true);
+    // Its turns wait while they talk, a person's request too.
+    super::super::shifts::operation(&bench.host, "workflow_lead_wake", &json!({"lead": "pagos"}))
+        .unwrap();
+    bench.offset.store(600, Ordering::SeqCst);
+    for _ in 0..5 {
+        bench.tick().await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(shift(&bench).wakes.len(), 1);
+    // When the talk ends its turns go on, with what was queued.
+    talk("workflow_lead_disconnect", json!({"lead": "pagos"}))
+        .await
+        .unwrap();
+    let after = turns(&bench, 2).await;
+    assert_eq!(after.wakes[1].outcome, "done", "{:?}", after.wakes);
+    assert!(after.turn_started.is_none());
+    let listed =
+        super::super::shifts::operation(&bench.host, "workflow_lead_shifts", &json!({})).unwrap();
+    assert_eq!(listed["shifts"][0]["talking"], false);
+    bench.release();
+}

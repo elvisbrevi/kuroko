@@ -20,16 +20,9 @@ pub(crate) struct LeadTurn {
     pub(crate) context_tokens: Option<u64>,
 }
 
-/// Run one turn of a lead's conversation in `directory` with `prompt`.
-pub(crate) async fn lead_turn(
-    (model, effort): (&str, &str),
-    directory: &Path,
-    resume: Option<&str>,
-    prompt: &str,
-    server: Arc<Reporter>,
-    limit: Duration,
-) -> Result<LeadTurn> {
-    let binary = locate("claude").ok_or_else(unavailable)?;
+/// The CLI's arguments for a lead's conversation: no tool of its own, its tools served in this
+/// process, `resume`d when it has one.
+pub(crate) fn arguments((model, effort): (&str, &str), resume: Option<&str>) -> Vec<OsString> {
     let mut args: Vec<OsString> = [
         "-p",
         "--input-format",
@@ -53,6 +46,20 @@ pub(crate) async fn lead_turn(
     if let Some(session) = resume {
         args.extend(["--resume".into(), session.into()]);
     }
+    args
+}
+
+/// Run one turn of a lead's conversation in `directory` with `prompt`.
+pub(crate) async fn lead_turn(
+    (model, effort): (&str, &str),
+    directory: &Path,
+    resume: Option<&str>,
+    prompt: &str,
+    server: Arc<Reporter>,
+    limit: Duration,
+) -> Result<LeadTurn> {
+    let binary = locate("claude").ok_or_else(unavailable)?;
+    let args = arguments((model, effort), resume);
     let mut command = crate::security::program_async(&binary);
     command
         .args(&args)
