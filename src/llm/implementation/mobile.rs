@@ -210,7 +210,7 @@ impl Session {
                         && request["server_name"] == "kuroko"
                         && let Some(reporter) = self.reporter.clone()
                     {
-                        let reply = mcp_reply(&reporter, &request["message"]);
+                        let reply = mcp_reply(&reporter, &request["message"]).await;
                         self.send(
                             json!({"type":"control_response","response":{"subtype":"success",
                             "request_id":value["request_id"],"response":{"mcp_response":reply}}}),
@@ -454,7 +454,7 @@ async fn spawn(
 }
 
 /// The JSON-RPC reply of the SDK MCP server `kuroko` to one message of the CLI.
-pub(super) fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
+pub(super) async fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
     let id = message.get("id").cloned().filter(|id| !id.is_null());
     let result = match message["method"].as_str().unwrap_or_default() {
         "initialize" => Ok(json!({
@@ -466,7 +466,8 @@ pub(super) fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
             let outcome = (reporter.call)(
                 message["params"]["name"].as_str().unwrap_or_default(),
                 &message["params"]["arguments"],
-            );
+            )
+            .await;
             Ok(match outcome {
                 Ok(value) => {
                     json!({"content": [{"type": "text", "text": value.to_string()}], "isError": false})
@@ -757,47 +758,49 @@ pub(crate) async fn reconnect(
 mod reporter_tests {
     use super::*;
 
-    #[test]
-    fn the_report_server_answers_the_clis_mcp_messages_in_this_process() {
+    #[tokio::test]
+    async fn the_report_server_answers_the_clis_mcp_messages_in_this_process() {
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = calls.clone();
-        let reporter = super::super::Reporter {
-            tools: json!([{"name": "finding_report"}]),
-            call: std::sync::Arc::new(move |tool: &str, args: &Value| {
+        let reporter = super::super::Reporter::sync(
+            json!([{"name": "finding_report"}]),
+            move |tool: &str, args: &Value| {
                 seen.lock().unwrap().push((tool.to_owned(), args.clone()));
                 if args["title"] == "" {
                     Err("Give the finding a title.".into())
                 } else {
                     Ok(json!({"recorded": true, "seq": 1}))
                 }
-            }),
-        };
+            },
+        );
         let reply = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
-        );
+        ).await;
         assert_eq!(reply["id"], 0);
         assert_eq!(reply["result"]["serverInfo"]["name"], "kuroko");
         assert!(reply["result"]["capabilities"]["tools"].is_object());
         let notified = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-        );
+        )
+        .await;
         assert!(notified.get("id").is_none() && notified["result"] == json!({}));
         let listed = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
-        );
+        )
+        .await;
         assert_eq!(listed["result"]["tools"][0]["name"], "finding_report");
         let called = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"finding_report","arguments":{"title":"Rounding"}}}),
-        );
+        ).await;
         assert_eq!(called["result"]["isError"], false);
         let refused = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"finding_report","arguments":{"title":""}}}),
-        );
+        ).await;
         assert_eq!(refused["result"]["isError"], true);
         assert_eq!(
             refused["result"]["content"][0]["text"],
@@ -806,7 +809,8 @@ mod reporter_tests {
         let unknown = mcp_reply(
             &reporter,
             &json!({"jsonrpc":"2.0","id":4,"method":"resources/list"}),
-        );
+        )
+        .await;
         assert_eq!(unknown["error"]["code"], -32601);
         assert_eq!(calls.lock().unwrap().len(), 2);
     }

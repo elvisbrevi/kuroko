@@ -533,6 +533,72 @@ pub(in crate::app) async fn wiki_pages(
     .await
 }
 
+/// What a workflow lead reads of a project: a page of its Wiki, a file of one of its
+/// repositories (catalog ID), or a folder's entries, on a branch or the default one.
+pub(in crate::app) enum LeadRead<'a> {
+    Page(&'a str),
+    File(&'a str, &'a str, Option<&'a str>),
+    Folder(&'a str, &'a str, Option<&'a str>),
+}
+
+/// A workflow lead's read of a project, read now with the enabled Azure source's read
+/// credential (never cached, nothing written).
+pub(in crate::app) async fn lead_read(
+    state: &DesktopState,
+    source: Option<&str>,
+    (organization, project): (&str, &str),
+    read: LeadRead<'_>,
+) -> Result<Value, String> {
+    project_read(
+        state,
+        source,
+        "reading a project",
+        "pages and files",
+        60,
+        |azure, _cache| async move {
+            let (client, key, catalog) = (&azure.client, &azure.read_key, &azure.catalog);
+            match read {
+                LeadRead::Page(page) => {
+                    crate::ado::workflow::wiki_page(
+                        client,
+                        key,
+                        catalog,
+                        organization,
+                        project,
+                        page,
+                    )
+                    .await
+                }
+                LeadRead::File(repository, path, branch) => {
+                    crate::ado::workflow::repository_file(
+                        client,
+                        key,
+                        catalog,
+                        (organization, project),
+                        repository,
+                        path,
+                        branch,
+                    )
+                    .await
+                }
+                LeadRead::Folder(repository, path, branch) => {
+                    crate::ado::workflow::repository_list(
+                        client,
+                        key,
+                        catalog,
+                        (organization, project),
+                        repository,
+                        path,
+                        branch,
+                    )
+                    .await
+                }
+            }
+        },
+    )
+    .await
+}
+
 /// The comment threads of a workflow run's pull request, read with the enabled Azure source's
 /// read credential (never cached, nothing written).
 pub(in crate::app) async fn threads(

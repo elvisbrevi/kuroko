@@ -534,9 +534,12 @@ Knowledge
                            A lead's shifts: while its workflows have active runs, a Claude conversation
                            on the coordinator woken by what happens to them (at most every 5 minutes, 48
                            a day), with its turns, its journal of notes, decisions (in shadow, recorded
-                           only) and findings, and its record once ended (in brief without LEAD,
-                           whole with it; --run, what was recorded about one run). wake asks it to look
-                           at its next tick.
+                           only), findings and questions for you, and its record once ended (in brief
+                           without LEAD, whole with it; --run, what was recorded about one run). wake
+                           asks it to look at its next tick.
+  workflows leads answer LEAD QUESTION --note TEXT
+                           Answers one of a lead's open questions (its ID from leads shifts LEAD or
+                           status); the answer reaches the lead at its next turn, never as an approval.
   workflows leads list | leads show LEAD | leads save < lead.json | leads remove LEAD --confirmed
                            Workflow leads: agents you name (Claude on the coordinator, with a model and
                            effort) that follow the runs of the workflows that name them (a workflow's
@@ -1392,6 +1395,10 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
             ("workflow_lead_shifts", body)
         }
         (Some("leads"), Some("wake")) => ("workflow_lead_wake", json!({"lead": id(3)?})),
+        (Some("leads"), Some("answer")) => (
+            "workflow_lead_answer",
+            json!({"lead": id(3)?, "question": id(4)?, "answer": option(args, "--note").ok_or_else(|| anyhow::anyhow!("Give the answer with --note TEXT."))?}),
+        ),
         (Some("leads"), Some("save")) => ("workflow_lead_save", json!({"lead": input()?})),
         (Some("leads"), Some("remove")) => {
             let lead = id(3)?;
@@ -2938,6 +2945,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                 _
             ]
             | ["workflows", "leads", "shifts"]
+            | ["workflows", "leads", "answer", _, _]
             | ["workflows", "blocks", "remove", _]
             | ["notes", "list" | "add"]
             | ["notes", "search" | "edit" | "remove", _]
@@ -3248,6 +3256,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                     "restart" | "resolve-finding" | "dismiss-finding",
                     _
                 ] | ["workflows", "act", _, _, _]
+                    | ["workflows", "leads", "answer", _, _]
             ),
         ),
         (

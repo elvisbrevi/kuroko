@@ -828,6 +828,180 @@ pub(crate) fn assigned(catalog: &str, detail: &Detail) -> Result<bool> {
     }))
 }
 
+/// The most a workflow lead reads of one Wiki page or file, and of one folder's entries.
+const READ_TEXT: usize = 60_000;
+const READ_ENTRIES: usize = 500;
+
+/// A path a lead reads: from the root (`/…`), bounded, without control characters.
+fn read_path(path: &str) -> Result<&str> {
+    ensure!(
+        path.starts_with('/') && path.chars().count() <= 400 && !path.chars().any(char::is_control),
+        "invalid path: give it from the root, as /folder/name"
+    );
+    Ok(path)
+}
+
+/// A lead's read: a page or file that is missing or too large says so, not that the credential
+/// failed (a lead guesses paths).
+async fn lead_request(client: &Client, key: &str, url: reqwest::Url) -> Result<serde_json::Value> {
+    request(client, key, Method::GET, url, None)
+        .await
+        .map_err(|error| {
+            let text = error.to_string();
+            if text.contains("returned HTTP 404") {
+                anyhow::anyhow!("invalid path: not found")
+            } else if text.contains("response too large") {
+                anyhow::anyhow!("invalid path: larger than 1 MB")
+            } else {
+                error
+            }
+        })
+}
+
+/// A text as a lead reads it, at most `READ_TEXT` characters.
+fn read_text(path: &str, content: &str) -> serde_json::Value {
+    serde_json::json!({"path": path, "content": content.chars().take(READ_TEXT).collect::<String>(),
+        "truncated": content.chars().count() > READ_TEXT})
+}
+
+/// A page of the project's Wiki as Markdown, read now: `{path, content, truncated}`.
+pub(crate) async fn wiki_page(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    page: &str,
+) -> Result<serde_json::Value> {
+    let page = read_path(page)?;
+    let source = source(catalog, organization)?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "wiki", "wikis"],
+    )?;
+    let value = request(client, key, Method::GET, url, None).await?;
+    let wiki = value["value"]
+        .as_array()
+        .context("invalid Azure DevOps wikis")?
+        .iter()
+        .filter(|w| w["type"].as_str() == Some("projectWiki"))
+        .find_map(|w| {
+            w["id"]
+                .as_str()
+                .filter(|id| uuid::Uuid::parse_str(id).is_ok() && id.len() == 36)
+        })
+        .context("invalid project: it has no project Wiki")?;
+    let mut url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "wiki", "wikis", wiki, "pages"],
+    )?;
+    url.query_pairs_mut()
+        .append_pair("path", page)
+        .append_pair("includeContent", "true");
+    let found = lead_request(client, key, url).await?;
+    Ok(read_text(
+        page,
+        found["content"].as_str().unwrap_or_default(),
+    ))
+}
+
+/// The items API of one repository at `path`, on `branch` or its default branch.
+fn items_url(
+    source: &Source,
+    project: &str,
+    repository: &str,
+    branch: Option<&str>,
+) -> Result<reqwest::Url> {
+    ensure!(
+        uuid::Uuid::parse_str(repository).is_ok() && repository.len() == 36,
+        "invalid repository ID"
+    );
+    let mut url = project_url(
+        source,
+        project,
+        "dev.azure.com",
+        &["_apis", "git", "repositories", repository, "items"],
+    )?;
+    if let Some(branch) = branch {
+        ensure!(
+            !branch.is_empty() && branch.len() <= 250 && !branch.chars().any(char::is_control),
+            "invalid branch"
+        );
+        url.query_pairs_mut()
+            .append_pair("versionDescriptor.version", branch)
+            .append_pair("versionDescriptor.versionType", "branch");
+    }
+    Ok(url)
+}
+
+/// One file of a repository (catalog ID) as text, read now: `{path, content, truncated}`, or
+/// `{path, binary: true}`.
+pub(crate) async fn repository_file(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    (organization, project): (&str, &str),
+    repository: &str,
+    path: &str,
+    branch: Option<&str>,
+) -> Result<serde_json::Value> {
+    let path = read_path(path)?;
+    let source = source(catalog, organization)?;
+    let mut url = items_url(&source, project, repository, branch)?;
+    url.query_pairs_mut()
+        .append_pair("path", path)
+        .append_pair("includeContent", "true")
+        .append_pair("$format", "json");
+    let item = lead_request(client, key, url).await?;
+    ensure!(
+        item["isFolder"].as_bool() != Some(true),
+        "invalid path: it is a folder; list it instead"
+    );
+    if item["contentMetadata"]["isBinary"].as_bool() == Some(true) {
+        return Ok(serde_json::json!({"path": path, "binary": true}));
+    }
+    Ok(read_text(
+        path,
+        item["content"].as_str().unwrap_or_default(),
+    ))
+}
+
+/// The entries of one folder of a repository (catalog ID), read now: `{path, entries:
+/// [{path, folder}], truncated}`.
+pub(crate) async fn repository_list(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    (organization, project): (&str, &str),
+    repository: &str,
+    path: &str,
+    branch: Option<&str>,
+) -> Result<serde_json::Value> {
+    let path = read_path(path)?;
+    let source = source(catalog, organization)?;
+    let mut url = items_url(&source, project, repository, branch)?;
+    url.query_pairs_mut()
+        .append_pair("scopePath", path)
+        .append_pair("recursionLevel", "OneLevel");
+    let value = lead_request(client, key, url).await?;
+    let items = value["value"]
+        .as_array()
+        .context("invalid Azure DevOps items")?;
+    let entries: Vec<serde_json::Value> = items
+        .iter()
+        .filter(|i| i["path"].as_str().is_some_and(|p| p != path))
+        .take(READ_ENTRIES)
+        .map(|i| serde_json::json!({"path": text(&i["path"], 400), "folder": i["isFolder"].as_bool() == Some(true)}))
+        .collect();
+    Ok(
+        serde_json::json!({"path": path, "truncated": items.len() > READ_ENTRIES + 1, "entries": entries}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1155,6 +1329,98 @@ mod tests {
         // The code Wiki's repository is never read, nor the other author's commit.
         assert!(!requests.iter().any(|r| r.url.path().contains(CODE)));
         assert!(!requests.iter().any(|r| r.url.path().contains(&theirs)));
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
+
+    #[tokio::test]
+    async fn a_lead_reads_a_wiki_page_a_file_and_a_folder_bounded_and_only_reading() {
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        const WIKI: &str = "1a2b3c4d-5b1d-4f7a-9c8e-0f3c6a2e5e6f";
+        Mock::given(method("GET"))
+            .and(path("/example/Payments/_apis/wiki/wikis"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"value":[{"id":WIKI,"name":"Payments.wiki","type":"projectWiki"}]}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/wiki/wikis/{WIKI}/pages"
+            )))
+            .and(query_param("path", "/Procedures/Deploy"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"content": "x".repeat(READ_TEXT + 5)})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{REPO}/items"
+            )))
+            .and(query_param("path", "/src/Rounding.cs"))
+            .and(query_param("versionDescriptor.version", "feature/42"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"path": "/src/Rounding.cs", "content": "class Rounding {}"}),
+                ),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{REPO}/items"
+            )))
+            .and(query_param("scopePath", "/src"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [
+                {"path": "/src", "isFolder": true},
+                {"path": "/src/Rounding.cs"},
+                {"path": "/src/legacy", "isFolder": true}
+            ]})))
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        let org = ("https://dev.azure.com/example", "Payments");
+        let page = wiki_page(&client, "key", CATALOG, org.0, org.1, "/Procedures/Deploy")
+            .await
+            .unwrap();
+        assert_eq!(page["truncated"], true);
+        assert_eq!(page["content"].as_str().unwrap().len(), READ_TEXT);
+        let file = repository_file(
+            &client,
+            "key",
+            CATALOG,
+            org,
+            REPO,
+            "/src/Rounding.cs",
+            Some("feature/42"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(file["content"], "class Rounding {}");
+        let listed = repository_list(&client, "key", CATALOG, org, REPO, "/src", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            listed["entries"],
+            json!([{"path": "/src/Rounding.cs", "folder": false}, {"path": "/src/legacy", "folder": true}])
+        );
+        for bad in ["src", "/a\u{7}b"] {
+            assert!(
+                repository_file(&client, "key", CATALOG, org, REPO, bad, None)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            repository_list(&client, "key", CATALOG, org, "not-an-id", "/", None)
+                .await
+                .is_err()
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
 

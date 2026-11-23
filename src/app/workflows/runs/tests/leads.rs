@@ -66,13 +66,38 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
             r.state == Phase::Coding && r.children[0].coding.as_ref().is_some_and(|c| c.started)
         })
         .await;
-    fs::write(
-        bench.log.join("lead_call"),
-        format!("{}\n", json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
-            "message":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lead_decide","arguments":{"run":id,"decision":"wait","reason":"Its agent is still coding."}}}}})),
-    )
-    .unwrap();
+    // Its turn decides, reads a Wiki page and a file of its workflow, and asks the person.
+    bench
+        .catalog
+        .set_text("page:/Procedures/Deploy", "Deploy steps");
+    bench
+        .catalog
+        .set_text(&format!("{WEB}:/src/Rounding.cs"), "class Rounding {}");
+    let calls = [
+        json!({"name":"lead_decide","arguments":{"run":id,"decision":"wait","reason":"Its agent is still coding."}}),
+        json!({"name":"lead_wiki_page","arguments":{"workflow":"payments","path":"/Procedures/Deploy"}}),
+        json!({"name":"lead_repository_file","arguments":{"workflow":"payments","repository":"payments-web","path":"/src/Rounding.cs"}}),
+        json!({"name":"lead_repository_file","arguments":{"workflow":"other","repository":"payments-web","path":"/x"}}),
+        json!({"name":"lead_ask_person","arguments":{"run":id,"question":"Is the legacy rounding kept?"}}),
+    ];
+    let lines: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(n, params)| json!({"type":"control_request","request_id":format!("m{n}"),"request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":n,"method":"tools/call","params":params}}}).to_string())
+        .collect();
+    fs::write(bench.log.join("lead_call"), lines.join("\n") + "\n").unwrap();
     let first = turns(&bench, 1).await;
+    let replies = fs::read_to_string(bench.log.join("lead_replies")).unwrap();
+    let replies: Vec<&str> = replies.lines().collect();
+    assert!(replies[1].contains("Deploy steps"), "{}", replies[1]);
+    assert!(replies[2].contains("class Rounding"), "{}", replies[2]);
+    assert!(
+        replies[3].contains("not one of your workflows"),
+        "{}",
+        replies[3]
+    );
+    assert!(replies[4].contains("asked"), "{}", replies[4]);
     assert_eq!(first.state, "active");
     assert_eq!(first.wakes[0].outcome, "done", "{:?}", first.wakes);
     assert_eq!(first.session_id.as_deref(), Some("ses_lead"));
@@ -97,6 +122,15 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
         super::super::shifts::operation(&bench.host, "workflow_lead_shifts", &json!({})).unwrap();
     assert_eq!(listed["shifts"][0]["decisions"], 1, "{listed}");
     assert!(listed["shifts"][0].get("journal").is_none());
+    // Its question waits for the person, on Home too.
+    let question = listed["shifts"][0]["questions"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let attention = super::super::shifts::attention(&bench.host.state).unwrap();
+    assert_eq!(attention[0]["kind"], "question");
+    assert_eq!(attention[0]["text"], "Is the legacy rounding kept?");
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
     // Nothing new and within the interval: no other turn.
     bench.tick().await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -108,8 +142,46 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
     assert_eq!(second.wakes[1].outcome, "done");
     let args = fs::read_to_string(bench.log.join("lead_args.1")).unwrap();
     assert!(args.contains("--resume\nses_lead"), "{args}");
+    // The person's answer reaches it at once, at its next turn.
+    super::super::shifts::operation(
+        &bench.host,
+        "workflow_lead_answer",
+        &json!({"lead": "pagos", "question": question, "answer": "Yes, keep it."}),
+    )
+    .unwrap();
+    // A second answer on its way is refused, not dropped.
+    let twice = super::super::shifts::operation(
+        &bench.host,
+        "workflow_lead_answer",
+        &json!({"lead": "pagos", "question": question, "answer": "No."}),
+    )
+    .unwrap_err();
+    assert!(twice.contains("has an answer already"), "{twice}");
+    let third = turns(&bench, 3).await;
+    let prompts = fs::read_to_string(bench.log.join("lead_prompts")).unwrap();
+    assert!(
+        prompts
+            .lines()
+            .last()
+            .unwrap()
+            .contains("«Is the legacy rounding kept?»: Yes, keep it."),
+        "{prompts}"
+    );
+    let asked = third.journal.iter().find(|e| e.kind == "question").unwrap();
+    assert_eq!(asked.answer.as_deref(), Some("Yes, keep it."));
+    assert!(
+        super::super::shifts::attention(&bench.host.state)
+            .unwrap()
+            .is_empty()
+    );
+    // An answered question takes no other answer.
+    super::super::shifts::operation(
+        &bench.host,
+        "workflow_lead_answer",
+        &json!({"lead": "pagos", "question": question, "answer": "Again."}),
+    )
+    .unwrap_err();
     // The run ends: the closing turn ends the shift with its record.
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
     bench.release();
     bench.state(&id, Phase::PullRequests).await;
     bench.pulls(WEB, "payments-web", "feature/child-1", 21, "completed");

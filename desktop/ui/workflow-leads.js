@@ -19,6 +19,8 @@ let leads = [];
 let read = false;
 /** What the last save warned about, shown until the next one. @type {string[]} */
 let warnings = [];
+/** The questions answered here; the host takes an answer at its next tick. @type {Set<string>} */
+const answered = new Set();
 
 /** A lead ID from its name: lowercase letters, digits and `-`, starting with a letter. */
 function slug(name) {
@@ -107,9 +109,24 @@ async function renderLeads(container, { editable, coordinator }) {
     const state = !shift ? null : following
       ? `${shift.state === 'failing' ? t('Its turns are failing') : t('Following its runs')}${last ? ` · ${t('last look {time}', { time: when(last.at) })}` : ''} · ${t('{n} decisions', { n: String(shift.decisions ?? 0) })}`
       : t('Last shift ended {time}', { time: when(shift.ended_at) });
+    // Its questions for you, each answered once; the answer reaches it at its next turn.
+    const questions = (following ? shift.questions ?? [] : []).filter(q => !answered.has(q.id)).map(q => {
+      const text = el('textarea', { rows: 2, maxLength: 2000, 'aria-label': t('Your answer'), disabled: !editable });
+      const send = el('button', { type: 'button', class: 'small', textContent: t('Answer'), disabled: !editable });
+      send.onclick = () => busy(send, async () => {
+        if (!text.value.trim()) return;
+        await invoke('workflow_lead_answer', { lead: lead.id, question: q.id, answer: text.value.trim() });
+        answered.add(q.id);
+        done(t('Your answer reaches {name} at its next turn.', { name: lead.name }));
+        await renderLeads(container, { editable, coordinator });
+      });
+      return el('div', { class: 'callout warn lead-question', 'data-question': q.id },
+        el('p', {}, el('strong', { textContent: t('{name} asks', { name: lead.name }) }), ' ', el('span', { textContent: q.text })), text, el('div', { class: 'actions' }, send));
+    });
     return el('div', { class: 'resource', 'data-lead': lead.id },
       el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), look, edit, remove),
       state ? el('p', { class: 'hint lead-shift', textContent: state }) : null,
+      ...questions,
       el('p', { class: 'resource-facts' }, el('small', { textContent: [`Claude · ${lead.agent.model} · ${lead.agent.effort}`, lead.enabled === false ? t('Off') : null,
         workflows.length ? t('Leads {names}', { names: workflows.join(', ') }) : t('Leads no workflow yet')].filter(Boolean).join(' · ') })),
       lead.description ? el('p', { class: 'hint', textContent: lead.description }) : null);

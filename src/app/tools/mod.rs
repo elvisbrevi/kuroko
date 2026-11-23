@@ -1162,7 +1162,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "status",
         title: "Assistant status",
-        description: "Whether the host and the assistant run, the mode (observe or active), the Microsoft account, Teams subscriptions and the version, and the workflow runs waiting on the user (workflow_attention: a plan to review, a workflow to assign, a run that needs attention or a resume).",
+        description: "Whether the host and the assistant run, the mode (observe or active), the Microsoft account, Teams subscriptions and the version, and the workflow runs waiting on the user (workflow_attention: a plan to review, a workflow to assign, a run that needs attention or a resume) and what the workflow leads need from them (lead_attention: an open question to answer with workflow_lead_answer, or a lead whose turns are failing).",
         effect: Effect::Read,
         schema: none,
     },
@@ -1590,6 +1590,18 @@ pub(super) const TOOLS: &[Tool] = &[
         description: "Asks a workflow lead (by its ID or name) to look at its runs at its next tick, whatever its usual interval; refused when it has no shift (none of its workflows has an active run). The turn uses the lead's Claude agent and the account's usage.",
         effect: Effect::Local,
         schema: || object(json!({"lead": string("The lead's ID or name.")}), &["lead"]),
+    },
+    Tool {
+        name: "workflow_lead_answer",
+        title: "Answer a workflow lead's question",
+        description: "Answers one of a workflow lead's open questions (its ID from workflow_lead_shifts or the status's lead_attention); the answer reaches the lead at its next turn, which comes at once. An answer is information for the lead, never an approval: approvals are given in Kuroko's own controls.",
+        effect: Effect::Local,
+        schema: || {
+            object(
+                json!({"lead": string("The lead's ID or name."), "question": string("The question's ID."), "answer": string("Your answer, at most 2000 characters.")}),
+                &["lead", "question", "answer"],
+            )
+        },
     },
     Tool {
         name: "workflow_lead_remove",
@@ -2521,6 +2533,7 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
                 "microsoft_connected": s["microsoft_connected"], "active_subscriptions": s["active_subscriptions"],
                 "subscription_issue": s["subscription_issue"], "tunnel_running": s["tunnel_running"],
                 "workflow_attention": s["workflow_attention"],
+                "lead_attention": s["lead_attention"],
             }))
         }
         "messages_list" => {
@@ -2705,7 +2718,7 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
         }
         // The same host operations as `kuroko workflows`; the host checks and confirms.
         "workflow_leads_list" | "workflow_lead_show" | "workflow_lead_save" | "workflow_lead_remove"
-        | "workflow_lead_shifts" | "workflow_lead_wake" => {
+        | "workflow_lead_shifts" | "workflow_lead_wake" | "workflow_lead_answer" => {
             ipc(name, args.clone()).await
         }
         "workflows_list" | "workflow_show" | "workflow_save" | "workflow_remove"
@@ -3453,6 +3466,7 @@ mod tests {
             ("workflow_lead_remove", "needs confirmation"),
             ("workflow_lead_shifts", "read"),
             ("workflow_lead_wake", "local"),
+            ("workflow_lead_answer", "local"),
             ("workflow_finding_resolve", "local"),
             ("workflow_finding_dismiss", "local"),
         ] {

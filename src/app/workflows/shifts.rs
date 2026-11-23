@@ -11,6 +11,7 @@
 use super::findings::Finding;
 use super::record::Run;
 use super::*;
+use crate::app::tools::todo::LeadRead;
 use crate::llm::implementation::Reporter;
 use crate::workflows::lead::Lead;
 use rusqlite::{Connection, params};
@@ -102,11 +103,12 @@ pub(in crate::app) struct Wake {
     pub text: String,
 }
 
-/// One line of a shift's journal: a note, a decision (in shadow, recorded only) or a finding.
+/// One line of a shift's journal: a note, a decision (in shadow, recorded only), a finding or a
+/// question for the person.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(in crate::app) struct Entry {
     pub at: i64,
-    /// `note`, `decision` or `finding`.
+    /// `note`, `decision`, `finding` or `question`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
@@ -117,6 +119,11 @@ pub(in crate::app) struct Entry {
     /// The run as the engine had it then (`state` and stage), beside a decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// A question's ID and the person's answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
 }
 
 /// The shifts of `workflows.db` (its own connection beside the runs').
@@ -126,6 +133,10 @@ pub(in crate::app) struct Shifts {
     waking: Shared<HashSet<String>>,
     /// The leads a person asked to look now; the engine's next step for each takes it.
     requests: Shared<HashSet<String>>,
+    /// The person's answers to a lead's questions (lead, question, answer), taken the same way.
+    // shortcut: kept in memory until the next tick (30 s); one given right before a restart is
+    // lost and the question stays open. Persist them if that happens.
+    answers: Shared<Vec<(String, String, String)>>,
     /// One lead's turn at a time on the account.
     turn: tokio::sync::Mutex<()>,
 }
@@ -144,6 +155,7 @@ impl Shifts {
             db: Shared::new(db),
             waking: Shared::new(HashSet::new()),
             requests: Shared::new(HashSet::new()),
+            answers: Shared::new(Vec::new()),
             turn: tokio::sync::Mutex::new(()),
         })
     }
@@ -255,6 +267,9 @@ fn active(host: &Host, workflows: &[String]) -> Result<Vec<Run>> {
     Ok(runs)
 }
 
+/// How an answer's event starts: the turn reads these before any other event.
+const ANSWERED: &str = "The person answered, in Kuroko, your question";
+
 /// The event of a closing turn.
 const CLOSING: &str = "Every run of your workflows has ended: write your record with lead_finish.";
 
@@ -271,7 +286,7 @@ fn queue(shift: &mut Shift, run: Option<&str>, event: String) {
 
 /// One tick of every enabled lead's shift: opened, fed with what changed, woken when due, and
 /// ended once its last run has ended.
-pub(in crate::app) async fn tick(host: &Arc<Host>, now: i64) {
+pub(in crate::app) async fn tick(host: &Arc<Host>, azure: &engine::Azure, now: i64) {
     let Ok(map) = host.state.settings.map() else {
         return;
     };
@@ -283,7 +298,7 @@ pub(in crate::app) async fn tick(host: &Arc<Host>, now: i64) {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        if let Err(error) = step(host, &map, lead, &workflows, now) {
+        if let Err(error) = step(host, azure, &map, lead, &workflows, now) {
             tracing::warn!(event = "lead_shift_failed", lead = %lead.id, error = %error);
         }
     }
@@ -315,6 +330,7 @@ fn unled(host: &Host, map: &KnowledgeMap, now: i64) -> Result<()> {
 
 fn step(
     host: &Arc<Host>,
+    azure: &engine::Azure,
     map: &KnowledgeMap,
     lead: &Lead,
     workflows: &[String],
@@ -340,9 +356,39 @@ fn step(
             true,
         ),
     };
+    let answers: Vec<(String, String, String)> = {
+        let mut all = shifts.answers.lock().unwrap();
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+            .into_iter()
+            .partition(|(l, _, _)| *l == lead.id);
+        *all = rest;
+        mine
+    };
     if requested {
         shift.requested = true;
         queue(&mut shift, None, "The person asked you to look now.".into());
+        changed = true;
+    }
+    for (_, question, answer) in &answers {
+        let Some(entry) = shift
+            .journal
+            .iter_mut()
+            .find(|e| e.id.as_ref() == Some(question) && e.answer.is_none())
+        else {
+            continue;
+        };
+        entry.answer = Some(answer.clone());
+        let event = format!(
+            "{ANSWERED} {question}{} «{}»: {answer}",
+            entry
+                .run
+                .as_deref()
+                .map(|r| format!(" about run {r}"))
+                .unwrap_or_default(),
+            entry.text
+        );
+        shift.requested = true;
+        queue(&mut shift, None, event);
         changed = true;
     }
     for run in &runs {
@@ -418,8 +464,10 @@ fn step(
         && (shift.requested
             || (last.is_none_or(|at| now - at >= MIN_INTERVAL)
                 && (shift.state != "failing" || last.is_none_or(|at| now - at >= RETRY_AFTER))));
-    if changed {
-        shifts.save(&shift)?;
+    if changed && let Err(error) = shifts.save(&shift) {
+        // Taken again at the next step.
+        shifts.answers.lock().unwrap().extend(answers);
+        return Err(error);
     }
     if due {
         shifts.waking.lock().unwrap().insert(lead.id.clone());
@@ -437,7 +485,7 @@ fn step(
             .map(|c| c.llm.language)
             .unwrap_or_default();
         tokio::spawn(wake(
-            host.clone(),
+            (host.clone(), azure.clone()),
             lead.clone(),
             definitions,
             (texts, language),
@@ -487,6 +535,9 @@ fn opening(
         text.push_str("\n\n## Your earlier notes\n");
         for entry in notes.iter().rev().take(20).rev() {
             text.push_str(&format!("\n- {} {}", entry.kind, entry.text));
+            if let Some(answer) = &entry.answer {
+                text.push_str(&format!(" (the person answered: {answer})"));
+            }
         }
     }
     text
@@ -494,7 +545,7 @@ fn opening(
 
 /// One turn of a shift; its outcome and what the lead recorded are saved with it.
 async fn wake(
-    host: Arc<Host>,
+    (host, azure): (Arc<Host>, engine::Azure),
     lead: Lead,
     workflows: Vec<crate::workflows::Workflow>,
     (texts, language): (crate::agent_prompts::Texts, crate::config::Language),
@@ -541,13 +592,16 @@ async fn wake(
         prompt.push_str("\n\n");
     }
     prompt.push_str("## What happened\n");
-    for event in events.iter().take(INLINE) {
+    // The person's answers first, whatever else happened.
+    let (answers, others): (Vec<&String>, Vec<&String>) =
+        events.iter().partition(|e| e.starts_with(ANSWERED));
+    for event in answers.iter().chain(others.iter().take(INLINE)) {
         prompt.push_str(&format!("\n- {event}"));
     }
-    if events.len() > INLINE {
+    if others.len() > INLINE {
         prompt.push_str(&format!(
             "\n- And {} more: read your runs with lead_runs.",
-            events.len() - INLINE
+            others.len() - INLINE
         ));
     }
     let runs = active(&host, &ids);
@@ -603,7 +657,7 @@ async fn wake(
                     &directory,
                     session.as_deref(),
                     &prompt,
-                    tools(host.clone(), shared.clone(), ids.clone()),
+                    tools((host.clone(), azure), shared.clone(), workflows.clone()),
                     TURN_LIMIT,
                 )
                 .await
@@ -695,19 +749,30 @@ fn finish(host: &Host, shift: &mut Shift, now: i64) {
 }
 
 /// The lead's tools for one turn of `shift`, bound to its workflows.
-fn tools(host: Arc<Host>, shift: Arc<Shared<Shift>>, workflows: Vec<String>) -> Arc<Reporter> {
+fn tools(
+    (host, azure): (Arc<Host>, engine::Azure),
+    shift: Arc<Shared<Shift>>,
+    workflows: Vec<crate::workflows::Workflow>,
+) -> Arc<Reporter> {
     let listed: Vec<Value> = TOOLS
         .iter()
         .map(|(name, description, schema)| json!({"name": name, "description": description, "inputSchema": schema()}))
         .collect();
+    let bound = Arc::new((host, azure, shift, workflows));
     Arc::new(Reporter {
         tools: json!(listed),
-        call: Arc::new(move |tool: &str, args: &Value| call(&host, &shift, &workflows, tool, args)),
+        call: Arc::new(move |tool: &str, args: &Value| {
+            let (bound, tool, args) = (bound.clone(), tool.to_owned(), args.clone());
+            Box::pin(async move {
+                let (host, azure, shift, workflows) = &*bound;
+                call(host, azure, shift, workflows, &tool, &args).await
+            })
+        }),
     })
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 6] = [
+const TOOLS: [(&str, &str, Schema); 14] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -717,6 +782,41 @@ const TOOLS: [(&str, &str, Schema); 6] = [
         "lead_run",
         "The whole record of one run of your workflows, read now.",
         || json!({"type": "object", "properties": {"run": {"type": "string"}}, "required": ["run"]}),
+    ),
+    (
+        "lead_deliveries",
+        "What each child of a run delivered: its reported branches, pull requests and Wiki pages, and what code found it delivered without reporting it.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}}, "required": ["run"]}),
+    ),
+    (
+        "lead_runner_messages",
+        "The summary of a child's coding session: its messages as text, never its tool calls, read through its machine (unavailable while the machine is offline).",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}}, "required": ["run", "child"]}),
+    ),
+    (
+        "lead_item",
+        "A run's work item, or one of its children, read now from Azure DevOps: its fields, comments and links.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}}, "required": ["run"]}),
+    ),
+    (
+        "lead_wiki_page",
+        "A page of your workflow's project Wiki as Markdown, read now; give its path from the root, as /Folder/Page.",
+        || json!({"type": "object", "properties": {"workflow": {"type": "string"}, "path": {"type": "string"}}, "required": ["workflow", "path"]}),
+    ),
+    (
+        "lead_repository_file",
+        "A file of one of your workflow's repositories (its name), on a branch or the default one, read now from Azure DevOps.",
+        || json!({"type": "object", "properties": {"workflow": {"type": "string"}, "repository": {"type": "string"}, "path": {"type": "string"}, "branch": {"type": "string"}}, "required": ["workflow", "repository", "path"]}),
+    ),
+    (
+        "lead_repository_list",
+        "The files and folders in one folder of your workflow's repository, on a branch or the default one, read now.",
+        || json!({"type": "object", "properties": {"workflow": {"type": "string"}, "repository": {"type": "string"}, "path": {"type": "string"}, "branch": {"type": "string"}}, "required": ["workflow", "repository", "path"]}),
+    ),
+    (
+        "lead_findings",
+        "The findings of your workflows' runs (what runners and you recorded) and their state, newest first.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "state": {"type": "string", "enum": ["open", "resolved", "dismissed"]}}}),
     ),
     (
         "lead_decide",
@@ -734,19 +834,32 @@ const TOOLS: [(&str, &str, Schema); 6] = [
         || json!({"type": "object", "properties": {"run": {"type": "string"}, "title": {"type": "string"}, "detail": {"type": "string"}, "severity": {"type": "string", "enum": ["blocking", "important", "minor"]}, "evidence": {"type": "string"}}, "required": ["run", "title", "detail", "severity"]}),
     ),
     (
+        "lead_ask_person",
+        "Ask the person one question you cannot answer from the facts, about one run or in general. It is shown to them in Kuroko and their answer reaches you at a later turn. Never ask for an approval: approvals are given in Kuroko, not in answers.",
+        || json!({"type": "object", "properties": {"question": {"type": "string"}, "run": {"type": "string"}}, "required": ["question"]}),
+    ),
+    (
         "lead_finish",
         "At your closing turn: write the summary of your shift, what was done and what is left, for its record.",
         || json!({"type": "object", "properties": {"summary": {"type": "string"}}, "required": ["summary"]}),
     ),
 ];
 
-fn call(
-    host: &Host,
+/// The most questions of one shift waiting for the person at once.
+const OPEN_QUESTIONS: usize = 5;
+/// The most a lead reads of one work item, as JSON characters, and of findings at once.
+const ITEM_TEXT: usize = 60_000;
+const FINDINGS: usize = 30;
+
+async fn call(
+    host: &Arc<Host>,
+    azure: &engine::Azure,
     shift: &Shared<Shift>,
-    workflows: &[String],
+    workflows: &[crate::workflows::Workflow],
     tool: &str,
     args: &Value,
 ) -> std::result::Result<Value, String> {
+    let ids: Vec<String> = workflows.iter().map(|w| w.id.clone()).collect();
     let text = |key: &str, max: usize| bounded(args[key].as_str().unwrap_or_default(), max);
     // A run of the lead's workflows, by its ID.
     let run = |key: &str| -> std::result::Result<Run, String> {
@@ -757,9 +870,40 @@ fn call(
             .get(id)
             .ok()
             .flatten()
-            .filter(|r| r.workflow.as_ref().is_some_and(|w| workflows.contains(w)))
+            .filter(|r| r.workflow.as_ref().is_some_and(|w| ids.contains(w)))
             .ok_or_else(|| format!("Run {id} is not a run of your workflows."))
     };
+    // One child of a run, by its work item ID.
+    let child = |run: &Run| -> std::result::Result<Option<super::record::Child>, String> {
+        match args["child"].as_u64() {
+            None => Ok(None),
+            Some(id) => run
+                .children
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+                .map(Some)
+                .ok_or_else(|| format!("#{id} is not a child of run {}.", run.id)),
+        }
+    };
+    // One of the lead's workflows and, when named, one of its repositories (by name or ID).
+    let workflow = || -> std::result::Result<&crate::workflows::Workflow, String> {
+        let id = args["workflow"].as_str().unwrap_or_default();
+        workflows
+            .iter()
+            .find(|w| w.id == id)
+            .ok_or_else(|| format!("{id} is not one of your workflows."))
+    };
+    let repository =
+        |workflow: &crate::workflows::Workflow| -> std::result::Result<String, String> {
+            let name = args["repository"].as_str().unwrap_or_default();
+            workflow
+                .repositories
+                .iter()
+                .find(|r| r.name.eq_ignore_ascii_case(name) || r.id.eq_ignore_ascii_case(name))
+                .map(|r| r.id.clone())
+                .ok_or_else(|| format!("{name} is not a repository of workflow {}.", workflow.id))
+        };
     let now = chrono::Utc::now().timestamp();
     let note = |entry: Entry| {
         let mut shift = shift.lock().unwrap();
@@ -771,7 +915,7 @@ fn call(
     };
     match tool {
         "lead_runs" => {
-            let runs = active(host, workflows).map_err(|e| e.to_string())?;
+            let runs = active(host, &ids).map_err(|e| e.to_string())?;
             Ok(json!({"runs": runs.iter().map(facts).collect::<Vec<_>>()}))
         }
         "lead_run" => {
@@ -782,6 +926,118 @@ fn call(
             } else {
                 run.view()
             })
+        }
+        "lead_deliveries" => {
+            let run = run("run")?;
+            let wanted = child(&run)?.map(|c| c.id);
+            Ok(
+                json!({"children": run.children.iter().filter(|c| wanted.is_none_or(|id| id == c.id)).map(|c| json!({
+                "id": c.id, "title": c.title, "url": c.url, "outcome": c.outcome, "branch": c.branch,
+                "branches": c.branches, "pull_requests": c.pull_requests, "wiki_pages": c.wiki_pages, "found": c.found,
+            })).collect::<Vec<_>>()}),
+            )
+        }
+        "lead_runner_messages" => {
+            let run = run("run")?;
+            let coding = child(&run)?
+                .and_then(|c| c.coding)
+                .ok_or("That child has no coding session yet.")?;
+            let (sessions, unavailable) = azure
+                .run_sessions(host, vec![coding.id])
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(json!({"sessions": sessions, "unavailable": unavailable}))
+        }
+        "lead_item" => {
+            let run = run("run")?;
+            let id = child(&run)?.map_or(run.item.id, |c| c.id);
+            let detail = azure
+                .item(
+                    &host.state,
+                    run.item.source.as_deref(),
+                    Some(&run.item.project),
+                    id,
+                )
+                .await?;
+            // Within the limit: whole, then without its comments and links, then each field
+            // shortened.
+            let fields = |max: usize| -> Vec<Value> {
+                detail
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let value = match f.value.as_str() {
+                            Some(text) if text.chars().count() > max => {
+                                json!(text.chars().take(max).collect::<String>())
+                            }
+                            _ => f.value.clone(),
+                        };
+                        json!({"name": f.name, "value": value})
+                    })
+                    .collect()
+            };
+            let whole = json!({"item": detail.item, "fields": fields(usize::MAX), "comments": detail.comments,
+                "relations": detail.relations, "partial": detail.partial});
+            let fits = |view: &Value| view.to_string().len() <= ITEM_TEXT;
+            Ok([
+                whole,
+                json!({"item": detail.item, "fields": fields(usize::MAX), "truncated": true}),
+                json!({"item": detail.item, "fields": fields(2000), "truncated": true}),
+            ]
+            .into_iter()
+            .find(fits)
+            .unwrap_or_else(|| json!({"item": detail.item, "truncated": true})))
+        }
+        "lead_wiki_page" => {
+            let workflow = workflow()?;
+            let path = args["path"].as_str().unwrap_or_default();
+            azure
+                .lead_read(&host.state, workflow, LeadRead::Page(path))
+                .await
+        }
+        "lead_repository_file" | "lead_repository_list" => {
+            let workflow = workflow()?;
+            let repository = repository(workflow)?;
+            let (path, branch) = (
+                args["path"].as_str().unwrap_or_default(),
+                args["branch"].as_str(),
+            );
+            let read = if tool == "lead_repository_file" {
+                LeadRead::File(&repository, path, branch)
+            } else {
+                LeadRead::Folder(&repository, path, branch)
+            };
+            azure.lead_read(&host.state, workflow, read).await
+        }
+        "lead_findings" => {
+            let about = match args["run"].as_str() {
+                Some(_) => Some(run("run")?.id),
+                None => None,
+            };
+            let mut found = Vec::new();
+            for workflow in &ids {
+                found.extend(
+                    host.state
+                        .workflows
+                        .findings
+                        .list(
+                            Some(workflow),
+                            about.as_deref(),
+                            args["state"].as_str(),
+                            100,
+                        )
+                        .map_err(|e| e.to_string())?,
+                );
+            }
+            found.sort_by_key(|f| std::cmp::Reverse(f.created_at));
+            let more = found.len().saturating_sub(FINDINGS);
+            let short = |text: &str| text.chars().take(500).collect::<String>();
+            Ok(
+                json!({"more": more, "findings": found.iter().take(FINDINGS).map(|f| json!({
+                "id": f.id, "run": f.run, "item": f.item, "title": f.title, "severity": f.severity,
+                "state": f.state, "source": f.source, "detail": short(&f.detail), "evidence": short(&f.evidence),
+            })).collect::<Vec<_>>()}),
+            )
         }
         "lead_decide" => {
             let run = run("run")?;
@@ -805,6 +1061,7 @@ fn call(
                         .map(|s| format!(" in {}", s.word()))
                         .unwrap_or_default()
                 )),
+                ..Default::default()
             });
             Ok(json!({"recorded": true, "applied": false}))
         }
@@ -825,6 +1082,43 @@ fn call(
                 ..Default::default()
             });
             Ok(json!({"recorded": true}))
+        }
+        "lead_ask_person" => {
+            let about = match args["run"].as_str() {
+                Some(_) => Some(run("run")?.id),
+                None => None,
+            };
+            let question = text("question", 1000);
+            if question.is_empty() {
+                return Err("Write the question.".into());
+            }
+            if shift.lock().unwrap().closing {
+                return Err(
+                    "Your shift is closing: write what is left in your summary instead.".into(),
+                );
+            }
+            let open = shift
+                .lock()
+                .unwrap()
+                .journal
+                .iter()
+                .filter(|e| e.kind == "question" && e.answer.is_none())
+                .count();
+            if open >= OPEN_QUESTIONS {
+                return Err(format!(
+                    "{open} of your questions wait for the person already: wait for their answers."
+                ));
+            }
+            let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+            note(Entry {
+                at: now,
+                kind: "question".into(),
+                run: about,
+                text: question,
+                id: Some(id.clone()),
+                ..Default::default()
+            });
+            Ok(json!({"asked": true, "question": id}))
         }
         "lead_record_finding" => {
             let run = run("run")?;
@@ -888,11 +1182,46 @@ fn call(
     }
 }
 
-/// A shift as listed: its state and last look, without its journal.
+/// The questions of a shift that wait for the person.
+fn questions(shift: &Shift) -> impl Iterator<Item = &Entry> {
+    shift
+        .journal
+        .iter()
+        .filter(|e| e.kind == "question" && e.answer.is_none() && e.id.is_some())
+}
+
+/// A shift as listed: its state, last look and open questions, without its journal.
 fn brief(shift: &Shift) -> Value {
     json!({"id": shift.id, "lead": shift.lead, "state": shift.state, "opened_at": shift.opened_at,
         "ended_at": shift.ended_at, "last_wake": shift.wakes.last(), "pending": shift.pending.len(),
-        "decisions": shift.journal.iter().filter(|e| e.kind == "decision").count(), "summary": shift.summary})
+        "decisions": shift.journal.iter().filter(|e| e.kind == "decision").count(), "summary": shift.summary,
+        "questions": if shift.state == "ended" { vec![] } else { questions(shift).collect::<Vec<_>>() }})
+}
+
+/// What the leads' open shifts need from the person (the status's `lead_attention`): each open
+/// question, and a shift whose turns are failing with why.
+pub(in crate::app) fn attention(state: &DesktopState) -> Result<Vec<Value>> {
+    let leads = state.settings.map()?.workflow_leads;
+    let name = |id: &str| {
+        leads
+            .iter()
+            .find(|l| l.id == id)
+            .map_or(id.to_owned(), |l| l.name.clone())
+    };
+    let mut items = Vec::new();
+    for shift in state.workflows.shifts.find(None, None, true, 50)? {
+        if shift.state == "failing" {
+            items.push(
+                json!({"kind": "failing", "lead": shift.lead, "name": name(&shift.lead),
+                "text": shift.wakes.last().map(|w| w.text.clone()).unwrap_or_default()}),
+            );
+        }
+        for question in questions(&shift) {
+            items.push(json!({"kind": "question", "lead": shift.lead, "name": name(&shift.lead),
+                "question": question.id, "text": question.text, "run": question.run, "at": question.at}));
+        }
+    }
+    Ok(items)
 }
 
 #[derive(Deserialize)]
@@ -909,6 +1238,13 @@ struct ShiftsArgs {
 #[serde(deny_unknown_fields)]
 struct WakeArgs {
     lead: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnswerArgs {
+    lead: String,
+    question: String,
+    answer: String,
 }
 
 /// `workflow_lead_shifts` and `workflow_lead_wake`.
@@ -978,6 +1314,48 @@ pub(in crate::app) fn operation(
                 .unwrap()
                 .insert(lead.id.clone());
             Ok(json!({"shift": shift.id, "requested": true}))
+        }
+        "workflow_lead_answer" => {
+            let a: AnswerArgs = parse(args)?;
+            let lead = crate::workflows::lead::find(&map.workflow_leads, &a.lead)
+                .ok_or_else(|| invalid(format!("There is no workflow lead {}.", a.lead)))?;
+            if !lead.enabled {
+                return Err(conflict(format!("{} is off: turn it on first.", lead.name)));
+            }
+            let answer = bounded(&a.answer, TEXT);
+            if answer.is_empty() {
+                return Err(invalid("Write the answer."));
+            }
+            let shift = state
+                .workflows
+                .shifts
+                .current(&lead.id)
+                .map_err(fail)?
+                .ok_or_else(|| conflict(format!("{} has no shift now.", lead.name)))?;
+            let question = questions(&shift)
+                .find(|e| e.id.as_deref() == Some(a.question.as_str()))
+                .ok_or_else(|| {
+                    conflict(format!(
+                        "{} has no open question {}: it was answered or its shift ended.",
+                        lead.name, a.question
+                    ))
+                })?;
+            // shortcut: any caller with the host's local authority answers as the person (a
+            // coding run on this coordinator too); record the channel before a lead's decisions
+            // apply (#352).
+            // Taken by the engine's next step for the lead, after any turn in progress; once.
+            let mut answers = state.workflows.shifts.answers.lock().unwrap();
+            if answers
+                .iter()
+                .any(|(l, q, _)| *l == lead.id && *q == a.question)
+            {
+                return Err(conflict(format!(
+                    "Question {} has an answer already, on its way to {}.",
+                    a.question, lead.name
+                )));
+            }
+            answers.push((lead.id.clone(), a.question.clone(), answer));
+            Ok(json!({"question": question.id, "answered": true}))
         }
         _ => Err(invalid("Unknown workflow operation.")),
     }

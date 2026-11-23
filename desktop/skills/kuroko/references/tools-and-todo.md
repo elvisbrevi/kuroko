@@ -700,6 +700,11 @@ run (any state but `done` and `cancelled`).
   last look, decisions), `leads shifts LEAD` shows a lead's whole (turns, journal and record)
   and `--run RUN` what its leads recorded about one run; `kuroko workflows leads wake LEAD` (MCP
   `workflow_lead_wake`) asks it to look at its next tick. A lead turned off ends its shift.
+  A lead reads its runs, their deliveries and work items, its runners' session summaries, its
+  workflows' Wiki pages and repository files (through Azure DevOps, read-only), and may ask you a
+  question: it shows on Home and in Settings › Workflows, and `kuroko workflows leads answer LEAD
+  QUESTION --note TEXT` (MCP `workflow_lead_answer`) gives your answer, which reaches it at once.
+  An answer is information, never an approval.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may

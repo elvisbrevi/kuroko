@@ -161,6 +161,9 @@ struct Snapshot {
     agent_prompts: &'static [crate::agent_prompts::BuiltIn],
     /// The workflow runs waiting on the user, Home's attention items (additive).
     workflow_attention: Vec<serde_json::Value>,
+    /// What the workflow leads need from the user: their open questions and failing shifts
+    /// (additive).
+    lead_attention: Vec<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -986,6 +989,7 @@ async fn snapshot(host: &Host) -> std::result::Result<Snapshot, String> {
         cases: &crate::cases::BUILT_IN,
         agent_prompts: crate::agent_prompts::BUILT_IN,
         workflow_attention: workflows::runs::attention(state).unwrap_or_default(),
+        lead_attention: workflows::shifts::attention(state).unwrap_or_default(),
     })
 }
 

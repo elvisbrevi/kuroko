@@ -512,6 +512,7 @@ pub(super) const PORTAL_METHODS: &[&str] = &[
     "workflow_lead_remove",
     "workflow_lead_shifts",
     "workflow_lead_wake",
+    "workflow_lead_answer",
     "workflow_finding_resolve",
     "workflow_finding_dismiss",
     "workflow_run_cancel",

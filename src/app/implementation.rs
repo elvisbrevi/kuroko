@@ -1864,18 +1864,18 @@ async fn run(host: &Arc<Host>, launch: Launch) {
         (launch.reports && !launch.planning && !launch.round && request.provider == "claude").then(
             || {
                 let (host, id) = (host.clone(), launch.id.clone());
-                std::sync::Arc::new(crate::llm::implementation::Reporter {
-                    tools: json!(
+                std::sync::Arc::new(crate::llm::implementation::Reporter::sync(
+                    json!(
                         super::tools::RUNNER_TOOLS
                             .iter()
                             .map(super::mcp::listed)
                             .collect::<Vec<_>>()
                     ),
-                    call: std::sync::Arc::new(move |tool: &str, args: &Value| {
+                    move |tool: &str, args: &Value| {
                         report(&host.state.implementation.db, &id, tool, args)
                             .map_err(|e| e.to_string())
-                    }),
-                })
+                    },
+                ))
             },
         );
     if reports.is_some() {

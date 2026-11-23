@@ -347,6 +347,10 @@
     { id: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e02', workflow: null, item: { id: 5007, title: 'Review payment validation', url: `${org}/Payments/_workitems/edit/5007`, kind: 'Bug', category: 'bug', project: 'Payments' },
       state: 'unassigned', stage: 'unassigned', attention: 'The workflow director chose no workflow (No encaja ninguno); assign one to this run.', waits_on_user: true, children: 0, pull_requests: [], created_at: secs(NOW - 900_000), updated_at: secs(NOW - 600_000), finished_at: null },
   ] : [];
+  // What the workflow leads need (src/app/workflows/shifts.rs `attention`): one open question.
+  snapshot.lead_attention = scenario === 'full' ? [
+    { kind: 'question', lead: 'pagos', name: 'Pagos', question: 'q1', text: 'Is the legacy rounding kept for settlements?', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', at: secs(NOW - 300_000) },
+  ] : [];
   // Workflow runs as src/app/workflows/record.rs keeps them (`Run::view`, `Run::summary`): one in each state a
   // person acts on, and finished ones. The plan-review run's planning run is on the first machine with its plan.
   const runId = n => `3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e${String(n).padStart(2, '0')}`;
@@ -674,12 +678,15 @@
     workflow_leads_list: () => ({ leads: (window.__ptaLeads ??= [{ lead: { id: 'pagos', name: 'Pagos', description: 'Payment workflows: report what is left in plain words.', agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }, enabled: true, updated_at: 0 }, workflows: ['payments-features'] }]).map(l => structuredClone(l)), editable: true }),
     workflow_lead_shifts: args => {
       const shifts = [{ id: 's1', lead: 'pagos', state: 'active', opened_at: secs(NOW - 7_200_000), wakes: [{ at: secs(NOW - 600_000), events: 2, outcome: 'done', text: 'Waiting for its pull request.' }],
-        journal: [{ at: secs(NOW - 600_000), kind: 'decision', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', decision: 'wait', text: 'Its pull request is open for review.', engine: 'needs_attention in pull_requests' }] }];
+        journal: [{ at: secs(NOW - 600_000), kind: 'decision', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', decision: 'wait', text: 'Its pull request is open for review.', engine: 'needs_attention in pull_requests' },
+          { at: secs(NOW - 300_000), kind: 'question', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', id: 'q1', text: 'Is the legacy rounding kept for settlements?' }] }];
       // As the host lists them: a run's entries with `run`, the whole shift with `lead`, else brief.
-      const brief = s => ({ id: s.id, lead: s.lead, state: s.state, opened_at: s.opened_at, ended_at: s.ended_at ?? null, last_wake: s.wakes.at(-1) ?? null, pending: 0, decisions: s.journal.filter(e => e.kind === 'decision').length, summary: null });
+      const brief = s => ({ id: s.id, lead: s.lead, state: s.state, opened_at: s.opened_at, ended_at: s.ended_at ?? null, last_wake: s.wakes.at(-1) ?? null, pending: 0, decisions: s.journal.filter(e => e.kind === 'decision').length, summary: null,
+        questions: s.journal.filter(e => e.kind === 'question' && !e.answer) });
       if (args.run) return { shifts: shifts.filter(s => s.journal.some(e => e.run === args.run)).map(s => ({ ...brief(s), journal: s.journal.filter(e => e.run === args.run) })) };
       return { shifts: args.lead ? shifts : shifts.map(brief) };
     },
+    workflow_lead_answer: args => { window.__ptaWorkflowCalls.push({ method: 'workflow_lead_answer', ...structuredClone(args) }); return { question: args.question, answered: true }; },
     workflow_lead_wake: args => { window.__ptaWorkflowCalls.push({ method: 'workflow_lead_wake', ...structuredClone(args) }); return { shift: 's1', requested: true }; },
     workflow_lead_save: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_lead_save', ...structuredClone(args) });

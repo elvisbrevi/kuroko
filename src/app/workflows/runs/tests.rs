@@ -43,7 +43,9 @@ if printf '%s\n' "$@" | grep -qx -- '--strict-mcp-config'; then
   printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"lead-initialize","response":{}}}'
   read -r user; printf '%s\n' "$user" >> "$LOG/lead_prompts"
   printf '%s\n' '{"type":"system","subtype":"init","session_id":"ses_lead"}'
-  if [ -f "$LOG/lead_call" ]; then cat "$LOG/lead_call"; read -r reply; printf '%s\n' "$reply" >> "$LOG/lead_replies"; fi
+  if [ -f "$LOG/lead_call" ]; then
+    while IFS= read -r call <&3; do printf '%s\n' "$call"; read -r reply; printf '%s\n' "$reply" >> "$LOG/lead_replies"; done 3< "$LOG/lead_call"
+  fi
   printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Looked.","session_id":"ses_lead","usage":{"input_tokens":5}}'
   exit 0
 fi

@@ -262,6 +262,28 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.default_branches()),
         }
     }
+    /// A workflow lead's read of its workflow's project: a Wiki page, a file or a folder.
+    pub(in crate::app) async fn lead_read(
+        &self,
+        state: &DesktopState,
+        workflow: &crate::workflows::Workflow,
+        read: tools::todo::LeadRead<'_>,
+    ) -> Result<Value, String> {
+        match self {
+            Self::Live => {
+                let source = tools::todo::source_for(state, &workflow.organization)?;
+                tools::todo::lead_read(
+                    state,
+                    source.as_deref(),
+                    (&workflow.organization, &workflow.project),
+                    read,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => catalog.lead_read(read),
+        }
+    }
     /// The comment threads of a run's pull request, read now (review rounds).
     pub(in crate::app) async fn threads(
         &self,
@@ -552,7 +574,7 @@ pub(in crate::app) async fn tick(
     )
     .await;
     // The leads see what changed; a turn that is due runs in its own task.
-    super::shifts::tick(host, now).await;
+    super::shifts::tick(host, azure, now).await;
     Ok(())
 }
 
