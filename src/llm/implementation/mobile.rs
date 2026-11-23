@@ -145,6 +145,8 @@ struct Session {
     /// once, even with a mobile connection, so the run never waits for a person.
     autonomous: bool,
     prompts: Vec<String>,
+    /// The SDK MCP server `kuroko` it reports through (`RUN_REPORTS`), when it has one.
+    reporter: Option<std::sync::Arc<super::Reporter>>,
 }
 impl Drop for Session {
     fn drop(&mut self) {
@@ -203,6 +205,19 @@ impl Session {
                 // injects their response itself. The host never grants an approval.
                 if value["type"] == "control_request" {
                     let request = &value["request"];
+                    // A message for its report tools is answered here, in this process.
+                    if request["subtype"] == "mcp_message"
+                        && request["server_name"] == "kuroko"
+                        && let Some(reporter) = self.reporter.clone()
+                    {
+                        let reply = mcp_reply(&reporter, &request["message"]);
+                        self.send(
+                            json!({"type":"control_response","response":{"subtype":"success",
+                            "request_id":value["request_id"],"response":{"mcp_response":reply}}}),
+                        )
+                        .await?;
+                        continue;
+                    }
                     let asks = ["can_use_tool", "elicitation"]
                         .contains(&request["subtype"].as_str().unwrap_or_default());
                     if self.autonomous && asks {
@@ -243,8 +258,11 @@ impl Session {
     /// Connect Remote Control, the session listed under `name`: a field of the request, never
     /// an argument of the CLI.
     async fn enable(&mut self, name: &SessionName) -> Result<Access> {
-        self.control("pta-initialize", json!({"subtype":"initialize"}))
-            .await?;
+        let mut initialize = json!({"subtype":"initialize"});
+        if self.reporter.is_some() {
+            initialize["sdkMcpServers"] = json!(["kuroko"]);
+        }
+        self.control("pta-initialize", initialize).await?;
         let result = self
             .control(
                 "pta-remote",
@@ -431,7 +449,44 @@ async fn spawn(
         remote_connected: false,
         autonomous: false,
         prompts: Vec::new(),
+        reporter: super::RUN_REPORTS.try_with(Clone::clone).ok().flatten(),
     })
+}
+
+/// The JSON-RPC reply of the SDK MCP server `kuroko` to one message of the CLI.
+fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
+    let id = message.get("id").cloned().filter(|id| !id.is_null());
+    let result = match message["method"].as_str().unwrap_or_default() {
+        "initialize" => Ok(json!({
+            "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "kuroko", "version": env!("CARGO_PKG_VERSION")}})),
+        "tools/list" => Ok(json!({"tools": reporter.tools})),
+        "tools/call" => {
+            let outcome = (reporter.call)(
+                message["params"]["name"].as_str().unwrap_or_default(),
+                &message["params"]["arguments"],
+            );
+            Ok(match outcome {
+                Ok(value) => {
+                    json!({"content": [{"type": "text", "text": value.to_string()}], "isError": false})
+                }
+                Err(text) => json!({"content": [{"type": "text", "text": text}], "isError": true}),
+            })
+        }
+        // A notification gets an empty result.
+        _ if id.is_none() => Ok(json!({})),
+        "ping" => Ok(json!({})),
+        method => Err(json!({"code": -32601, "message": format!("Method not found: {method}")})),
+    };
+    let mut reply = match result {
+        Ok(result) => json!({"jsonrpc": "2.0", "result": result}),
+        Err(error) => json!({"jsonrpc": "2.0", "error": error}),
+    };
+    if let Some(id) = id {
+        reply["id"] = id;
+    }
+    reply
 }
 
 /// How long a session whose last turn ended with nothing pending is watched for another turn
@@ -696,6 +751,65 @@ pub(crate) async fn reconnect(
     let access = session.enable(name).await?;
     retain(id, session, access.clone(), observer, (false, report)).await?;
     Ok(access)
+}
+
+#[cfg(test)]
+mod reporter_tests {
+    use super::*;
+
+    #[test]
+    fn the_report_server_answers_the_clis_mcp_messages_in_this_process() {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let reporter = super::super::Reporter {
+            tools: json!([{"name": "finding_report"}]),
+            call: std::sync::Arc::new(move |tool: &str, args: &Value| {
+                seen.lock().unwrap().push((tool.to_owned(), args.clone()));
+                if args["title"] == "" {
+                    Err("Give the finding a title.".into())
+                } else {
+                    Ok(json!({"recorded": true, "seq": 1}))
+                }
+            }),
+        };
+        let reply = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
+        );
+        assert_eq!(reply["id"], 0);
+        assert_eq!(reply["result"]["serverInfo"]["name"], "kuroko");
+        assert!(reply["result"]["capabilities"]["tools"].is_object());
+        let notified = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        );
+        assert!(notified.get("id").is_none() && notified["result"] == json!({}));
+        let listed = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        );
+        assert_eq!(listed["result"]["tools"][0]["name"], "finding_report");
+        let called = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"finding_report","arguments":{"title":"Rounding"}}}),
+        );
+        assert_eq!(called["result"]["isError"], false);
+        let refused = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"finding_report","arguments":{"title":""}}}),
+        );
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(
+            refused["result"]["content"][0]["text"],
+            "Give the finding a title."
+        );
+        let unknown = mcp_reply(
+            &reporter,
+            &json!({"jsonrpc":"2.0","id":4,"method":"resources/list"}),
+        );
+        assert_eq!(unknown["error"]["code"], -32601);
+        assert_eq!(calls.lock().unwrap().len(), 2);
+    }
 }
 
 /// A fake Claude CLI whose Remote Control connects, for tests here and in the host's.

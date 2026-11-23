@@ -2784,6 +2784,20 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_skip_dependency' && c.confirmed === true));
   check(`runs ${label}: skipping the wait takes a second press and the host's confirmed operation`, true);
   await page.evaluate(() => window.__ptaWaitRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
+  // A finding a coding session reported: in the run's detail and among the open findings, resolved with one press.
+  await page.evaluate(() => window.__ptaFindRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', true));
+  await page.click('#run-detail-back');
+  await page.waitForSelector('#runs-open-findings [data-finding="f1"]');
+  await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
+  await page.waitForSelector('#run-findings [data-finding="f1"]');
+  check(`runs ${label}: a reported finding shows in the run's detail with its severity and evidence`,
+    /Importante/.test(await page.locator('#run-findings').innerText()) && /Rounding\.cs:42/.test(await page.locator('#run-findings').innerText()));
+  const findingScan = await scan(page);
+  check(`runs ${label}: the findings pass WCAG 2.2 AA`, findingScan.length === 0, JSON.stringify(findingScan));
+  await page.click('#run-findings [data-finding="f1"] .actions button:first-child');
+  await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_finding_resolve' && c.finding === 'f1'));
+  check(`runs ${label}: marking a finding resolved calls the host's operation`, true);
+  await page.evaluate(() => window.__ptaFindRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
   // A child that ended without naming its branch: what was found, with its links, accepted with a second press.
   await page.evaluate(() => window.__ptaFoundRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', true));
   await page.click('#run-detail-back');

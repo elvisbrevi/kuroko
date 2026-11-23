@@ -205,6 +205,10 @@ _Avoid_: orchestrator, monitor, watchdog
 One execution of a workflow for one work item, kept on the coordinator, advancing through stages (planning, the plan-review gate, child creation, coding, pull requests, blocks, done) by the existing implementation operations, never past the user's review of the plan. An item has at most one active run; a run that stops (needs attention, interrupted, failed) waits for the user to resume it, and a resume never repeats a write or a started coding run. A restart ends a run and starts a new one of the same workflow for the same item, which records the run it continues; a pause holds every run, or one project's, so nothing new starts until it ends.
 _Avoid_: implementation run (one of its parts), job
 
+**Finding**:
+Something a workflow run's coding session found that is not the requested change but that someone must know or decide (a defect outside the scope, a configuration that is wrong, a risk, a decision left pending), reported as it is confirmed with its severity and evidence and kept once in the run's record, where the user resolves or dismisses it. A session reports it instead of creating a work item.
+_Avoid_: issue, bug (a finding may be neither), observation
+
 **Handover note**:
 The user's text given to a restarted run's coding runs: what the previous run did, not to be repeated, and what is left. Stored with the new run and posted nowhere by the engine; the agent may write it elsewhere only where its workflow allows.
 _Avoid_: comment, handoff comment

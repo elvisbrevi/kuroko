@@ -234,6 +234,9 @@ pub const ALLOWED: &str =
 /// Tells a coding session how long it has before its run's time limit stops it.
 pub const TIME_LIMIT: &str = "This session has {{minutes}} minutes: at {{stops_at}} it is stopped, finished or not. Commit and push your work early and often, open the pull requests and write your comments before then; if you will not finish in time, stop in time to end with your final report, starting with a handover note that says what is done and what is left.";
 
+/// What a coding session that has its run's report tools is told about them.
+pub const RUNNER_REPORTS: &str = "You have the tools delivery_report and finding_report, which record for this run at once and survive a cut session. Call delivery_report as soon as each branch is pushed (its repository, the branch, the pull request you opened from it and the Wiki pages you changed), and finding_report as soon as you confirm each finding: something that is not the requested change but that someone must know or decide, with its severity and evidence. Report findings there instead of creating work items for them, and still end your final report as asked.";
+
 /// Asks planning, request, director and supervisor runs for their JSON answer.
 pub const JSON_CONTRACT: &str = "Return only JSON matching this schema: {{schema}}";
 

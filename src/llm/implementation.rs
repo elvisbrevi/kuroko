@@ -351,6 +351,23 @@ tokio::task_local! {
     /// (`app::implementation::run`); every other session has `DEFAULT_SESSION_LIMIT`.
     pub(crate) static RUN_LIMIT: Duration;
 }
+/// The MCP server a Claude coding session reports through, served in this process over the
+/// session's control channel as the SDK server `kuroko` (Claude keeps SDK servers under
+/// `--safe-mode` and `--strict-mcp-config`): `tools` is its `tools/list`, `call` runs one.
+pub(crate) struct Reporter {
+    pub(crate) tools: serde_json::Value,
+    #[allow(clippy::type_complexity)]
+    pub(crate) call: std::sync::Arc<
+        dyn Fn(&str, &serde_json::Value) -> std::result::Result<serde_json::Value, String>
+            + Send
+            + Sync,
+    >,
+}
+tokio::task_local! {
+    /// The report tools of the one coding session that runs inside it; every other session
+    /// has none.
+    pub(crate) static RUN_REPORTS: Option<std::sync::Arc<Reporter>>;
+}
 /// The limit of the session starting now.
 fn session_limit() -> Duration {
     RUN_LIMIT

@@ -35,6 +35,7 @@ pub(super) mod acting;
 pub(super) mod dependencies;
 mod director;
 pub(super) mod engine;
+pub(super) mod findings;
 pub(super) mod found;
 pub(super) mod implement;
 pub(super) mod record;

@@ -172,4 +172,28 @@ function foundPanels(run, { twice, refresh, resumable }) {
   });
 }
 
-export { blocks, children, dependencies, foundPanels, otherBranches, rounds, timeline, when };
+/** A finding's severity, as the person reads it. */
+const SEVERITY = { blocking: 'Blocking', important: 'Important', minor: 'Minor' };
+/**
+ * Findings the runs' coding sessions reported (`workflow_findings`): severity, title, detail,
+ * evidence and its work item; an open one is resolved or dismissed (`workflow_finding_resolve`,
+ * `workflow_finding_dismiss`), which changes only its record.
+ */
+function findingsPanel(findings, refresh, id, title) {
+  if (!findings.length) return el('div', {});
+  const rows = findings.map(f => el('div', { class: 'resource run-finding', 'data-finding': f.id },
+    el('div', { class: 'resource-head' }, badge(t(SEVERITY[f.severity] ?? f.severity), f.severity === 'blocking' ? 'warn' : f.severity === 'important' ? 'info' : 'muted'),
+      el('strong', { textContent: f.title }), el('span', { class: 'grow' }),
+      f.state === 'open' ? null : badge(f.state === 'resolved' ? t('Resolved') : t('Dismissed'), 'muted')),
+    f.detail ? el('p', { textContent: f.detail }) : null,
+    f.evidence ? el('p', { class: 'hint', textContent: t('Evidence: {text}', { text: f.evidence }) }) : null,
+    el('p', { class: 'resource-facts' }, el('small', {}, link(`#${f.item}`, f.item_url), ` · ${when(f.created_at)}${f.note ? ` · ${f.note}` : ''}`)),
+    f.state === 'open' ? el('div', { class: 'actions' }, ...[['workflow_finding_resolve', t('Mark resolved')], ['workflow_finding_dismiss', t('Dismiss')]].map(([method, label]) => {
+      const button = el('button', { type: 'button', class: 'secondary small', textContent: label });
+      button.onclick = () => busy(button, async () => { await invoke(/** @type {any} */ (method), { finding: f.id }); done(t('Finding updated.')); await refresh(); });
+      return button;
+    })) : null));
+  return el('details', { class: 'fold', open: true, id }, el('summary', { textContent: title }), el('div', { class: 'list' }, ...rows));
+}
+
+export { blocks, children, dependencies, findingsPanel, foundPanels, otherBranches, rounds, timeline, when };

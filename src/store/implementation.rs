@@ -114,6 +114,15 @@ impl ImplementationStore for LocalImplementation<'_> {
         let finished = chrono::Utc::now().to_rfc3339();
         let mut db = self.db.connection();
         let tx = db.transaction()?;
+        // A report its session made while the run was read is kept.
+        let current: Option<String> = rusqlite::OptionalExtension::optional(tx.query_row(
+            "SELECT payload FROM agent_runs WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        ))?;
+        if let Some(current) = current.and_then(|p| serde_json::from_str::<Run>(&p).ok()) {
+            run.reports = current.reports;
+        }
         if tx.execute("UPDATE agent_runs SET state=?2,finished_at=?3,payload=?4 WHERE id=?1 AND state IN ('running','planning')",params![id,state,finished,serde_json::to_string(&run)?])?>0 { tx.execute("INSERT INTO agent_run_events(run_id) VALUES (?1)",[id])?; }
         tx.commit()?;
         crate::mirror::wake();
