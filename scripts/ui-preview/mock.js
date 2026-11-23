@@ -428,6 +428,26 @@
     run.state = how === 'conflict' ? 'needs_attention' : 'coding';
     run.attention = how === 'conflict' ? 'Pull request https://dev.azure.com/contoso/Payments/_git/payments-api/pullrequest/36 conflicts with main in CHANGELOG.md.' : null;
   };
+  // A child whose coding session ended without naming its branch: what code found it pushed and the pull request of
+  // that branch (`Child::found`), offered to be accepted as its delivery.
+  window.__ptaFoundRun = (id, on) => {
+    const run = findRun(id);
+    const child = run.children[0];
+    child.saved ??= { branch: child.branch, pull_requests: child.pull_requests, coding: structuredClone(child.coding), outcome: child.outcome, state: run.state };
+    if (on) {
+      Object.assign(child, { branch: null, pull_requests: [], coding: { ...child.coding, started: true, state: 'done' },
+        found: { read_at: secs(NOW - 60_000), branches: [{ repository: { id: '0f3c2a1b-0000-4000-8000-000000000001', name: 'payments-api' }, branch: 'feature/receipts', url: `${org}/Payments/_git/payments-api?version=GBfeature%2Freceipts`, pushed_at: '2026-11-20T10:00:00Z' }],
+          pull_requests: [{ id: 61, repository: '0f3c2a1b-0000-4000-8000-000000000001', title: 'Receipts', status: 'active', source: 'feature/receipts', url: `${org}/Payments/_git/payments-api/pullrequest/61` }],
+          wiki_pages: [{ wiki: 'Payments.wiki', path: '/Procedures/Receipts', changed_at: '2026-11-20T10:30:00Z', url: `${org}/Payments/_wiki/wikis/Payments.wiki?pagePath=%2FProcedures%2FReceipts` }] } });
+      run.state = 'needs_attention'; run.stopped_in = 'pull_requests';
+      run.attention = `The coding session of ${child.url} reported no branch, so its pull request cannot be found; open it by hand if it is missing, then resume.`;
+    } else {
+      const saved = child.saved;
+      Object.assign(child, { branch: saved.branch, pull_requests: saved.pull_requests, coding: saved.coding, outcome: saved.outcome });
+      delete child.found; delete child.saved;
+      run.state = saved.state; run.attention = null; run.stopped_in = null;
+    }
+  };
   // A run waiting for the checkouts another run's agent holds (`waiting_for_checkouts`).
   window.__ptaHoldRun = (run, holder) => { const held = workflowRuns.find(r => r.id === run); held.queue_position = null; held.waiting_for_checkouts = holder ? { run: holder, item: findRun(holder).item.url } : null; };
   // A task's child that reported branches in two repositories and one the workflow does not have, as a resume past its
@@ -515,6 +535,20 @@
       const run = findRun(args.run); run.state = run.stopped_in ?? 'coding'; run.stopped_in = null; run.attention = null; run.updated_at = secs(Date.now());
       run.timeline.push({ stage: run.state, started_at: secs(Date.now()), finished_at: null, outcome: null });
       return { run: runView(run), resumed: true, accepted: true };
+    },
+    workflow_run_find: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_run_find', ...structuredClone(args) });
+      const run = findRun(args.run);
+      return { run: runView(run), found: run.children.filter(c => c.found).map(c => ({ child: c.url, found: c.found })) };
+    },
+    workflow_run_accept_found: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_run_accept_found', ...structuredClone(args) });
+      if (!args.confirmed) throw new Error('[invalid_input] Confirm with the user, then accept with confirmed: true.');
+      const run = findRun(args.run);
+      const child = run.children.find(c => c.id === args.child) ?? run.children[0];
+      child.branch = child.found.branches[0].branch; child.pull_requests = child.found.pull_requests; child.outcome = 'done';
+      run.state = 'pull_requests'; run.stopped_in = null; run.attention = null; run.updated_at = secs(Date.now());
+      return { run: runView(run), accepted: [`branch ${child.branch} in payments-api`] };
     },
     workflow_run_skip_dependency: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_run_skip_dependency', ...structuredClone(args) });

@@ -25,7 +25,7 @@ import { planChildrenReview } from './implementation.js';
 import { renderPauses } from './workflow-pause.js';
 import { ensureWorkflowSettings, workflowSettings } from './settings-workflows.js';
 import { act, proposal, renderAudit, supervision } from './workflow-supervisor.js';
-import { blocks, children, dependencies, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
+import { blocks, children, dependencies, foundPanels, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
 
 /** The states in which a run waits on the person (src/app/workflows/record.rs `waits_on_user`). */
 const WAITING = ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'];
@@ -301,6 +301,7 @@ function renderRunDetail(run, sessions) {
   if (run.handover) notes.push(el('details', { class: 'fold', id: 'run-handover' }, el('summary', { textContent: t('Handover note from the previous run') }), el('p', { class: 'run-handover-text', textContent: run.handover })));
   const area = el('div', { id: 'run-action-area' });
   const refresh = async () => { runsData.holding = false; runsData.record = null; await loadRunDetail(); };
+  notes.push(...foundPanels(run, { twice, refresh, resumable: RESUMABLE.includes(run.state) }));
   const shared = { twice, when, hold: held => { runsData.holding = held; }, restart: proposed => showRestart(run, area, refresh, proposed) };
   detail.replaceChildren(head, facts, ...notes, runActions(run, sessionButton, area, refresh), supervision(run, area, refresh, shared),
     timeline(run), dependencies(run), children(run, sessionButton, sessions), rounds(run), blocks(run), summaries(run));

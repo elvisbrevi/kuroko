@@ -1638,6 +1638,30 @@ pub(super) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "workflow_run_find",
+        title: "Look for what a run's coding sessions delivered",
+        description: "Reads again, from facts, what the coded children of a workflow run that have no delivery delivered without reporting it (or one child: its work item ID): the branches you pushed to the repositories its coding run was given since it started, the pull requests of those branches and those linked to the work item, and the pages you changed in the project's Wiki, each with its verified link (found: branches, pull_requests, wiki_pages, and partial when a read failed). A branch or page another run delivered is never listed. It records what it found on the run and accepts nothing; nothing is written to Azure DevOps.",
+        effect: Effect::Local,
+        schema: || {
+            object(
+                json!({"run": string("The workflow run's ID."), "child": {"type": "integer", "minimum": 1, "description": "One child's work item ID; leave it out for every coded child without a delivery."}}),
+                &["run"],
+            )
+        },
+    },
+    Tool {
+        name: "workflow_run_accept_found",
+        title: "Accept what was found as a child's delivery",
+        description: "For a failed, interrupted or needs_attention workflow run: takes what was found for a coded child without a delivery (workflow_run_find) as that child's delivery, as if its report had named it, after reading it all again (a candidate no longer found is refused and nothing changes). Without branches, pull_requests or wiki_pages it takes everything found; a pull request stands for its source branch. The run then goes on by itself: the next child is coded, or it waits for the pull requests of those branches (a child delivered only by Wiki pages needs none). No coding run is started again and nothing is written to Azure DevOps.",
+        effect: Effect::External,
+        schema: || {
+            object(
+                json!({"run": string("The workflow run's ID."), "child": {"type": "integer", "minimum": 1, "description": "The child's work item ID; leave it out for the first coded child without a delivery."}, "branches": {"type": "array", "items": object(json!({"repository": string("The repository's name or catalog ID."), "branch": string("The branch.")}), &["repository", "branch"])}, "pull_requests": {"type": "array", "items": {"type": "integer", "minimum": 1}}, "wiki_pages": {"type": "array", "items": string("A Wiki page's path or link.")}, "confirmed": confirmed()}),
+                &["run"],
+            )
+        },
+    },
+    Tool {
         name: "workflow_run_skip_dependency",
         title: "Skip a run's wait for its dependencies",
         description: "Lets a workflow run that waits for the dependencies of its work item (waiting_dependency), or that stopped in needs_attention because of them (a predecessor that cannot be read, of another project, removed, a cycle, a wait past dependency_wait_days), go on without them: for one predecessor (dependency, its work item ID; the others are still judged) or for all of them. Its agent may then start without code it needs. Nothing is written to Azure DevOps.",
@@ -2567,7 +2591,9 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
         | "workflow_summary" | "workflow_summary_send" | "workflow_supervise"
         | "workflow_supervision" | "workflow_supervision_act" | "workflow_supervision_dismiss"
         | "workflow_run_requeue" | "workflow_run_skip_dependency"
-        | "workflow_run_update_branch" => ipc(name, args.clone()).await,
+        | "workflow_run_update_branch" | "workflow_run_find" | "workflow_run_accept_found" => {
+            ipc(name, args.clone()).await
+        }
         "answer_rate" => ipc("answer_feedback", json!({"resource": text(args, "resource")?, "rating": args.get("rating"),
             "comment": args.get("comment"), "example": args.get("example"), "context": args.get("context")})).await,
         "answer_draft" => ipc("answer_refine", json!({"resource": text(args, "resource")?, "context": args.get("context").and_then(Value::as_str).unwrap_or(""),
@@ -2804,6 +2830,13 @@ pub(super) async fn question(name: &str, args: &Value) -> Result<Option<String>,
             )
         )));
     }
+    // Accepting what was found names each branch and Wiki page, as the run recorded them.
+    if name == "workflow_run_accept_found"
+        && let Ok(status) = run("workflow_run_status", &json!({"run": args["run"]})).await
+        && let Some(text) = super::workflows::found::describe_accept(&status, args)
+    {
+        return Ok(Some(text));
+    }
     // An action of the supervisor names the run, the action and its exact draft.
     if name == "workflow_supervision_act"
         && let Ok(status) = run("workflow_run_status", &json!({"run": args["run"]})).await
@@ -2897,6 +2930,13 @@ pub(super) fn confirmation(name: &str, args: &Value) -> Option<String> {
         ),
         "workflow_run_resume" => format!(
             "Resume workflow run {} from the stage it stopped in, accepting what stopped it (a started coding run is not started again and no plan is submitted again)?",
+            args["run"].as_str().unwrap_or("this")
+        ),
+        "workflow_run_accept_found" => format!(
+            "Accept what was found as the delivery of {} in workflow run {} (read again first), so the run goes on by itself? Nothing is written to Azure DevOps.",
+            args["child"]
+                .as_u64()
+                .map_or("its first coded child without a delivery".to_owned(), |id| format!("child #{id}")),
             args["run"].as_str().unwrap_or("this")
         ),
         "workflow_run_skip_dependency" => format!(
@@ -3272,6 +3312,8 @@ mod tests {
             ("workflow_run_requeue", "local"),
             ("workflow_run_skip_dependency", "needs confirmation"),
             ("workflow_run_update_branch", "needs confirmation"),
+            ("workflow_run_find", "local"),
+            ("workflow_run_accept_found", "needs confirmation"),
         ] {
             assert_eq!(effect(name), (json!(expected), json!("offered")), "{name}");
             assert!(super::super::workflows::handles(name), "{name}");

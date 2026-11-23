@@ -435,6 +435,104 @@ pub(in crate::app) async fn pull_requests(
     .await
 }
 
+/// The branches the source's user pushed to one repository in a window, and whether the page
+/// was full, read with the enabled Azure source's read credential (what a workflow run
+/// delivered without reporting it; never cached, nothing written).
+pub(in crate::app) async fn pushed_branches(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    project: &str,
+    repository: (&str, &str),
+    window: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+) -> Result<(Vec<crate::ado::workflow::Pushed>, bool), String> {
+    project_read(
+        state,
+        source,
+        "reading a workflow's pushed branches",
+        "pushes",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::pushed_branches(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                organization,
+                project,
+                repository,
+                window,
+            )
+            .await
+        },
+    )
+    .await
+}
+
+/// One pull request of a repository by its ID, when the source's user opened it since a time,
+/// read with the enabled Azure source's read credential (a pull request linked to a workflow
+/// run's work item; never cached).
+pub(in crate::app) async fn pull_request(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    project: &str,
+    repository: (&str, &str),
+    number: u64,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<crate::ado::workflow::PullRequest>, String> {
+    project_read(
+        state,
+        source,
+        "reading a linked pull request",
+        "pull requests",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::pull_request(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                organization,
+                project,
+                repository,
+                number,
+                since,
+            )
+            .await
+        },
+    )
+    .await
+}
+
+/// The pages of a project's Wiki the source's user changed in a window, and whether part of it
+/// could not be read, read with the enabled Azure source's read credential (never cached).
+pub(in crate::app) async fn wiki_pages(
+    state: &DesktopState,
+    source: Option<&str>,
+    organization: &str,
+    project: &str,
+    window: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+) -> Result<(Vec<crate::ado::workflow::WikiPage>, bool), String> {
+    project_read(
+        state,
+        source,
+        "reading a project's Wiki changes",
+        "Wiki changes",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::wiki_pages(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                organization,
+                project,
+                window,
+            )
+            .await
+        },
+    )
+    .await
+}
+
 /// The comment threads of a workflow run's pull request, read with the enabled Azure source's
 /// read credential (never cached, nothing written).
 pub(in crate::app) async fn threads(

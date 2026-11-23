@@ -1,8 +1,11 @@
-// Workflows › Runs: the parts of one run's detail that only show its record: the stage
-// timeline, the dependencies it waits for or waited for, the children with their coding runs,
-// branches, pull requests and predecessors, and the outcomes of its acting blocks.
+// Workflows › Runs: the parts of one run's detail that show its record: the stage timeline, the
+// dependencies it waits for or waited for, the children with their coding runs, branches, pull
+// requests and predecessors, the outcomes of its acting blocks, and what a child delivered
+// without reporting it, to look for again and to accept.
 import { t, tn, tx, uiLocale } from './i18n.js';
+import { invoke } from './control.js';
 import { badge, el } from './dom.js';
+import { busy, done, notify } from './notices.js';
 import { link } from './markdown.js';
 import { failureText, stageLabel } from './run-states.js';
 import { sessionLifeBadge } from './sessions.js';
@@ -42,7 +45,8 @@ function children(run, sessionButton, sessions) {
       child.ignored_branches?.length ? el('p', { class: 'hint run-child-ignored', textContent: t('Ignored branch lines for repositories this workflow does not have: {names}', { names: child.ignored_branches.join(', ') }) }) : null,
       child.coding?.failure ? el('p', { class: 'hint run-child-failure', textContent: failureText(child.coding.failure) }) : null,
       child.coding?.stops_at ? el('p', { class: 'hint run-child-limit', textContent: t('Its time limit ({minutes} minutes) stops its session at {time}.', { minutes: String(child.coding.time_limit_minutes), time: when(child.coding.stops_at) }) }) : null,
-      prs.length ? el('ul', { class: 'run-pulls' }, ...prs.map(pr => el('li', {}, link(pr.title ? `!${pr.id} ${pr.title}` : pr.url, pr.url), ' ', badge(tx(pr.status), pr.status === 'completed' ? 'ok' : pr.status === 'abandoned' ? 'warn' : 'info')))) : null);
+      prs.length ? el('ul', { class: 'run-pulls' }, ...prs.map(pr => el('li', {}, link(pr.title ? `!${pr.id} ${pr.title}` : pr.url, pr.url), ' ', badge(tx(pr.status), pr.status === 'completed' ? 'ok' : pr.status === 'abandoned' ? 'warn' : 'info')))) : null,
+      child.wiki_pages?.length ? el('ul', { class: 'run-pulls run-child-wiki' }, ...child.wiki_pages.map(page => el('li', {}, link(t('Wiki page {path}', { path: page.path }), page.url)))) : null);
   });
   return el('details', { class: 'fold', open: true, id: 'run-children' }, el('summary', { textContent: tn(rows.length, 'Children (1)', 'Children ({n})') }),
     rows.length ? el('div', { class: 'list' }, ...rows) : el('p', { class: 'hint', textContent: run.state === 'plan_review' ? t('The children are created once you confirm the plan.') : t('No child yet.') }));
@@ -108,4 +112,64 @@ function rounds(run) {
   return el('details', { class: 'fold', open: true, id: 'run-rounds' }, el('summary', { textContent: tn(rows.length, 'Review rounds (1)', 'Review rounds ({n})') }), el('ul', { class: 'run-rounds' }, ...rows));
 }
 
-export { blocks, children, dependencies, otherBranches, rounds, timeline, when };
+/**
+ * For each coded child without a delivery: what code found it delivered without reporting it (the
+ * branches you pushed while it coded, their pull requests and those linked to the work item, the
+ * Wiki pages you changed), to look for again (`workflow_run_find`) and, on a stopped run, to
+ * accept what you tick as its delivery once confirmed (`workflow_run_accept_found`). A repository
+ * with several branches has none ticked: one is chosen.
+ */
+function foundPanels(run, { twice, refresh, resumable }) {
+  if (FINAL.includes(run.state)) return [];
+  const delivered = child => child.branch || child.branches?.length || child.wiki_pages?.length;
+  const coded = child => child.coding?.started && child.coding.state !== 'running';
+  return (run.children ?? []).filter(child => coded(child) && !delivered(child)).map(child => {
+    const found = child.found;
+    const branches = found?.branches ?? [];
+    const alone = branch => branches.filter(b => b.repository.id === branch.repository.id).length === 1;
+    const picks = [];
+    const pick = (label, checked, value) => {
+      const box = el('input', { type: 'checkbox', checked, disabled: !resumable });
+      picks.push({ box, value });
+      return el('label', { class: 'check' }, box, el('span', { textContent: label }));
+    };
+    const items = [
+      ...branches.map(branch => el('li', {},
+        pick(t('Branch {name} in {repository}', { name: branch.branch, repository: branch.repository.name }), alone(branch), { branch: { repository: branch.repository.id, branch: branch.branch } }),
+        ' ', badge(branch.linked ? t('Linked to the work item') : t('Pushed'), 'muted'), ' ', link(t('Open'), branch.url))),
+      ...(found?.pull_requests ?? []).map(pr => el('li', {}, link(pr.title ? `!${pr.id} ${pr.title}` : pr.url, pr.url), ' ',
+        badge(tx(pr.status), pr.status === 'completed' ? 'ok' : pr.status === 'abandoned' ? 'warn' : 'info'))),
+      ...(found?.wiki_pages ?? []).map(page => el('li', {},
+        pick(t('Wiki page {path}', { path: page.path }), true, { page: page.path }), ' ', link(t('Open'), page.url))),
+    ];
+    const actions = el('div', { class: 'actions' });
+    if (picks.length && resumable) {
+      const accept = twice(t('Accept as its delivery'), t('Confirm: accept what was found'), async () => {
+        const chosen = picks.filter(p => p.box.checked).map(p => p.value);
+        if (!chosen.length) { notify(t('Tick what to accept.'), 'warn'); return; }
+        await invoke('workflow_run_accept_found', { run: run.id, child: child.id, confirmed: true,
+          branches: chosen.filter(c => c.branch).map(c => c.branch), wiki_pages: chosen.filter(c => c.page).map(c => c.page) });
+        done(t('Accepted as its delivery; the run goes on by itself.'));
+        await refresh();
+      });
+      accept.id = `run-accept-found-${child.id}`;
+      actions.append(accept);
+    }
+    const look = el('button', { type: 'button', class: 'secondary', id: `run-find-${child.id}`, textContent: found ? t('Look again') : t('Look for what it delivered') });
+    look.onclick = () => busy(look, async () => {
+      await invoke('workflow_run_find', { run: run.id, child: child.id });
+      done(t('Looked again.'));
+      await refresh();
+    });
+    actions.append(look);
+    return el('div', { class: 'callout info run-found', id: `run-found-${child.id}` },
+      el('p', {}, el('strong', { textContent: t('What #{id} delivered without reporting it', { id: String(child.id) }) })),
+      el('p', { class: 'hint', textContent: t('Read with your source\'s read credential while it coded: the branches you pushed to its repositories, their pull requests and those you opened and linked to the work item, and the Wiki pages you changed. Only what you tick becomes its delivery.') }),
+      items.length ? el('ul', { class: 'run-pulls run-found-list' }, ...items)
+        : el('p', { textContent: found ? t('Nothing was found in its repositories or the Wiki (read {time}).', { time: when(found.read_at) }) : t('Not looked for yet.') }),
+      found?.partial ? el('p', { class: 'hint', textContent: t('Some reads failed: what is listed may be incomplete.') }) : null,
+      actions);
+  });
+}
+
+export { blocks, children, dependencies, foundPanels, otherBranches, rounds, timeline, when };

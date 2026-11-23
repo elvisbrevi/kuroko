@@ -2,9 +2,11 @@
 //! credential: the pull requests of one repository whose source branch is the one a coding
 //! session reported (`_apis/git/repositories/{id}/pullrequests?searchCriteria.sourceRefName=…`),
 //! whether a reported branch still exists (`_apis/git/repositories/{id}/refs?filter=heads/…`),
-//! and whether a work item is assigned to the source's user. Nothing here writes, merges,
-//! completes or changes a pull request or a work item.
-use super::{Catalog, Source, project_url, request};
+//! whether a work item is assigned to the source's user, and what a coding run delivered
+//! without reporting it: the branches the user pushed (`…/pushes`), a pull request by its ID,
+//! and the pages the user changed in the project's Wiki (its repository's commits). Nothing here
+//! writes, merges, completes or changes a pull request, a Wiki page or a work item.
+use super::{Catalog, Source, project_url, request, same_user};
 use crate::tools::todo::Detail;
 use anyhow::{Context, Result, ensure};
 use reqwest::{Client, Method};
@@ -46,6 +48,11 @@ pub struct PullRequest {
     /// Who opened it (the Azure DevOps identity ID): the run's own account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    /// The branch it merges from (a plain name, without `refs/heads/`): kept only for a pull
+    /// request found for a child without a report (0.20.0 and later), so the pull requests of a
+    /// reported branch are recorded as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     /// Its reviewers and their votes, as read (10 approved, 5 with suggestions, 0 none, -5
     /// waiting for the author, -10 rejected).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -148,7 +155,7 @@ pub(crate) async fn pull_requests(
     repository: (&str, &str),
     branch: &str,
 ) -> Result<Vec<PullRequest>> {
-    let (id, name) = repository;
+    let (id, _) = repository;
     ensure!(
         uuid::Uuid::parse_str(id).is_ok() && id.len() == 36,
         "invalid repository ID"
@@ -172,75 +179,91 @@ pub(crate) async fn pull_requests(
         .context("invalid Azure DevOps pull requests")?;
     let mut found = Vec::new();
     for pull in page.iter().take(TOP) {
-        let Some(number) = pull["pullRequestId"].as_u64().filter(|n| *n > 0) else {
-            continue;
-        };
         // Only the branch and repository asked for, whatever else the reply holds.
-        if pull["sourceRefName"].as_str() != Some(reference.as_str())
-            || !pull["repository"]["id"]
-                .as_str()
-                .is_some_and(|r| r.eq_ignore_ascii_case(id))
-        {
+        if pull["sourceRefName"].as_str() != Some(reference.as_str()) {
             continue;
         }
-        let status = match pull["status"].as_str() {
-            Some(status @ ("active" | "completed" | "abandoned")) => status.to_owned(),
-            _ => "unknown".to_owned(),
-        };
-        let mut link = project_url(
-            &source,
-            project,
-            "dev.azure.com",
-            &["_git", name, "pullrequest", &number.to_string()],
-        )?;
-        link.set_query(None);
-        found.push(PullRequest {
-            id: number,
-            repository: id.to_lowercase(),
-            title: text(&pull["title"], 400),
-            status,
-            url: crate::tools::todo::https_link(link.as_str())
-                .context("invalid pull request link")?,
-            created_at: pull["creationDate"]
-                .is_string()
-                .then(|| text(&pull["creationDate"], 40)),
-            closed_at: pull["closedDate"]
-                .is_string()
-                .then(|| text(&pull["closedDate"], 40)),
-            target: pull["targetRefName"]
-                .is_string()
-                .then(|| text(&pull["targetRefName"], 300)),
-            merge_status: pull["mergeStatus"]
-                .is_string()
-                .then(|| text(&pull["mergeStatus"], 40)),
-            target_commit: pull["lastMergeTargetCommit"]["commitId"]
-                .is_string()
-                .then(|| text(&pull["lastMergeTargetCommit"]["commitId"], 64)),
-            source_commit: pull["lastMergeSourceCommit"]["commitId"]
-                .is_string()
-                .then(|| text(&pull["lastMergeSourceCommit"]["commitId"], 64)),
-            created_by: pull["createdBy"]["id"]
-                .is_string()
-                .then(|| text(&pull["createdBy"]["id"], 64)),
-            reviewers: pull["reviewers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .take(50)
-                .filter_map(|r| {
-                    Some(Reviewer {
-                        id: text(&r["id"], 64),
-                        name: text(&r["displayName"], 200),
-                        vote: i32::try_from(r["vote"].as_i64()?).ok()?,
-                    })
-                })
-                .filter(|r| !r.id.is_empty())
-                .collect(),
-            accepted: false,
-        });
+        if let Some(pull) = parse_pull(&source, project, repository, pull)? {
+            found.push(pull);
+        }
     }
     found.sort_by_key(|a| std::cmp::Reverse(a.id));
     Ok(found)
+}
+
+/// A pull request of `repository` as a run records it, or none when the value is not one of
+/// that repository's (another repository's, or without an ID).
+fn parse_pull(
+    source: &Source,
+    project: &str,
+    repository: (&str, &str),
+    pull: &serde_json::Value,
+) -> Result<Option<PullRequest>> {
+    let (id, name) = repository;
+    let Some(number) = pull["pullRequestId"].as_u64().filter(|n| *n > 0) else {
+        return Ok(None);
+    };
+    if !pull["repository"]["id"]
+        .as_str()
+        .is_some_and(|r| r.eq_ignore_ascii_case(id))
+    {
+        return Ok(None);
+    }
+    let status = match pull["status"].as_str() {
+        Some(status @ ("active" | "completed" | "abandoned")) => status.to_owned(),
+        _ => "unknown".to_owned(),
+    };
+    let mut link = project_url(
+        source,
+        project,
+        "dev.azure.com",
+        &["_git", name, "pullrequest", &number.to_string()],
+    )?;
+    link.set_query(None);
+    Ok(Some(PullRequest {
+        id: number,
+        repository: id.to_lowercase(),
+        title: text(&pull["title"], 400),
+        status,
+        url: crate::tools::todo::https_link(link.as_str()).context("invalid pull request link")?,
+        created_at: pull["creationDate"]
+            .is_string()
+            .then(|| text(&pull["creationDate"], 40)),
+        closed_at: pull["closedDate"]
+            .is_string()
+            .then(|| text(&pull["closedDate"], 40)),
+        target: pull["targetRefName"]
+            .is_string()
+            .then(|| text(&pull["targetRefName"], 300)),
+        merge_status: pull["mergeStatus"]
+            .is_string()
+            .then(|| text(&pull["mergeStatus"], 40)),
+        target_commit: pull["lastMergeTargetCommit"]["commitId"]
+            .is_string()
+            .then(|| text(&pull["lastMergeTargetCommit"]["commitId"], 64)),
+        source_commit: pull["lastMergeSourceCommit"]["commitId"]
+            .is_string()
+            .then(|| text(&pull["lastMergeSourceCommit"]["commitId"], 64)),
+        source: None,
+        created_by: pull["createdBy"]["id"]
+            .is_string()
+            .then(|| text(&pull["createdBy"]["id"], 64)),
+        reviewers: pull["reviewers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(50)
+            .filter_map(|r| {
+                Some(Reviewer {
+                    id: text(&r["id"], 64),
+                    name: text(&r["displayName"], 200),
+                    vote: i32::try_from(r["vote"].as_i64()?).ok()?,
+                })
+            })
+            .filter(|r| !r.id.is_empty())
+            .collect(),
+        accepted: false,
+    }))
 }
 
 /// The comment threads of a pull request of `repository` (its catalog ID), read-only: at most
@@ -414,6 +437,375 @@ pub(crate) async fn branch_exists(
         .any(|r| r["name"].as_str() == Some(wanted.as_str())))
 }
 
+/// At most this many pushes of one repository are read, and this many branches kept.
+const PUSHES: usize = 100;
+const PUSHED_BRANCHES: usize = 20;
+/// At most this many Wikis of a project, commits of each and pages in all are read.
+const WIKIS: usize = 3;
+const WIKI_COMMITS: usize = 10;
+const WIKI_PAGES: usize = 20;
+/// The object ID a push gives a deleted branch.
+const DELETED: &str = "0000000000000000000000000000000000000000";
+
+/// A branch the source's user pushed to a repository since a time, as the pushes read it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Pushed {
+    /// The repository's catalog ID, in lowercase.
+    pub repository: String,
+    pub branch: String,
+    /// When the user last pushed it (RFC 3339, as Azure DevOps gives it).
+    pub pushed_at: String,
+    /// Its verified link: the repository at that branch.
+    pub url: String,
+}
+
+/// A page of the project's Wiki the source's user changed since a time.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WikiPage {
+    /// The Wiki's name.
+    pub wiki: String,
+    /// The page's path in the Wiki (`/Procedures/Deploy the portal`).
+    pub path: String,
+    /// When the user last changed it (RFC 3339).
+    pub changed_at: String,
+    /// Its verified link.
+    pub url: String,
+}
+
+fn after(date: &str, since: &chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(date)
+        .is_ok_and(|d| d.with_timezone(&chrono::Utc) >= *since)
+}
+
+/// The branches the source's user pushed to `repository` (catalog ID and name) between `since`
+/// and `until`, newest first: only pushes by that user, only branches (`refs/heads/…`) with a
+/// plain name whose latest push did not delete them, each once with that push's time; and
+/// whether the page was full (older pushes in the window may be missing).
+pub(crate) async fn pushed_branches(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    repository: (&str, &str),
+    (since, until): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+) -> Result<(Vec<Pushed>, bool)> {
+    let (id, name) = repository;
+    ensure!(
+        uuid::Uuid::parse_str(id).is_ok() && id.len() == 36,
+        "invalid repository ID"
+    );
+    let source = source(catalog, organization)?;
+    let mut url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "git", "repositories", id, "pushes"],
+    )?;
+    url.query_pairs_mut()
+        .append_pair("searchCriteria.fromDate", &since.to_rfc3339())
+        .append_pair("searchCriteria.toDate", &until.to_rfc3339())
+        .append_pair("searchCriteria.includeRefUpdates", "true")
+        .append_pair("$top", &PUSHES.to_string());
+    let value = request(client, key, Method::GET, url, None).await?;
+    let page = value["value"]
+        .as_array()
+        .context("invalid Azure DevOps pushes")?;
+    // Each branch as its latest push in the window left it: (time, deleted).
+    let mut latest: std::collections::BTreeMap<String, (String, bool)> = Default::default();
+    for push in page.iter().take(PUSHES) {
+        let date = text(&push["date"], 40);
+        if !same_user(&push["pushedBy"], &source.author_email)
+            || !after(&date, &since)
+            || push["repository"]["id"]
+                .as_str()
+                .is_some_and(|r| !r.eq_ignore_ascii_case(id))
+        {
+            continue;
+        }
+        for update in push["refUpdates"].as_array().into_iter().flatten() {
+            let Some(branch) = update["name"]
+                .as_str()
+                .and_then(|n| n.strip_prefix("refs/heads/"))
+                .filter(|b| valid_branch(b))
+            else {
+                continue;
+            };
+            let deleted = update["newObjectId"].as_str().is_none_or(|o| o == DELETED);
+            let entry = latest.entry(branch.to_owned()).or_default();
+            if date > entry.0 {
+                *entry = (date.clone(), deleted);
+            }
+        }
+    }
+    let mut pushed = Vec::new();
+    for (branch, (pushed_at, deleted)) in latest {
+        if deleted {
+            continue;
+        }
+        let mut link = project_url(&source, project, "dev.azure.com", &["_git", name])?;
+        link.set_query(None);
+        link.query_pairs_mut()
+            .append_pair("version", &format!("GB{branch}"));
+        pushed.push(Pushed {
+            repository: id.to_lowercase(),
+            url: crate::tools::todo::https_link(link.as_str()).context("invalid branch link")?,
+            branch,
+            pushed_at,
+        });
+    }
+    pushed.sort_by(|a, b| {
+        b.pushed_at
+            .cmp(&a.pushed_at)
+            .then_with(|| a.branch.cmp(&b.branch))
+    });
+    pushed.truncate(PUSHED_BRANCHES);
+    Ok((pushed, page.len() >= PUSHES))
+}
+
+/// One pull request of `repository` (catalog ID and name) by its ID, when the source's user
+/// opened it since `since`; none when the repository has no such pull request, or it is someone
+/// else's or older.
+#[allow(clippy::too_many_arguments)] // The engine's read, beside `pull_requests`, plus its time.
+pub(crate) async fn pull_request(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    repository: (&str, &str),
+    number: u64,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<PullRequest>> {
+    let (id, _) = repository;
+    ensure!(
+        uuid::Uuid::parse_str(id).is_ok() && id.len() == 36,
+        "invalid repository ID"
+    );
+    ensure!(number > 0, "invalid pull request ID");
+    let source = source(catalog, organization)?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &[
+            "_apis",
+            "git",
+            "repositories",
+            id,
+            "pullrequests",
+            &number.to_string(),
+        ],
+    )?;
+    let pull = match request(client, key, Method::GET, url, None).await {
+        Ok(pull) => pull,
+        // The repository has no such pull request.
+        Err(error) if error.to_string().ends_with("HTTP 404") => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if pull["pullRequestId"].as_u64() != Some(number)
+        || !same_user(&pull["createdBy"], &source.author_email)
+        || !after(&text(&pull["creationDate"], 40), &since)
+    {
+        return Ok(None);
+    }
+    // Its source branch is what a linked pull request delivers; the pull requests of a reported
+    // branch are recorded without it, as before.
+    Ok(
+        parse_pull(&source, project, repository, &pull)?.map(|p| PullRequest {
+            source: pull["sourceRefName"]
+                .as_str()
+                .and_then(|r| r.strip_prefix("refs/heads/"))
+                .filter(|b| valid_branch(b))
+                .map(str::to_owned),
+            ..p
+        }),
+    )
+}
+
+/// The longest Wiki page path kept.
+const PAGE_PATH: usize = 300;
+
+/// A Wiki page's path from its file in the Wiki's repository (`/Deploy-the-portal%2Dv2.md` is
+/// `/Deploy the portal-v2`: Azure DevOps writes a title's spaces as `-` and its own `-` and other
+/// reserved characters percent-encoded), or none for a file that is not a page.
+fn page_path(file: &str) -> Option<String> {
+    let file = file.strip_suffix(".md")?;
+    if !file.starts_with('/')
+        || file
+            .split('/')
+            .skip(1)
+            .any(|s| s.is_empty() || s.starts_with('.'))
+    {
+        return None;
+    }
+    let spaced = file.replace('-', " ");
+    let bytes = spaced.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = (bytes[i] == b'%')
+            .then(|| spaced.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(byte) => {
+                decoded.push(byte);
+                i += 3;
+            }
+            None => {
+                decoded.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    let path = String::from_utf8(decoded).ok()?;
+    (path.chars().count() <= PAGE_PATH && !path.chars().any(char::is_control)).then_some(path)
+}
+
+/// The pages of the project's Wiki that the source's user changed between `since` and `until`
+/// (added or edited, not deleted), newest first, each once; and whether part of it could not be
+/// read (a read failed, or a page of commits was full).
+// shortcut: authorship is the commit's author email, which a client sets; the window and the
+// person's acceptance bound it. Read the Wiki repository's pushes (`pushedBy`) if it matters.
+pub(crate) async fn wiki_pages(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    organization: &str,
+    project: &str,
+    (since, until): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+) -> Result<(Vec<WikiPage>, bool)> {
+    let source = source(catalog, organization)?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "wiki", "wikis"],
+    )?;
+    let value = request(client, key, Method::GET, url, None).await?;
+    let wikis = value["value"]
+        .as_array()
+        .context("invalid Azure DevOps wikis")?;
+    let mut pages: std::collections::BTreeMap<(String, String), String> = Default::default();
+    let mut partial = false;
+    for wiki in wikis
+        .iter()
+        .filter(|w| w["type"].as_str() == Some("projectWiki"))
+        .take(WIKIS)
+    {
+        let (Some(repository), Some(name)) = (
+            wiki["repositoryId"]
+                .as_str()
+                .filter(|r| uuid::Uuid::parse_str(r).is_ok() && r.len() == 36),
+            wiki["name"]
+                .as_str()
+                .filter(|n| !n.is_empty() && n.len() <= 200),
+        ) else {
+            continue;
+        };
+        let mut url = project_url(
+            &source,
+            project,
+            "dev.azure.com",
+            &["_apis", "git", "repositories", repository, "commits"],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("searchCriteria.author", &source.author_email)
+            .append_pair("searchCriteria.fromDate", &since.to_rfc3339())
+            .append_pair("searchCriteria.toDate", &until.to_rfc3339())
+            .append_pair("searchCriteria.$top", &WIKI_COMMITS.to_string());
+        let Ok(commits) = request(client, key, Method::GET, url, None).await else {
+            partial = true;
+            continue;
+        };
+        partial |= commits["value"]
+            .as_array()
+            .is_some_and(|c| c.len() >= WIKI_COMMITS);
+        for commit in commits["value"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(WIKI_COMMITS)
+        {
+            let date = text(&commit["author"]["date"], 40);
+            let Some(sha) = commit["commitId"]
+                .as_str()
+                .filter(|s| s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit()))
+            else {
+                continue;
+            };
+            if !commit["author"]["email"]
+                .as_str()
+                .is_some_and(|e| e.eq_ignore_ascii_case(&source.author_email))
+                || !after(&date, &since)
+            {
+                continue;
+            }
+            let url = project_url(
+                &source,
+                project,
+                "dev.azure.com",
+                &[
+                    "_apis",
+                    "git",
+                    "repositories",
+                    repository,
+                    "commits",
+                    sha,
+                    "changes",
+                ],
+            )?;
+            let Ok(changes) = request(client, key, Method::GET, url, None).await else {
+                partial = true;
+                continue;
+            };
+            for change in changes["changes"].as_array().into_iter().flatten().take(50) {
+                if change["item"]["gitObjectType"].as_str() != Some("blob")
+                    || change["changeType"]
+                        .as_str()
+                        .is_none_or(|kind| kind.contains("delete"))
+                {
+                    continue;
+                }
+                let Some(path) = change["item"]["path"].as_str().and_then(page_path) else {
+                    continue;
+                };
+                let entry = pages.entry((name.to_owned(), path)).or_default();
+                if date > *entry {
+                    *entry = date.clone();
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for ((wiki, path), changed_at) in pages {
+        let mut link = project_url(
+            &source,
+            project,
+            "dev.azure.com",
+            &["_wiki", "wikis", &wiki],
+        )?;
+        link.set_query(None);
+        link.query_pairs_mut().append_pair("pagePath", &path);
+        found.push(WikiPage {
+            url: crate::tools::todo::https_link(link.as_str()).context("invalid Wiki page link")?,
+            wiki,
+            path,
+            changed_at,
+        });
+    }
+    found.sort_by(|a, b| {
+        b.changed_at
+            .cmp(&a.changed_at)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    found.truncate(WIKI_PAGES);
+    Ok((found, partial))
+}
+
 /// Whether the item is assigned to the source's user: its Assigned To, or a developer role of
 /// its process (an identity field named «developer» or «desarrollador», as To-Do reads them),
 /// names the user of the source of its organization.
@@ -545,6 +937,224 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
+
+    #[tokio::test]
+    async fn pushed_branches_are_the_users_own_since_the_time_and_never_a_deleted_one() {
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        let me = json!({"uniqueName": "Me@Example.Test"});
+        let other = json!({"uniqueName": "someone@example.test"});
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{REPO}/pushes"
+            )))
+            .and(query_param("searchCriteria.includeRefUpdates", "true"))
+            .and(query_param("searchCriteria.toDate", "2026-11-20T12:00:00+00:00"))
+            // Newest first, as Azure DevOps lists them.
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":[
+                {"date":"2026-11-20T10:09:00Z","pushedBy":me,"repository":{"id":REPO},"refUpdates":[
+                    {"name":"refs/heads/feature/42","newObjectId":"b1"},
+                    {"name":"refs/heads/gone","newObjectId":"0000000000000000000000000000000000000000"},
+                    {"name":"refs/heads/back","newObjectId":"e2"}]},
+                {"date":"2026-11-20T10:06:00Z","pushedBy":other,"repository":{"id":REPO},"refUpdates":[
+                    {"name":"refs/heads/theirs","newObjectId":"c1"}]},
+                {"date":"2026-11-20T10:05:00Z","pushedBy":me,"repository":{"id":REPO},"refUpdates":[
+                    {"name":"refs/heads/feature/42","newObjectId":"a1"},
+                    {"name":"refs/heads/gone","newObjectId":"a4"},
+                    {"name":"refs/heads/back","newObjectId":"0000000000000000000000000000000000000000"},
+                    {"name":"refs/tags/v1","newObjectId":"a2"},
+                    {"name":"refs/heads/bad name","newObjectId":"a3"}]},
+                {"date":"2026-11-19T10:00:00Z","pushedBy":me,"repository":{"id":REPO},"refUpdates":[
+                    {"name":"refs/heads/old","newObjectId":"d1"}]}
+            ]})))
+            .mount(&server)
+            .await;
+        let at = |t: &str| {
+            chrono::DateTime::parse_from_rfc3339(t)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let (pushed, full) = pushed_branches(
+            &Client::new(),
+            "key",
+            CATALOG,
+            "https://dev.azure.com/example",
+            "Payments",
+            (REPO, "payments api"),
+            (at("2026-11-20T10:00:00Z"), at("2026-11-20T12:00:00Z")),
+        )
+        .await
+        .unwrap();
+        assert!(!full);
+        // Each branch as its latest push left it: deleted last is gone, deleted then pushed again
+        // is there.
+        assert_eq!(
+            pushed.iter().map(|p| p.branch.as_str()).collect::<Vec<_>>(),
+            ["back", "feature/42"],
+            "{pushed:?}"
+        );
+        assert_eq!(pushed[1].pushed_at, "2026-11-20T10:09:00Z");
+        assert_eq!(pushed[1].repository, REPO);
+        assert_eq!(
+            pushed[1].url,
+            "https://dev.azure.com/example/Payments/_git/payments%20api?version=GBfeature%2F42"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
+
+    #[tokio::test]
+    async fn a_pull_request_is_read_by_its_id_and_a_missing_one_is_none() {
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{REPO}/pullrequests/9"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "pullRequestId":9,"status":"active","title":"Linked","sourceRefName":"refs/heads/feature/linked",
+                "repository":{"id":REPO},"createdBy":{"uniqueName":"me@example.test"},"creationDate":"2026-11-20T10:30:00Z"
+            })))
+            .mount(&server)
+            .await;
+        for (number, by, date) in [
+            (11, "someone@example.test", "2026-11-20T10:30:00Z"),
+            (12, "me@example.test", "2026-11-01T10:30:00Z"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!(
+                    "/example/Payments/_apis/git/repositories/{REPO}/pullrequests/{number}"
+                )))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "pullRequestId":number,"status":"active","title":"Not this run's","sourceRefName":"refs/heads/x",
+                    "repository":{"id":REPO},"createdBy":{"uniqueName":by},"creationDate":date
+                })))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{REPO}/pullrequests/10"
+            )))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        let since = chrono::DateTime::parse_from_rfc3339("2026-11-20T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let read = |number| {
+            pull_request(
+                &client,
+                "key",
+                CATALOG,
+                "https://dev.azure.com/example",
+                "Payments",
+                (REPO, "payments-api"),
+                number,
+                since,
+            )
+        };
+        let pull = read(9).await.unwrap().unwrap();
+        assert_eq!((pull.id, pull.status.as_str()), (9, "active"));
+        assert_eq!(pull.source.as_deref(), Some("feature/linked"));
+        assert_eq!(
+            pull.url,
+            "https://dev.azure.com/example/Payments/_git/payments-api/pullrequest/9"
+        );
+        assert!(read(10).await.unwrap().is_none());
+        // Someone else's, and one opened before the time, are not the run's.
+        assert!(read(11).await.unwrap().is_none());
+        assert!(read(12).await.unwrap().is_none());
+        assert!(read(0).await.is_err());
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
+
+    #[test]
+    fn a_wiki_file_is_read_as_its_page_path() {
+        assert_eq!(
+            page_path("/Procedures/Deploy-the-portal%2Dv2.md").as_deref(),
+            Some("/Procedures/Deploy the portal-v2")
+        );
+        assert_eq!(page_path("/Home.md").as_deref(), Some("/Home"));
+        assert_eq!(page_path("/Q%26A+notes.md").as_deref(), Some("/Q&A+notes"));
+        assert_eq!(page_path(&format!("/{}.md", "a".repeat(400))), None);
+        for not_a_page in ["/.attachments/x.md", "/Procedures/.order", "/a.png", "x.md"] {
+            assert_eq!(page_path(not_a_page), None, "{not_a_page}");
+        }
+    }
+
+    #[tokio::test]
+    async fn wiki_pages_are_the_users_own_changes_to_the_project_wiki_since_the_time() {
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        const WIKI: &str = "1a2b3c4d-5b1d-4f7a-9c8e-0f3c6a2e5e6f";
+        const CODE: &str = "2a2b3c4d-5b1d-4f7a-9c8e-0f3c6a2e5e6f";
+        let (mine, theirs) = ("a".repeat(40), "b".repeat(40));
+        Mock::given(method("GET"))
+            .and(path("/example/Payments/_apis/wiki/wikis"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":[
+                {"name":"Payments.wiki","type":"projectWiki","repositoryId":WIKI},
+                {"name":"Code docs","type":"codeWiki","repositoryId":CODE}
+            ]})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{WIKI}/commits"
+            )))
+            .and(query_param("searchCriteria.author", "me@example.test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":[
+                {"commitId":mine,"author":{"email":"me@example.test","date":"2026-11-20T11:00:00Z"}},
+                {"commitId":theirs,"author":{"email":"someone@example.test","date":"2026-11-20T11:00:00Z"}}
+            ]})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/example/Payments/_apis/git/repositories/{WIKI}/commits/{mine}/changes"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"changes":[
+                {"changeType":"edit","item":{"gitObjectType":"blob","path":"/Procedures/Deploy-the-portal.md"}},
+                {"changeType":"delete","item":{"gitObjectType":"blob","path":"/Old.md"}},
+                {"changeType":"add","item":{"gitObjectType":"blob","path":"/.attachments/shot.png"}}
+            ]})))
+            .mount(&server)
+            .await;
+        let at = |t: &str| {
+            chrono::DateTime::parse_from_rfc3339(t)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let (pages, partial) = wiki_pages(
+            &Client::new(),
+            "key",
+            CATALOG,
+            "https://dev.azure.com/example",
+            "Payments",
+            (at("2026-11-20T10:00:00Z"), at("2026-11-20T12:00:00Z")),
+        )
+        .await
+        .unwrap();
+        assert!(!partial);
+        assert_eq!(pages.len(), 1, "{pages:?}");
+        assert_eq!(pages[0].path, "/Procedures/Deploy the portal");
+        assert_eq!(pages[0].wiki, "Payments.wiki");
+        assert_eq!(
+            pages[0].url,
+            "https://dev.azure.com/example/Payments/_wiki/wikis/Payments.wiki?pagePath=%2FProcedures%2FDeploy+the+portal"
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+        // The code Wiki's repository is never read, nor the other author's commit.
+        assert!(!requests.iter().any(|r| r.url.path().contains(CODE)));
+        assert!(!requests.iter().any(|r| r.url.path().contains(&theirs)));
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
 

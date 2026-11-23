@@ -9,6 +9,7 @@ Read only what the change needs; do not load the long documents whole.
 - [docs/delivery.md](docs/delivery.md): CI, releases, the server's updater and the manual fallback.
 - [docs/ui-design-conventions.md](docs/ui-design-conventions.md): every change to the GUI (`desktop/ui/`).
 - [docs/organization-and-cloud-storage.md](docs/organization-and-cloud-storage.md): the optional organization layer and the move of account data to Cloudflare (proposal, phases and open decisions).
+- [docs/workflow-lead.md](docs/workflow-lead.md): the approved design of workflow leads (epic #348): an agent session per workflow that settles its runs, keeps their findings and owns their backlog writes; its phases and the owner's decisions.
 - Operating the installed application: the [kuroko skill](desktop/skills/kuroko/SKILL.md) (also `kuroko skill show`) and its `references/`; from an agent with MCP, `kuroko mcp` exposes the same operations ([mcp.md](desktop/skills/kuroko/references/mcp.md)). These files are compiled into the binary (`src/app/skill.rs`).
 - Saving, correcting or organizing facts in the knowledge base: [save-knowledge](.agents/skills/save-knowledge/SKILL.md).
 

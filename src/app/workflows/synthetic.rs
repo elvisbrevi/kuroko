@@ -35,6 +35,10 @@ pub(in crate::app) struct Catalog {
     pub failing_lists: std::sync::atomic::AtomicBool,
     /// The listing of this one state fails.
     pub failing_state: Mutex<Option<String>>,
+    /// Pushes, by who pushed them (`me` is the source's user).
+    pushes: Mutex<Vec<(String, crate::ado::workflow::Pushed)>>,
+    /// Wiki page changes, by who made them (`me` is the source's user).
+    wiki: Mutex<Vec<(String, crate::ado::workflow::WikiPage)>>,
     /// The most items a listing may return, whatever the limit asked (a catalog larger than
     /// the read's bound).
     pub list_cap: Mutex<Option<usize>>,
@@ -295,6 +299,136 @@ impl Catalog {
             .get(&(repository.to_lowercase(), branch.to_owned()))
             .cloned()
             .unwrap_or_default())
+    }
+    /// A push of `branch` to a repository by `user` (`me` is the source's user), at `at`.
+    #[cfg(unix)]
+    pub(in crate::app) fn push(&self, user: &str, repository: &str, branch: &str, at: i64) {
+        let at = chrono::DateTime::from_timestamp(at, 0)
+            .unwrap()
+            .to_rfc3339();
+        self.pushes.lock().unwrap().push((
+            user.into(),
+            crate::ado::workflow::Pushed {
+                repository: repository.to_lowercase(),
+                branch: branch.into(),
+                pushed_at: at,
+                url: format!(
+                    "https://dev.azure.com/example/Payments/_git/{repository}?version=GB{branch}"
+                ),
+            },
+        ));
+    }
+    /// Forget every push, as when the branches were deleted.
+    #[cfg(unix)]
+    pub(in crate::app) fn clear_pushes(&self) {
+        self.pushes.lock().unwrap().clear();
+    }
+    /// Link a work item to something (a pull request, a branch), as its next read returns it.
+    #[cfg(unix)]
+    pub(in crate::app) fn relate(&self, id: u64, name: &str, url: &str) {
+        if let Some(detail) = self.items.lock().unwrap().get_mut(&id) {
+            detail.relations.push(crate::tools::todo::Relation {
+                name: name.into(),
+                url: Some(url.into()),
+                detail: name.into(),
+                item: None,
+                task: false,
+            });
+        }
+    }
+    /// The branches `me` pushed to a repository in a window.
+    pub(in crate::app) fn pushed_branches(
+        &self,
+        repository: &str,
+        (since, until): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    ) -> Vec<crate::ado::workflow::Pushed> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET pushes {repository}"));
+        self.pushes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(user, p)| {
+                user == "me"
+                    && p.repository.eq_ignore_ascii_case(repository)
+                    && chrono::DateTime::parse_from_rfc3339(&p.pushed_at)
+                        .is_ok_and(|d| (since..=until).contains(&d.with_timezone(&chrono::Utc)))
+            })
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+    /// A pull request of a repository by its ID, among those of every branch, when it was
+    /// opened since `since` (a test's pull requests without a date are always recent).
+    pub(in crate::app) fn pull_request(
+        &self,
+        repository: &str,
+        number: u64,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Option<PullRequest> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET pullrequest {repository} {number}"));
+        self.pulls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((r, _), _)| r.eq_ignore_ascii_case(repository))
+            .flat_map(|((_, branch), pulls)| {
+                pulls.iter().map(move |p| PullRequest {
+                    source: Some(branch.clone()),
+                    ..p.clone()
+                })
+            })
+            .find(|p| p.id == number)
+            .filter(|p| {
+                p.created_at.as_deref().is_none_or(|at| {
+                    chrono::DateTime::parse_from_rfc3339(at)
+                        .is_ok_and(|d| d.with_timezone(&chrono::Utc) >= since)
+                })
+            })
+    }
+    /// A change of a Wiki page by `user` (`me` is the source's user), at `at`.
+    #[cfg(unix)]
+    pub(in crate::app) fn wiki_change(&self, user: &str, path: &str, at: i64) {
+        let at = chrono::DateTime::from_timestamp(at, 0)
+            .unwrap()
+            .to_rfc3339();
+        self.wiki.lock().unwrap().push((
+            user.into(),
+            crate::ado::workflow::WikiPage {
+                wiki: "Payments.wiki".into(),
+                path: path.into(),
+                changed_at: at,
+                url: format!(
+                    "https://dev.azure.com/example/Payments/_wiki/wikis/Payments.wiki?pagePath={}",
+                    path.replace(' ', "+")
+                ),
+            },
+        ));
+    }
+    /// The Wiki pages `me` changed in a window.
+    pub(in crate::app) fn wiki_pages(
+        &self,
+        (since, until): (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    ) -> Vec<crate::ado::workflow::WikiPage> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push("GET wiki commits".into());
+        self.wiki
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(user, p)| {
+                user == "me"
+                    && chrono::DateTime::parse_from_rfc3339(&p.changed_at)
+                        .is_ok_and(|d| (since..=until).contains(&d.with_timezone(&chrono::Utc)))
+            })
+            .map(|(_, p)| p.clone())
+            .collect()
     }
     /// Change the state an item is in.
     #[cfg(unix)]
