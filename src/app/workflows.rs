@@ -21,7 +21,7 @@ use crate::workflows::lead::{self, Lead};
 use crate::workflows::{self as core, Block, Facts, Inspection, Kind, Workflow};
 use serde_json::{Value, json};
 
-pub(super) const METHODS: [&str; 14] = [
+pub(super) const METHODS: [&str; 15] = [
     "workflows_list",
     "workflow_show",
     "workflow_save",
@@ -36,6 +36,7 @@ pub(super) const METHODS: [&str; 14] = [
     "workflow_lead_remove",
     "workflow_lead_shifts",
     "workflow_lead_wake",
+    "workflow_lead_answer",
 ];
 
 pub(super) mod acting;
@@ -50,7 +51,7 @@ pub(super) mod record;
 mod rehearsal;
 pub(super) mod review;
 pub(super) mod runs;
-pub(super) mod shifts;
+pub(in crate::app) mod shifts;
 pub(super) mod summary;
 pub(super) mod supervisor;
 #[cfg(test)]
@@ -247,12 +248,16 @@ async fn older_delivery(host: &Arc<Host>, workflow: &Workflow) -> Option<String>
         .unwrap_or_default();
     (!older.is_empty()).then(|| {
         format!(
-            "Workflow {} has delivery settings, which hosts of release {} or older cannot read: {} {} the account's configuration while this workflow is in it (keeping the copy {} have) until updated.",
+            "Workflow {} has delivery settings, which hosts of release {} or older cannot read: {} {} the account's configuration while this workflow is in it (keeping {}) until updated.",
             workflow.id,
             core::OLDER_DELIVERY_UNTIL,
             older.join(", "),
             if older.len() == 1 { "refuses" } else { "refuse" },
-            if older.len() == 1 { "it" } else { "they" }
+            if older.len() == 1 {
+                "the copy it has"
+            } else {
+                "the copies they have"
+            }
         )
     })
 }
@@ -265,11 +270,15 @@ async fn older_leads(host: &Arc<Host>, what: &str) -> Option<String> {
         .unwrap_or_default();
     (!older.is_empty()).then(|| {
         format!(
-            "{what}, which hosts of release {} or older cannot read: {} {} the account's configuration (keeping the copy {} have) until updated.",
+            "{what}, which hosts of release {} or older cannot read: {} {} the account's configuration (keeping {}) until updated.",
             core::OLDER_LEADS_UNTIL,
             older.join(", "),
             if older.len() == 1 { "refuses" } else { "refuse" },
-            if older.len() == 1 { "it" } else { "they" }
+            if older.len() == 1 {
+                "the copy it has"
+            } else {
+                "the copies they have"
+            }
         )
     })
 }
@@ -283,12 +292,16 @@ async fn older_time_limit(host: &Arc<Host>, workflow: &Workflow) -> Option<Strin
         .unwrap_or_default();
     (!older.is_empty()).then(|| {
         format!(
-            "Workflow {} has its own session time limit, which hosts of release {} or older cannot read: {} {} the account's configuration while this workflow is in it (keeping the copy {} have) until updated.",
+            "Workflow {} has its own session time limit, which hosts of release {} or older cannot read: {} {} the account's configuration while this workflow is in it (keeping {}) until updated.",
             workflow.id,
             core::OLDER_TIME_LIMIT_UNTIL,
             older.join(", "),
             if older.len() == 1 { "refuses" } else { "refuse" },
-            if older.len() == 1 { "it" } else { "they" }
+            if older.len() == 1 {
+                "the copy it has"
+            } else {
+                "the copies they have"
+            }
         )
     })
 }
@@ -503,7 +516,9 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
             )
         }
         "workflow_lead_save" => save_lead(host, parse(args)?).await,
-        "workflow_lead_shifts" | "workflow_lead_wake" => shifts::operation(host, method, args),
+        "workflow_lead_shifts" | "workflow_lead_wake" | "workflow_lead_answer" => {
+            shifts::operation(host, method, args)
+        }
         "workflow_lead_remove" => {
             let a: LeadArgs = parse(args)?;
             require_coordinator(state)?;

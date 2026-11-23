@@ -2480,6 +2480,13 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForSelector('#workflow-leads [data-lead="pagos"]');
   check(`workflow settings ${label}: a lead says it follows its runs, with its last look and decisions`,
     /Siguiendo sus ejecuciones.*1 decisi/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
+  check(`workflow settings ${label}: a lead's open question waits with a place to answer it`,
+    /Pagos pregunta Is the legacy rounding kept/.test(await page.locator('#workflow-leads [data-question="q1"]').innerText()));
+  await page.fill('#workflow-leads [data-question="q1"] textarea', 'Yes, keep it.');
+  await page.click('#workflow-leads [data-question="q1"] button');
+  await page.waitForSelector('#workflow-leads [data-question="q1"]', { state: 'detached' });
+  check(`workflow settings ${label}: an answer goes to the lead once and its question leaves the list`,
+    await page.evaluate(() => window.__ptaWorkflowCalls.filter(c => c.method === 'workflow_lead_answer' && c.answer === 'Yes, keep it.').length) === 1);
   check(`workflow settings ${label}: the workflow leads list each lead with its agent and workflows`,
     /Claude · claude-opus-5-5 · high/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()) && /payments-features/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
   check(`workflow settings ${label}: the category passes axe`, (await scan(page)).length === 0, JSON.stringify(await scan(page)));
@@ -2575,7 +2582,8 @@ for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }], ['ph
   const { context, page, errors } = await open({ axe: true, context: { viewport } });
   await page.evaluate(axeSource);
   await page.waitForSelector('#workflow-attention .status-row');
-  check(`automatic starts ${label}: Home lists the runs waiting for you once, each with its item's link`, await page.locator('#workflow-attention .status-row').count() === 2
+  check(`automatic starts ${label}: Home lists the runs waiting for you once and a lead's question`, await page.locator('#workflow-attention .status-row').count() === 3
+    && /Pregunta de Pagos/.test(await page.locator('#workflow-attention [data-lead-attention="q1"]').innerText())
     && await page.locator('#workflow-attention .ref', { hasText: '#5003' }).count() === 1 && await page.locator('#tiles .status-row', { hasText: '5003' }).count() === 0
     && /Plan por revisar/.test(await page.locator('#workflow-attention').innerText()) && /Necesita un workflow/.test(await page.locator('#workflow-attention').innerText()));
   check(`automatic starts ${label}: Home does not scroll sideways`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -2796,7 +2804,8 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
   await page.waitForSelector('#run-findings [data-finding="f1"]');
   check(`runs ${label}: what the run's lead said shows in its detail, beside the run's state in words`,
-    /Seguir esperando/.test(await page.locator('#run-lead').innerText()) && /Requiere atención en Pull requests/.test(await page.locator('#run-lead').innerText()));
+    /Seguir esperando/.test(await page.locator('#run-lead').innerText()) && /Requiere atención en Pull requests/.test(await page.locator('#run-lead').innerText())
+    && /Pregunta Is the legacy rounding kept/.test(await page.locator('#run-lead').innerText()));
   check(`runs ${label}: a reported finding shows in the run's detail with its severity and evidence`,
     /Importante/.test(await page.locator('#run-findings').innerText()) && /Rounding\.cs:42/.test(await page.locator('#run-findings').innerText()));
   const findingScan = await scan(page);

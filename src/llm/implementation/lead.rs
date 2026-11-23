@@ -136,8 +136,9 @@ pub(crate) async fn lead_turn(
                         let reply = if request["subtype"] == "mcp_message"
                             && request["server_name"] == "kuroko"
                         {
+                            let response = mobile::mcp_reply(&server, &request["message"]).await;
                             json!({"type":"control_response","response":{"subtype":"success","request_id":event["request_id"],
-                                "response":{"mcp_response": mobile::mcp_reply(&server, &request["message"])}}})
+                                "response":{"mcp_response": response}}})
                         } else {
                             // Nobody answers a lead's prompt: anything else is refused.
                             json!({"type":"control_response","response":{"subtype":"error","request_id":event["request_id"],
@@ -212,13 +213,13 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"N
         use_test_cli(Some(cli));
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = calls.clone();
-        let server = Arc::new(Reporter {
-            tools: json!([{"name": "lead_note"}]),
-            call: Arc::new(move |tool: &str, args: &Value| {
+        let server = Arc::new(Reporter::sync(
+            json!([{"name": "lead_note"}]),
+            move |tool: &str, args: &Value| {
                 seen.lock().unwrap().push((tool.to_owned(), args.clone()));
                 Ok(json!({"noted": true}))
-            }),
-        });
+            },
+        ));
         let turn = lead_turn(
             ("model", "high"),
             log,

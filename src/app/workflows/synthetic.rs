@@ -39,6 +39,8 @@ pub(in crate::app) struct Catalog {
     pushes: Mutex<Vec<(String, crate::ado::workflow::Pushed)>>,
     /// Wiki page changes, by who made them (`me` is the source's user).
     wiki: Mutex<Vec<(String, crate::ado::workflow::WikiPage)>>,
+    /// Wiki pages and repository files a lead reads, by `page:PATH` or `REPOSITORY:PATH`.
+    texts: Mutex<BTreeMap<String, String>>,
     /// The most items a listing may return, whatever the limit asked (a catalog larger than
     /// the read's bound).
     pub list_cap: Mutex<Option<usize>>,
@@ -493,6 +495,37 @@ impl Catalog {
             has_more,
             ..Default::default()
         })
+    }
+    /// A Wiki page (`page:PATH`) or a repository file (`REPOSITORY:PATH`) a lead may read.
+    #[cfg(unix)]
+    pub(in crate::app) fn set_text(&self, key: &str, text: &str) {
+        self.texts.lock().unwrap().insert(key.into(), text.into());
+    }
+    pub(in crate::app) fn lead_read(
+        &self,
+        read: crate::app::tools::todo::LeadRead<'_>,
+    ) -> Result<serde_json::Value, String> {
+        use crate::app::tools::todo::LeadRead;
+        let texts = self.texts.lock().unwrap();
+        let text = |key: String, path: &str| {
+            texts
+                .get(&key)
+                .map(|t| serde_json::json!({"path": path, "content": t, "truncated": false}))
+                .ok_or_else(|| format!("[network] {path} could not be read."))
+        };
+        match read {
+            LeadRead::Page(page) => text(format!("page:{page}"), page),
+            LeadRead::File(repository, path, _) => text(format!("{repository}:{path}"), path),
+            LeadRead::Folder(repository, path, _) => {
+                let prefix = format!("{repository}:{}/", path.trim_end_matches('/'));
+                let entries: Vec<_> = texts
+                    .keys()
+                    .filter_map(|k| k.strip_prefix(&prefix))
+                    .map(|rest| serde_json::json!({"path": format!("{}/{rest}", path.trim_end_matches('/')), "folder": false}))
+                    .collect();
+                Ok(serde_json::json!({"path": path, "entries": entries, "truncated": false}))
+            }
+        }
     }
     /// Every request was a read.
     #[cfg(unix)]

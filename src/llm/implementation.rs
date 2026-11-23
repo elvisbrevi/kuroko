@@ -357,12 +357,30 @@ tokio::task_local! {
 /// `--safe-mode` and `--strict-mcp-config`): `tools` is its `tools/list`, `call` runs one.
 pub(crate) struct Reporter {
     pub(crate) tools: serde_json::Value,
-    #[allow(clippy::type_complexity)]
-    pub(crate) call: std::sync::Arc<
-        dyn Fn(&str, &serde_json::Value) -> std::result::Result<serde_json::Value, String>
-            + Send
-            + Sync,
-    >,
+    pub(crate) call: std::sync::Arc<Call>,
+}
+/// One tool call: its name and arguments.
+pub(crate) type Call = dyn Fn(&str, &serde_json::Value) -> Reply + Send + Sync;
+/// What one tool call gives, once done (a lead's reads wait for Azure DevOps).
+pub(crate) type Reply = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::result::Result<serde_json::Value, String>> + Send>,
+>;
+impl Reporter {
+    /// A server whose tools answer at once.
+    pub(crate) fn sync(
+        tools: serde_json::Value,
+        call: impl Fn(&str, &serde_json::Value) -> std::result::Result<serde_json::Value, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            tools,
+            call: std::sync::Arc::new(move |tool, args| {
+                Box::pin(std::future::ready(call(tool, args)))
+            }),
+        }
+    }
 }
 tokio::task_local! {
     /// The report tools of the one coding session that runs inside it; every other session

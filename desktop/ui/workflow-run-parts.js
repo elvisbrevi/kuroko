@@ -198,22 +198,27 @@ function findingsPanel(findings, refresh, id, title) {
 
 /** What a decision of a lead means, as the person reads it. */
 const DECISIONS = { settle: 'Settle its child', close: 'Close the run', wait: 'Keep waiting', continue: 'Continue its agent session', ask_person: 'Ask you' };
-/**
- * What the run's workflow lead recorded about it (`workflow_lead_shifts` with `run`): its
- * decisions (in shadow, recorded and not applied, beside the run's state then), notes and findings.
- */
 /** The run's state beside a lead's decision, as the host wrote it: `state` or `state in stage`. */
 function engineState(engine) {
   const [state, stage] = engine.split(' in ');
   return stage ? t('{state} in {stage}', { state: runStateLabel(state), stage: stageLabel(stage) }) : runStateLabel(state);
 }
 
+/** What a journal entry is, as a badge's text. */
+const KINDS = { finding: 'Finding', question: 'Question', note: 'Note' };
+
+/**
+ * What the run's workflow lead recorded about it (`workflow_lead_shifts` with `run`): its
+ * decisions (in shadow, recorded and not applied, beside the run's state then), notes, findings
+ * and questions for you with your answers.
+ */
 function leadPanel(shifts) {
   const entries = shifts.flatMap(s => s.journal ?? []).sort((a, b) => b.at - a.at);
   if (!entries.length) return el('div', {});
   const rows = entries.map(e => el('li', {},
-    badge(e.kind === 'decision' ? t(DECISIONS[e.decision] ?? e.decision) : e.kind === 'finding' ? t('Finding') : t('Note'), e.kind === 'decision' ? 'info' : 'muted'), ' ',
+    badge(e.kind === 'decision' ? t(DECISIONS[e.decision] ?? e.decision) : t(KINDS[e.kind] ?? 'Note'), e.kind === 'decision' ? 'info' : e.kind === 'question' && !e.answer ? 'warn' : 'muted'), ' ',
     el('span', { textContent: e.text }),
+    e.answer ? el('small', { textContent: ` · ${t('Your answer: {text}', { text: e.answer })}` }) : null,
     el('small', { textContent: ` · ${when(e.at)}${e.engine ? ` · ${t('the run was {state}', { state: engineState(e.engine) })}` : ''}` })));
   return el('details', { class: 'fold', open: true, id: 'run-lead' }, el('summary', { textContent: t('What its lead said (in shadow: nothing is applied)') }), el('ul', { class: 'run-pulls' }, ...rows));
 }
