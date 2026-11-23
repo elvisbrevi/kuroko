@@ -68,7 +68,11 @@ pub(crate) async fn lead_turn(
     let mut child = command
         .spawn()
         .map_err(|_| Failed::with(Cause::CliMissing, "The lead's CLI did not start."))?;
-    let _tree = ProcessTree(child.id().unwrap_or_default());
+    let _tree = ProcessTree(
+        child
+            .id()
+            .ok_or_else(|| anyhow::anyhow!("The lead's CLI did not start."))?,
+    );
     let mut input = child.stdin.take().context("The lead's CLI has no input.")?;
     let mut output = BufReader::new(
         child
@@ -84,10 +88,11 @@ pub(crate) async fn lead_turn(
         session_id: resume.map(str::to_owned),
         ..Default::default()
     };
-    // The limit covers the whole turn, writing its message included.
+    // The limit covers the whole turn, writing its message included; the message goes once the
+    // CLI has its tools.
     let followed = tokio::time::timeout(limit, async {
         input.write_all(send(initialize).as_bytes()).await?;
-        input.write_all(send(user).as_bytes()).await?;
+        let mut user = Some(user);
         loop {
             let bytes = output.fill_buf().await?;
             let (used, line) = if bytes.is_empty() {
@@ -107,6 +112,9 @@ pub(crate) async fn lead_turn(
                             event["response"]["subtype"] == "success",
                             Failed::with(Cause::AgentError, "The lead's CLI refused its tools.")
                         );
+                        if let Some(user) = user.take() {
+                            input.write_all(send(user).as_bytes()).await?;
+                        }
                     }
                     // The conversation's size: what its latest request carried.
                     Some("assistant") => {
@@ -186,8 +194,8 @@ mod tests {
     const CLI: &str = r#"#!/bin/sh
 printf '%s\n' "$@" > '{log}/arguments'
 read -r initialize; printf '%s\n' "$initialize" > '{log}/initialize'
-read -r user; printf '%s\n' "$user" > '{log}/user'
 printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"lead-initialize","response":{}}}'
+read -r user; printf '%s\n' "$user" > '{log}/user'
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"ses-lead"}'
 printf '%s\n' '{"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko","message":{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"lead_note","arguments":{"text":"Looked."}}}}}'
 read -r reply; printf '%s\n' "$reply" > '{log}/reply'
