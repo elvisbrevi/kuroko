@@ -1,0 +1,137 @@
+// Workflows › workflow leads: the agents you name (Claude on this coordinator, with a model and
+// effort) that follow the runs of the workflows that name them; for now in shadow, they read and
+// record and change nothing. Settings › Workflows lists, edits and removes them
+// (`workflow_leads_list`, `workflow_lead_save`, `workflow_lead_remove`); a workflow's editor names
+// its lead and its completion criteria (`leadField`, `leadSent`).
+import { t, tx } from './i18n.js';
+import { invoke } from './control.js';
+import { el } from './dom.js';
+import { busy, done } from './notices.js';
+import { fillAgentChoices } from './settings-models.js';
+
+/** The longest completion criteria and lead description (src/workflows/lead.rs). */
+const MAX_DONE_WHEN = 4000;
+const MAX_DESCRIPTION = 2000;
+const MAX_NAME = 60;
+
+/** The leads as last read, each `{lead, workflows}`, and whether they were read. @type {any[]} */
+let leads = [];
+let read = false;
+/** What the last save warned about, shown until the next one. @type {string[]} */
+let warnings = [];
+
+/** A lead ID from its name: lowercase letters, digits and `-`, starting with a letter. */
+function slug(name) {
+  const plain = name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return (/^[a-z]/.test(plain) ? plain : `lead-${plain}`).slice(0, 64).replace(/-+$/, '') || 'lead';
+}
+
+/** Reads the leads; the editor and the panel use the same list. */
+async function readLeads() {
+  leads = (await invoke('workflow_leads_list', {})).leads ?? [];
+  read = true;
+  return leads;
+}
+
+/** A new lead's ID: its name's, with a number when another lead has it. */
+function newId(name) {
+  const base = slug(name);
+  const taken = new Set(leads.map(l => l.lead.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base.slice(0, 60)}-${n}`;
+  return id;
+}
+
+/**
+ * Settings › Workflows › Workflow leads: each lead with its agent and the workflows it leads, and a
+ * form for a new or changed one. `coordinator` is this computer's machine ID, whose Claude Code
+ * models are offered.
+ */
+async function renderLeads(container, { editable, coordinator }) {
+  try { await readLeads(); } catch (error) { container.replaceChildren(el('p', { class: 'callout error', role: 'alert', textContent: String(error?.message ?? error) })); return; }
+  let providers = [];
+  if (coordinator) {
+    try { providers = ((await invoke('implementation_catalog', { machine: coordinator })).providers ?? []).filter(p => p.id === 'claude'); } catch { /* offered as saved */ }
+  }
+  const draft = { id: '', name: '', description: '', agent: { provider: 'claude', model: '', effort: '' }, enabled: true };
+  const name = el('input', { id: 'lead-name', maxLength: MAX_NAME, disabled: !editable, autocomplete: 'off' });
+  const description = el('textarea', { id: 'lead-description', rows: 2, maxLength: MAX_DESCRIPTION, disabled: !editable });
+  const selects = { provider: el('select', { id: 'lead-provider', disabled: true }), model: el('select', { id: 'lead-model', disabled: !editable }), effort: el('select', { id: 'lead-effort', disabled: !editable }) };
+  const enabled = el('input', { type: 'checkbox', id: 'lead-enabled', checked: true, disabled: !editable });
+  const fill = lead => {
+    Object.assign(draft, { id: '', name: '', description: '', enabled: true }, structuredClone(lead));
+    name.value = draft.name; description.value = draft.description ?? ''; enabled.checked = draft.enabled !== false;
+    fillAgentChoices(selects, providers, { ...draft.agent, provider: 'claude' }, agent => { draft.agent = { ...agent, provider: 'claude' }; });
+  };
+  fill(draft);
+  const save = el('button', { type: 'button', id: 'lead-save', textContent: t('Save lead'), disabled: !editable });
+  save.onclick = () => busy(save, async () => {
+    const lead = { id: draft.id || newId(name.value), name: name.value.trim(), description: description.value.trim(), agent: { ...draft.agent, provider: 'claude' }, enabled: enabled.checked };
+    const reply = await invoke('workflow_lead_save', { lead });
+    warnings = reply.warnings ?? [];
+    done(t('Lead saved.'));
+    await renderLeads(container, { editable, coordinator });
+  });
+  // A new lead, after editing another: the form forgets which one it edited.
+  const fresh = el('button', { type: 'button', class: 'secondary', id: 'lead-new', textContent: t('New lead'), disabled: !editable });
+  fresh.onclick = () => { fill({ agent: { provider: 'claude', model: '', effort: '' } }); name.focus(); };
+  const rows = leads.map(({ lead, workflows }) => {
+    const edit = el('button', { type: 'button', class: 'secondary small', textContent: t('Edit'), disabled: !editable });
+    edit.onclick = () => { fill(lead); name.focus(); };
+    const remove = el('button', { type: 'button', class: 'secondary small danger', textContent: t('Remove'), disabled: !editable || workflows.length > 0 });
+    remove.onclick = () => {
+      if (remove.dataset.armed !== 'true') {
+        remove.dataset.armed = 'true'; remove.textContent = t('Confirm removal');
+        setTimeout(() => { remove.dataset.armed = ''; remove.textContent = t('Remove'); }, 4000);
+        return;
+      }
+      busy(remove, async () => {
+        await invoke('workflow_lead_remove', { lead: lead.id, confirmed: true });
+        done(t('Lead removed.'));
+        await renderLeads(container, { editable, coordinator });
+      });
+    };
+    return el('div', { class: 'resource', 'data-lead': lead.id },
+      el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), edit, remove),
+      el('p', { class: 'resource-facts' }, el('small', { textContent: [`Claude · ${lead.agent.model} · ${lead.agent.effort}`, lead.enabled === false ? t('Off') : null,
+        workflows.length ? t('Leads {names}', { names: workflows.join(', ') }) : t('Leads no workflow yet')].filter(Boolean).join(' · ') })),
+      lead.description ? el('p', { class: 'hint', textContent: lead.description }) : null);
+  });
+  container.replaceChildren(
+    warnings.length ? el('div', { class: 'callout warn', role: 'status' }, ...warnings.map(w => el('p', { textContent: tx(w) }))) : el('div', {}),
+    rows.length ? el('div', { class: 'list' }, ...rows) : el('p', { class: 'hint', textContent: t('No workflow lead yet.') }),
+    el('div', { class: 'grid' },
+      el('label', {}, t('Name'), ' ', el('small', { textContent: t('How you call it, on every surface.') }), name),
+      el('label', {}, t('Model'), selects.model), el('label', {}, t('Effort'), selects.effort)),
+    el('label', {}, t('What you want from it'), description),
+    el('label', { class: 'check' }, enabled, el('span', { textContent: t('Lead on') })),
+    el('div', { class: 'actions' }, save, fresh));
+}
+
+/** The editor's fields for a workflow's lead and completion criteria; `changed` runs after each edit. */
+function leadField(draft, changed) {
+  const choice = el('select', { 'data-lead': 'choice' });
+  const options = () => {
+    choice.replaceChildren(el('option', { value: '', textContent: t('No lead') }), ...leads.map(({ lead }) => el('option', { value: lead.id, textContent: lead.name })));
+    if (draft.lead?.id && !leads.some(({ lead }) => lead.id === draft.lead.id)) choice.append(el('option', { value: draft.lead.id, textContent: draft.lead.id }));
+    choice.value = draft.lead?.id ?? '';
+  };
+  options();
+  choice.onchange = () => { draft.lead = choice.value ? { id: choice.value } : null; changed(); };
+  const criteria = el('textarea', { rows: 3, maxLength: MAX_DONE_WHEN, value: draft.done_when ?? '', 'data-lead': 'done_when', placeholder: t('For example: done once its pull request is open for review.') });
+  criteria.oninput = () => { draft.done_when = criteria.value; changed(); };
+  if (!read) readLeads().then(options).catch(() => {});
+  return el('fieldset', { class: 'workflow-lead' }, el('legend', { textContent: t('Workflow lead') }),
+    el('label', {}, t('Its lead'), ' ', el('small', { textContent: t('Follows its runs with their context; for now it reads and records and changes nothing.') }), choice),
+    el('label', {}, t('When a run is done'), ' ', el('small', { textContent: t('In your words; its lead reads it.') }), criteria));
+}
+
+/** The lead and completion criteria as the host saves them. */
+function leadSent(draft) {
+  const sent = {};
+  if (draft.lead?.id) sent.lead = { id: draft.lead.id };
+  if (draft.done_when?.trim()) sent.done_when = draft.done_when.trim();
+  return sent;
+}
+
+export { leadField, leadSent, renderLeads };

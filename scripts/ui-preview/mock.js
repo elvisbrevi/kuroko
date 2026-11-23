@@ -671,6 +671,19 @@
       run.ahead_since = args.ahead ? secs(Date.now()) : null;
       return { run: run.id, ahead: Boolean(args.ahead), ahead_since: run.ahead_since };
     },
+    workflow_leads_list: () => ({ leads: (window.__ptaLeads ??= [{ lead: { id: 'pagos', name: 'Pagos', description: 'Payment workflows: report what is left in plain words.', agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }, enabled: true, updated_at: 0 }, workflows: ['payments-features'] }]).map(l => structuredClone(l)), editable: true }),
+    workflow_lead_save: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_lead_save', ...structuredClone(args) });
+      const leads = window.__ptaLeads ??= [];
+      const known = leads.find(l => l.lead.id === args.lead.id);
+      if (known) known.lead = structuredClone(args.lead); else leads.push({ lead: structuredClone(args.lead), workflows: [] });
+      return { lead: args.lead, saved: true, warnings: [] };
+    },
+    workflow_lead_remove: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_lead_remove', ...structuredClone(args) });
+      window.__ptaLeads = (window.__ptaLeads ?? []).filter(l => l.lead.id !== args.lead);
+      return { removed: args.lead };
+    },
     workflows_list: () => ({ workflows: structuredClone(workflows), usage: Object.fromEntries(workflows.map(w => [w.id, workflowUsage(w)])), editable: !window.__ptaWorkflowsElsewhere }),
     workflow_show: args => ({ workflow: structuredClone(workflows.find(w => w.id === args.id)), blocks: [], usage: workflowUsage(workflows.find(w => w.id === args.id)), editable: true }),
     workflow_blocks_list: () => ({ blocks: structuredClone(workflowBlocks), used_by: usedBy(), editable: !window.__ptaWorkflowsElsewhere }),

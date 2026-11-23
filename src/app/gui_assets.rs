@@ -108,6 +108,7 @@ pub(super) const ASSETS: &[Asset] = &[
         "text/javascript; charset=utf-8",
         true
     ),
+    asset!("workflow-leads.js", "text/javascript; charset=utf-8", true),
     asset!(
         "settings-general.js",
         "text/javascript; charset=utf-8",

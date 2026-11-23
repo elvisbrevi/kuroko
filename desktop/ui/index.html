@@ -57,6 +57,7 @@
   <link rel="modulepreload" href="workflow-pause.js" fetchpriority="low">
   <link rel="modulepreload" href="workflow-run-parts.js" fetchpriority="low">
   <link rel="modulepreload" href="workflow-delivery.js" fetchpriority="low">
+  <link rel="modulepreload" href="workflow-leads.js" fetchpriority="low">
   <link rel="modulepreload" href="notices.js" fetchpriority="low">
   <link rel="modulepreload" href="dialogs.js" fetchpriority="low">
   <link rel="modulepreload" href="control.js" fetchpriority="low">
@@ -561,6 +562,11 @@
             <p class="hint">The director reads each item and your enabled workflows' descriptions and chooses one, or none; it decides nothing else, and code checks its choice. It runs without tools, read-only. Each project uses its own director when it has one (under Ready states), else the machine and agent its workflows share; this general director is for a project whose workflows differ.</p>
             <div id="workflow-director" class="grid"></div>
             <div class="actions"><button id="workflow-director-prompt" type="button" class="link-button">Edit the director's instructions</button></div>
+          </div>
+          <div class="panel" id="panel-workflow-leads">
+            <h2>Workflow leads</h2>
+            <p class="hint">A lead follows the runs of the workflows that name it, with their descriptions, completion criteria, instructions and blocks: Claude on this coordinator, with the model and effort you choose. For now it reads them and records what it would decide, and changes nothing.</p>
+            <div id="workflow-leads"></div>
           </div>
           <div class="panel" id="panel-workflow-supervisor">
             <h2>Workflow supervisor</h2>

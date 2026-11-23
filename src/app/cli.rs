@@ -530,6 +530,11 @@ Knowledge
   workflows resume RUN --confirmed       Continues a failed, interrupted or needs_attention run from its
                            stage, accepting what stopped it; never submits a plan or starts a started
                            coding run again.
+  workflows leads list | leads show LEAD | leads save < lead.json | leads remove LEAD --confirmed
+                           Workflow leads: agents you name (Claude on the coordinator, with a model and
+                           effort) that follow the runs of the workflows that name them (a workflow's
+                           lead {id}, saved with workflows save --confirmed). LEAD is its ID or
+                           name. A lead by itself starts nothing.
   workflows findings [--workflow WORKFLOW] [--run RUN] [--state open|resolved|dismissed]
                            What the runs' coding sessions found that someone must know or decide,
                            newest first, each as its session reported it (finding_report).
@@ -1360,6 +1365,22 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 return Ok(reply);
             }
             ("workflow_remove", json!({"id":id,"confirmed":true}))
+        }
+        (Some("leads"), Some("list")) => ("workflow_leads_list", json!({})),
+        (Some("leads"), Some("show")) => ("workflow_lead_show", json!({"lead": id(3)?})),
+        (Some("leads"), Some("save")) => ("workflow_lead_save", json!({"lead": input()?})),
+        (Some("leads"), Some("remove")) => {
+            let lead = id(3)?;
+            if let Some(reply) = unconfirmed(
+                args,
+                format!("Remove workflow lead {lead}? Its definition cannot be recovered."),
+            ) {
+                return Ok(reply);
+            }
+            (
+                "workflow_lead_remove",
+                json!({"lead": lead, "confirmed": true}),
+            )
         }
         (Some("blocks"), Some("list")) => ("workflow_blocks_list", json!({})),
         (Some("blocks"), Some("save")) => {
@@ -2885,6 +2906,8 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["workflows", "audits", _]
             | ["workflows", "show" | "remove" | "enable" | "disable", _]
             | ["workflows", "blocks", "list" | "save"]
+            | ["workflows", "leads", "list" | "save"]
+            | ["workflows", "leads", "show" | "remove", _]
             | ["workflows", "blocks", "remove", _]
             | ["notes", "list" | "add"]
             | ["notes", "search" | "edit" | "remove", _]
@@ -2988,6 +3011,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                     ]
                 )
                 || p.as_slice() == ["workflows", "blocks", "save"]
+                || matches!(p.as_slice(), ["workflows", "leads", "remove", _])
                 || p.as_slice() == ["workflows", "save"]
                 || p.as_slice() == ["cloud", "migrate"]
                 || p.as_slice() == ["cloud", "rollback"]
@@ -4915,6 +4939,8 @@ mod wiki_tests {
             &["workflows", "skip-wait", "r", "--child", "4"],
             &["workflows", "update-branch", "r", "--branch", "x"],
             &["workflows", "findings", "--confirmed"],
+            &["workflows", "leads", "show"],
+            &["workflows", "leads", "list", "--confirmed"],
             &["workflows", "dismiss-finding", "f", "--run", "r"],
             &["mcp", "--runner", "r"],
         ] {
@@ -4979,6 +5005,10 @@ mod wiki_tests {
             ],
             &["workflows", "resolve-finding", "f", "--note", "fixed in !7"],
             &["workflows", "dismiss-finding", "f"],
+            &["workflows", "leads", "list"],
+            &["workflows", "leads", "show", "Pagos"],
+            &["workflows", "leads", "save"],
+            &["workflows", "leads", "remove", "pagos", "--confirmed"],
             &["workflows", "find", "r", "--child", "200"],
             &[
                 "workflows",

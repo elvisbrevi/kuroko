@@ -1917,3 +1917,101 @@ async fn a_workflow_larger_than_older_hosts_accept_warns_and_names_the_older_mac
         "{warning}"
     );
 }
+
+#[tokio::test]
+async fn leads_are_named_found_by_name_assigned_with_confirmation_and_kept_while_used() {
+    let root = tempfile::tempdir().unwrap();
+    let host = host(root.path());
+    let own = implementation::test_machine(&host, None).await;
+    // An agent this coordinator does not have is refused, with the reason.
+    let missing = call(
+        &host,
+        Local,
+        "workflow_lead_save",
+        json!({"lead":{"id":"pagos","name":"Pagos","agent":{"provider":"claude","model":"synthetic-model-that-is-not-installed","effort":"high"},"enabled":true}}),
+    )
+    .await;
+    assert_eq!(missing.code, "invalid_input", "{:?}", missing.message);
+    let other = call(
+        &host,
+        Local,
+        "workflow_lead_save",
+        json!({"lead":{"id":"pagos","name":"Pagos","agent":{"provider":"codex","model":"m","effort":"high"}}}),
+    )
+    .await;
+    assert!(other.message.unwrap().contains("claude"));
+    // As the operation would have saved it.
+    let mut map = host.state.settings.map().unwrap();
+    map.workflow_leads = vec![crate::workflows::lead::Lead {
+        id: "pagos".into(),
+        name: "Pagos".into(),
+        agent: Agent {
+            provider: "claude".into(),
+            model: "model".into(),
+            effort: "high".into(),
+            time_limit_minutes: None,
+        },
+        enabled: true,
+        ..Default::default()
+    }];
+    map.workflows = vec![workflow("payments", &own)];
+    host.state.settings.save_map(&map).unwrap();
+    let shown = call(&host, Local, "workflow_lead_show", json!({"lead":"PÁGOS"})).await;
+    assert!(shown.ok, "{:?}", shown.message);
+    assert_eq!(shown.data["lead"]["id"], "pagos");
+    // A workflow takes its lead only with the user's confirmation, which names it.
+    let mut led = workflow("payments", &own);
+    led.lead = Some(crate::workflows::lead::WorkflowLead { id: "pagos".into() });
+    led.done_when = "Done once its pull request is open for review.".into();
+    let unconfirmed = call(&host, Local, "workflow_save", json!({"workflow":led})).await;
+    let message = unconfirmed.message.unwrap();
+    assert!(
+        message.contains("workflow lead pagos") && message.contains("in shadow"),
+        "{message}"
+    );
+    // A lead that does not exist is refused before anything is read.
+    let mut unknown = led.clone();
+    unknown.lead = Some(crate::workflows::lead::WorkflowLead { id: "nadie".into() });
+    let refused = call(
+        &host,
+        Local,
+        "workflow_save",
+        json!({"workflow":unknown,"confirmed":true}),
+    )
+    .await;
+    assert!(refused.message.unwrap().contains("does not exist"));
+    // Kept while a workflow names it.
+    let mut map = host.state.settings.map().unwrap();
+    map.workflows = vec![led];
+    host.state.settings.save_map(&map).unwrap();
+    let listed = call(&host, Local, "workflow_leads_list", json!({})).await;
+    assert_eq!(listed.data["leads"][0]["workflows"], json!(["payments"]));
+    let used = call(
+        &host,
+        Local,
+        "workflow_lead_remove",
+        json!({"lead":"pagos","confirmed":true}),
+    )
+    .await;
+    assert_eq!(used.code, "state_conflict", "{:?}", used.message);
+    let mut map = host.state.settings.map().unwrap();
+    map.workflows[0].lead = None;
+    host.state.settings.save_map(&map).unwrap();
+    let unasked = call(
+        &host,
+        Local,
+        "workflow_lead_remove",
+        json!({"lead":"pagos"}),
+    )
+    .await;
+    assert!(!unasked.ok);
+    let removed = call(
+        &host,
+        Local,
+        "workflow_lead_remove",
+        json!({"lead":"Pagos","confirmed":true}),
+    )
+    .await;
+    assert!(removed.ok, "{:?}", removed.message);
+    assert!(host.state.settings.map().unwrap().workflow_leads.is_empty());
+}

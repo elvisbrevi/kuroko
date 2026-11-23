@@ -17,10 +17,11 @@
 //! `director`.
 use super::*;
 use crate::agent_prompts::Texts;
+use crate::workflows::lead::{self, Lead};
 use crate::workflows::{self as core, Block, Facts, Inspection, Kind, Workflow};
 use serde_json::{Value, json};
 
-pub(super) const METHODS: [&str; 8] = [
+pub(super) const METHODS: [&str; 12] = [
     "workflows_list",
     "workflow_show",
     "workflow_save",
@@ -29,6 +30,10 @@ pub(super) const METHODS: [&str; 8] = [
     "workflow_block_save",
     "workflow_block_remove",
     "workflow_repositories",
+    "workflow_leads_list",
+    "workflow_lead_show",
+    "workflow_lead_save",
+    "workflow_lead_remove",
 ];
 
 pub(super) mod acting;
@@ -111,6 +116,18 @@ struct RemoveArgs {
     id: String,
     #[serde(default)]
     confirmed: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeadArgs {
+    lead: String,
+    #[serde(default)]
+    confirmed: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeadSaveArgs {
+    lead: Value,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -237,6 +254,23 @@ async fn older_delivery(host: &Arc<Host>, workflow: &Workflow) -> Option<String>
     })
 }
 
+/// Leads, a workflow's lead or its completion criteria are refused by a host from before them
+/// (0.20.1 or older): the save names the account's machines that report one.
+async fn older_leads(host: &Arc<Host>, what: &str) -> Option<String> {
+    let older = implementation::machines_until(host, core::OLDER_LEADS_UNTIL)
+        .await
+        .unwrap_or_default();
+    (!older.is_empty()).then(|| {
+        format!(
+            "{what}, which hosts of release {} or older cannot read: {} {} the account's configuration (keeping the copy {} have) until updated.",
+            core::OLDER_LEADS_UNTIL,
+            older.join(", "),
+            if older.len() == 1 { "refuses" } else { "refuse" },
+            if older.len() == 1 { "it" } else { "they" }
+        )
+    })
+}
+
 /// A workflow with its own session time limit is refused by a host from before it (0.19.1 or
 /// older, `deny_unknown_fields`): the save names the account's machines that report one.
 async fn older_time_limit(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
@@ -289,10 +323,16 @@ async fn older_hosts(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
 pub(super) fn describe_workflow(workflow: &Workflow) -> Option<String> {
     let lifted = core::describe_allow(&workflow.allow);
     let preapproved = core::describe_preapprove(&workflow.preapprove);
-    if lifted.is_empty() && preapproved.is_empty() {
+    if lifted.is_empty() && preapproved.is_empty() && workflow.lead.is_none() {
         return None;
     }
     let mut text = format!("Save workflow {}?", workflow.id);
+    if let Some(lead) = &workflow.lead {
+        text.push_str(&format!(
+            " Its workflow lead {} follows its runs on this coordinator with its own Claude agent and that account's usage, in shadow: it reads them and records what it would decide, and changes nothing.",
+            lead.id
+        ));
+    }
     if !lifted.is_empty() {
         text.push_str(&format!(
             " In every run it starts (also those that start by themselves), {lifted}, when its instructions ask for it. Its planning run, and every run without this workflow, keep every prohibition."
@@ -441,6 +481,55 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
             .await?;
             Ok(json!({"removed":a.id}))
         }
+        "workflow_leads_list" => {
+            let map = state.settings.map().map_err(fail)?;
+            let leads: Vec<Value> = map
+                .workflow_leads
+                .iter()
+                .map(|l| json!({"lead": l, "workflows": lead::led_by(&map.workflows, &l.id)}))
+                .collect();
+            Ok(json!({"leads": leads, "editable": editable(state)?}))
+        }
+        "workflow_lead_show" => {
+            let a: LeadArgs = parse(args)?;
+            let map = state.settings.map().map_err(fail)?;
+            let found = lead::find(&map.workflow_leads, &a.lead)
+                .ok_or_else(|| invalid(format!("There is no workflow lead {}.", a.lead)))?;
+            Ok(
+                json!({"lead": found, "workflows": lead::led_by(&map.workflows, &found.id), "editable": editable(state)?}),
+            )
+        }
+        "workflow_lead_save" => save_lead(host, parse(args)?).await,
+        "workflow_lead_remove" => {
+            let a: LeadArgs = parse(args)?;
+            require_coordinator(state)?;
+            if !a.confirmed {
+                let map = state.settings.map().map_err(fail)?;
+                let named = lead::find(&map.workflow_leads, &a.lead)
+                    .map_or_else(|| a.lead.clone(), |l| format!("{} ({})", l.name, l.id));
+                return Err(invalid(format!(
+                    "Confirm with the user, then remove with confirmed: true. Remove workflow lead {named}? Its definition cannot be recovered."
+                )));
+            }
+            let removed = change(host, |map| {
+                let found = lead::find(&map.workflow_leads, &a.lead)
+                    .ok_or_else(|| invalid(format!("There is no workflow lead {}.", a.lead)))?
+                    .id
+                    .clone();
+                let users = lead::led_by(&map.workflows, &found);
+                if !users.is_empty() {
+                    return Err(conflict(format!(
+                        "Lead {} leads workflow {}; take it out of them first.",
+                        a.lead,
+                        users.join(", ")
+                    )));
+                }
+                map.workflow_leads.retain(|l| l.id != found);
+                Ok(found)
+            })
+            .await?;
+            Ok(json!({"removed": removed}))
+        }
         "workflow_block_save" => save_block(host, parse(args)?).await,
         "workflow_block_remove" => {
             let a: IdArgs = parse(args)?;
@@ -543,6 +632,7 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             let mut candidate = state.settings.map().map_err(fail)?;
             upsert(&mut candidate.workflows, workflow.clone(), |w| &w.id);
             core::validate(&candidate.workflows, &candidate.workflow_blocks).map_err(invalid)?;
+            lead::validate(&candidate.workflow_leads, &candidate.workflows).map_err(invalid)?;
             fits(
                 &workflow,
                 &candidate.workflow_blocks,
@@ -563,6 +653,15 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             warnings.extend(older_hosts(host, &saved).await);
             warnings.extend(older_supervisors(host, &saved).await);
             warnings.extend(older_delivery(host, &saved).await);
+            if saved.lead.is_some() || !saved.done_when.is_empty() {
+                warnings.extend(
+                    older_leads(
+                        host,
+                        &format!("Workflow {} names a lead or completion criteria", saved.id),
+                    )
+                    .await,
+                );
+            }
             warnings.extend(older_time_limit(host, &saved).await);
             Ok(json!({"workflow":shown(&saved),"saved":true,"usage":used,"warnings":warnings}))
         }
@@ -771,6 +870,32 @@ pub(super) async fn preapproved_chats(
         }
     }
     Ok(())
+}
+
+/// Save a workflow lead: its own rules, its agent installed on this coordinator (what cannot be
+/// read now is a warning), and a name no other lead has.
+async fn save_lead(host: &Arc<Host>, args: LeadSaveArgs) -> Result<Value, String> {
+    let state = &host.state;
+    require_coordinator(state)?;
+    let mut saved: Lead =
+        serde_json::from_value(args.lead).map_err(|e| invalid(format!("Invalid lead: {e}.")))?;
+    saved.updated_at = now();
+    lead::validate_lead(&saved).map_err(invalid)?;
+    let director = core::director::Director {
+        machine: implementation::own_machine(host).await,
+        provider: saved.agent.provider.clone(),
+        model: saved.agent.model.clone(),
+        effort: saved.agent.effort.clone(),
+    };
+    let mut warnings = director::verify_agent(host, &director, director::Role::Lead).await?;
+    warnings.extend(older_leads(host, "The account now has workflow leads").await);
+    let kept = saved.clone();
+    change(host, |map| {
+        upsert(&mut map.workflow_leads, kept, |l| &l.id);
+        lead::validate(&map.workflow_leads, &map.workflows).map_err(invalid)
+    })
+    .await?;
+    Ok(json!({"lead": saved, "saved": true, "warnings": warnings}))
 }
 
 async fn save_block(host: &Arc<Host>, args: BlockSaveArgs) -> Result<Value, String> {

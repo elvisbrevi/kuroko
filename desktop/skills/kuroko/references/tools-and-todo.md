@@ -687,6 +687,14 @@ run (any state but `done` and `cancelled`).
   continued session (below) has reported its branches since: then they are waited for. A child
   whose coding run has since ended done is delivered, not accepted. It never submits a plan again, never starts a coding run that was started, and writes
   nothing to Azure DevOps. Resume only after the user looked at the cause.
+- **Workflow leads:** `kuroko workflows leads list`, `leads show LEAD` (its ID or name),
+  `leads save` (JSON on stdin: `id`, `name`, `description`, `agent {provider: "claude", model,
+  effort}`, `enabled`, on by default; checked against the coordinator's installed Claude Code) and `leads remove
+  LEAD --confirmed` (refused while a workflow names it); MCP `workflow_leads_list`,
+  `workflow_lead_show`, `workflow_lead_save`, `workflow_lead_remove` (confirmed). A workflow names
+  its lead with `lead: {"id": ...}` and its completion criteria with `done_when`, saved with
+  `workflows save --confirmed` (the question names the lead). For now a lead follows nothing:
+  its shifts arrive in a later version.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may

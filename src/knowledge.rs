@@ -46,6 +46,9 @@ pub struct KnowledgeMap {
     /// The reusable parts of workflows (instructions, Teams notifications, launchers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_blocks: Vec<crate::workflows::Block>,
+    /// The workflow leads the user named (`crate::workflows::lead`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_leads: Vec<crate::workflows::lead::Lead>,
     /// Ready states, the watcher's interval, concurrency, the pull-request wait and the workflow
     /// director (`crate::workflows::director`); left out while every value is its default.
     #[serde(
@@ -213,6 +216,7 @@ impl KnowledgeMap {
         crate::agent_prompts::validate(&map.agent_prompts)?;
         crate::work_items::validate(&map.work_item_guides)?;
         crate::workflows::validate(&map.workflows, &map.workflow_blocks)?;
+        crate::workflows::lead::validate(&map.workflow_leads, &map.workflows)?;
         crate::workflows::director::validate(&map.workflow_settings)?;
         crate::organization::validate(&map.organization, |id| {
             map.resources.iter().find(|r| r.id == id).map(|r| &r.access)
