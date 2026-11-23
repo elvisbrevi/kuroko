@@ -17,6 +17,7 @@
 //! runs.
 
 pub mod director;
+pub mod lead;
 
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,9 @@ pub const MAX_CONTEXT: usize = 100_000;
 pub const OLDER_LIMITS_UNTIL: &str = "0.12.22";
 /// The newest release whose hosts cannot read a workflow's `delivery`.
 pub const OLDER_DELIVERY_UNTIL: &str = "0.14.1";
+/// The last release whose hosts cannot read workflow leads, a workflow's lead or its completion
+/// criteria (`deny_unknown_fields`).
+pub const OLDER_LEADS_UNTIL: &str = "0.20.1";
 /// The newest release whose hosts cannot read a session time limit (a workflow's
 /// `agent.time_limit_minutes`, the settings' `coding_`/`planning_time_limit_minutes`).
 pub const OLDER_TIME_LIMIT_UNTIL: &str = "0.19.1";
@@ -310,6 +314,13 @@ pub struct Workflow {
     /// branch); left out while it is the default.
     #[serde(default, skip_serializing_if = "Delivery::is_default")]
     pub delivery: Delivery,
+    /// Its workflow lead (`lead`), when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<lead::WorkflowLead>,
+    /// When one of its runs is done, in the user's words: its lead reads it (at most
+    /// `lead::MAX_DONE_WHEN` characters).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub done_when: String,
     /// When it last changed (Unix seconds); set by the host when it is saved.
     #[serde(default)]
     pub updated_at: i64,

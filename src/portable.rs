@@ -57,7 +57,7 @@ pub const SETTINGS_FIELDS: [&str; 11] = [
     "message_style",
 ];
 /// What synchronization carries besides the settings.
-pub const COLLECTIONS: [&str; 9] = [
+pub const COLLECTIONS: [&str; 10] = [
     "sources",
     "contexts",
     "questions",
@@ -66,6 +66,7 @@ pub const COLLECTIONS: [&str; 9] = [
     "work_item_guides",
     "workflows",
     "workflow_blocks",
+    "workflow_leads",
     "workflow_settings",
 ];
 
@@ -161,6 +162,8 @@ pub struct Document {
     pub workflows: Vec<Workflow>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workflow_blocks: Vec<Block>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflow_leads: Vec<crate::workflows::lead::Lead>,
     /// Left out while every value is its default; changed only on the coordinator.
     #[serde(default, skip_serializing_if = "WorkflowSettings::is_default")]
     pub workflow_settings: WorkflowSettings,
@@ -233,6 +236,8 @@ impl Document {
         workflows.sort_by(|a, b| a.id.cmp(&b.id));
         let mut workflow_blocks = map.workflow_blocks.clone();
         workflow_blocks.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut workflow_leads = map.workflow_leads.clone();
+        workflow_leads.sort_by(|a, b| a.id.cmp(&b.id));
         Self {
             schema: SCHEMA,
             settings: Settings::of(config),
@@ -243,6 +248,7 @@ impl Document {
             work_item_guides,
             workflows,
             workflow_blocks,
+            workflow_leads,
             workflow_settings: map.workflow_settings.clone(),
         }
     }
@@ -270,6 +276,7 @@ impl Document {
             organization: self.organization.clone(),
             workflows: self.workflows.clone(),
             workflow_blocks: self.workflow_blocks.clone(),
+            workflow_leads: self.workflow_leads.clone(),
             workflow_settings: self.workflow_settings.clone(),
         };
         KnowledgeMap::parse(&toml::to_string(&scratch)?)?;
@@ -370,6 +377,7 @@ impl Document {
             organization,
             workflows: self.workflows.clone(),
             workflow_blocks: self.workflow_blocks.clone(),
+            workflow_leads: self.workflow_leads.clone(),
             workflow_settings: self.workflow_settings.clone(),
         };
         (config, map, unavailable)

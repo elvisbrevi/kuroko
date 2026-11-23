@@ -2477,6 +2477,9 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   check(`workflow settings ${label}: ready states are the process's discovered states`, await page.locator('#workflow-ready-states [data-project="Payments"] input').count() === 5);
   check(`workflow settings ${label}: each project says which director it gets and from where`,
     /Director: .+, de /.test(await page.locator('#workflow-ready-states [data-project="Payments"] .workflow-director-line').textContent() ?? ''));
+  await page.waitForSelector('#workflow-leads [data-lead="pagos"]');
+  check(`workflow settings ${label}: the workflow leads list each lead with its agent and workflows`,
+    /Claude · claude-opus-5-5 · high/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()) && /payments-features/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
   check(`workflow settings ${label}: the category passes axe`, (await scan(page)).length === 0, JSON.stringify(await scan(page)));
   await page.locator('#workflow-ready-states [data-project="Exports"] label', { hasText: 'Approved' }).locator('input').check();
   await page.fill('#workflow-interval', '10');

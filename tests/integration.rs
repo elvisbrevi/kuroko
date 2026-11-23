@@ -75,6 +75,8 @@ fn knowledge(dir: &tempfile::TempDir) -> KnowledgeMap {
         work_item_guides: Vec::new(),
         workflows: Vec::new(),
         workflow_blocks: Vec::new(),
+
+        workflow_leads: Vec::new(),
         workflow_settings: Default::default(),
         organization: Default::default(),
     }
@@ -1342,6 +1344,8 @@ async fn wiki_priority_current_request_mixed_citations_and_complete_gate_without
                     work_item_guides: Vec::new(),
                     workflows: Vec::new(),
                     workflow_blocks: Vec::new(),
+
+                    workflow_leads: Vec::new(),
                     workflow_settings: Default::default(),
                     organization: Default::default(),
                 },
@@ -1482,6 +1486,8 @@ async fn follow_up_without_subject_searches_the_previous_topic_and_keeps_it_for_
                 work_item_guides: Vec::new(),
                 workflows: Vec::new(),
                 workflow_blocks: Vec::new(),
+
+                workflow_leads: Vec::new(),
                 workflow_settings: Default::default(),
                 organization: Default::default(),
             },
@@ -1593,6 +1599,8 @@ async fn a_first_wiki_question_searches_its_topic_not_the_whole_request() {
             work_item_guides: Vec::new(),
             workflows: Vec::new(),
             workflow_blocks: Vec::new(),
+
+            workflow_leads: Vec::new(),
             workflow_settings: Default::default(),
             organization: Default::default(),
         },
@@ -1725,6 +1733,8 @@ async fn explicit_local_selection_still_requires_enabled_and_external_processing
                 work_item_guides: Vec::new(),
                 workflows: Vec::new(),
                 workflow_blocks: Vec::new(),
+
+                workflow_leads: Vec::new(),
                 workflow_settings: Default::default(),
                 organization: Default::default(),
             },
@@ -1774,6 +1784,8 @@ async fn implicit_documentation_does_not_bypass_teams_source_audiences() {
             work_item_guides: Vec::new(),
             workflows: Vec::new(),
             workflow_blocks: Vec::new(),
+
+            workflow_leads: Vec::new(),
             workflow_settings: Default::default(),
             organization: Default::default(),
         },
@@ -1915,6 +1927,8 @@ async fn teams_simulation_keeps_who_said_what_in_the_evidence_and_the_log() {
             work_item_guides: Vec::new(),
             workflows: Vec::new(),
             workflow_blocks: Vec::new(),
+
+            workflow_leads: Vec::new(),
             workflow_settings: Default::default(),
             organization: Default::default(),
         },

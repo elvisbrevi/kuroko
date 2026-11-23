@@ -13,6 +13,7 @@ import { markDirty, showTab } from './nav.js';
 import { providerNames, renderLive } from './home.js';
 import { effortNames, fillAgentChoices } from './settings-models.js';
 import { showAgentPrompt } from './guides.js';
+import { renderLeads } from './workflow-leads.js';
 
 /**
  * What the host last answered (`settings`, `defaults`, `bounds`, `editable`), and the form's copy
@@ -254,7 +255,10 @@ function renderWorkflowSettings({ director = true } = {}) {
     input.oninput = () => { form[field] = Number(input.value); edited(); };
   }
   renderWatcher(workflowSettings.watcher);
-  if (director) { renderDirector(editable); renderSupervisor(editable); }
+  if (director) {
+    renderDirector(editable); renderSupervisor(editable);
+    renderLeads($('#workflow-leads'), { editable, coordinator: machines.find(m => m.local)?.id ?? '' });
+  }
 }
 
 /** What the watcher on this computer is doing and its last poll since the host started. */

@@ -189,6 +189,10 @@ _Avoid_: workspace, folder (when the repository is meant)
 A saved recipe for implementing the items of one Azure DevOps project: the repositories it works on, the execution machine and the checkout of each repository there, the coding agent, its instructions and an ordered list of workflow blocks. It travels with the account and changes only on the coordinator. It grants nothing: every directory, repository, agent, chat and launcher is checked when it is saved and again when it is used. The one exception is its `allow`, which the user confirms when saving it: the fixed rules its own coding runs may break (work item writes, Teams messages, merging, publishing and deploying).
 _Avoid_: pipeline (Azure DevOps' own), automation, recipe (in user-facing text)
 
+**Workflow lead**:
+An agent the user names and assigns to one or more workflows, defined by its name, what the user wants from it and its Claude model and effort on the coordinator. It follows the runs of those workflows with their context (descriptions, completion criteria, instructions, blocks); for now in shadow, it reads and records and changes nothing. A workflow says when one of its runs is done in its completion criteria, which its lead reads. Distinct from the coordinator (the user's main installation), the director (chooses a workflow) and the runners (the planning and coding sessions it follows).
+_Avoid_: coordinator, orchestrator, supervisor
+
 **Workflow block**:
 A reusable part of a workflow: an instruction the agents read, a Teams notification posted to one chat at one stage, or an approved launcher of the coordinator run at one stage. A block that acts is authorized when it is saved (a notification with the user's confirmation of its chat and text, a launcher by the owner at the GUI), not when it runs; the engine then runs it once at each occurrence of its stage and records its outcome, and it never reaches a Teams channel.
 _Avoid_: step, plugin

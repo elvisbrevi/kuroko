@@ -802,20 +802,24 @@ pub(super) async fn update(
 
 /// Whose agent a settings update checks.
 #[derive(Clone, Copy)]
-enum Role {
+pub(super) enum Role {
     Director,
     Supervisor,
+    Lead,
 }
 
 /// The director's machine must be the account's, and its agent installed there; what the
 /// machine cannot answer now is a warning.
-async fn verify_director(host: &Arc<Host>, director: &Director) -> Result<Vec<String>, String> {
+pub(super) async fn verify_director(
+    host: &Arc<Host>,
+    director: &Director,
+) -> Result<Vec<String>, String> {
     verify_agent(host, director, Role::Director).await
 }
 
 /// An agent's machine must be the account's, and the agent installed there; what the machine
 /// cannot answer now is a warning.
-async fn verify_agent(
+pub(super) async fn verify_agent(
     host: &Arc<Host>,
     director: &Director,
     role: Role,
@@ -825,6 +829,11 @@ async fn verify_agent(
             "director",
             None,
             "The director's machine runs a version that cannot run the workflow director yet; update it before classifying.",
+        ),
+        Role::Lead => (
+            "lead",
+            None,
+            "This coordinator runs a version that cannot run workflow leads yet; update it.",
         ),
         Role::Supervisor => (
             "supervisor",

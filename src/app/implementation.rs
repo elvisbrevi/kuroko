@@ -800,6 +800,10 @@ pub(super) async fn machine_call(
     );
     fleet::call(host, machine, method, args).await
 }
+/// This installation's own machine ID.
+pub(super) async fn own_machine(host: &Host) -> String {
+    host.state.implementation.registry.lock().await.id.clone()
+}
 /// This installation's machine ID, and its allowed roots set as a test needs them.
 #[cfg(test)]
 pub(super) async fn test_machine(host: &Host, roots: Option<Vec<PathBuf>>) -> String {
