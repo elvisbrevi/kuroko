@@ -166,7 +166,7 @@ impl Shifts {
         Ok(self.find(Some(lead), None, true, 1)?.into_iter().next())
     }
     /// The shifts of one lead, or of every lead, newest first.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::app) fn list(&self, lead: Option<&str>, limit: i64) -> Result<Vec<Shift>> {
         self.find(lead, None, false, limit)
     }
