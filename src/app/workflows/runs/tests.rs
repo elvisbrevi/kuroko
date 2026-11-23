@@ -34,6 +34,19 @@ impl Shell for TestShell {
 /// (`block`), then reports `Review: WORD` (`review_word`, `resubmitted` by default).
 const CLI: &str = r#"#!/bin/sh
 LOG='{log}'
+# A workflow lead's turn (Claude, stream-JSON, no tools of its own): it calls the tool in
+# `lead_call` when there is one, and ends its turn.
+if printf '%s\n' "$@" | grep -qx -- '--strict-mcp-config'; then
+  printf '%s\n' "$@" > "$LOG/lead_args.$(wc -l < "$LOG/leads" 2>/dev/null | tr -d ' ')"
+  echo x >> "$LOG/leads"
+  read -r initialize
+  read -r user; printf '%s\n' "$user" >> "$LOG/lead_prompts"
+  printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"lead-initialize","response":{}}}'
+  printf '%s\n' '{"type":"system","subtype":"init","session_id":"ses_lead"}'
+  if [ -f "$LOG/lead_call" ]; then cat "$LOG/lead_call"; read -r reply; printf '%s\n' "$reply" >> "$LOG/lead_replies"; fi
+  printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Looked.","session_id":"ses_lead","usage":{"input_tokens":5}}'
+  exit 0
+fi
 prompt="$LOG/prompt.$$"
 cat > "$prompt"
 exit_at_start() {
@@ -2240,6 +2253,7 @@ mod acting;
 mod dependencies;
 mod findings;
 mod found;
+mod leads;
 mod limits;
 mod pause;
 mod review;

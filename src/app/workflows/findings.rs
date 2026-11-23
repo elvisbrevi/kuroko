@@ -54,7 +54,7 @@ impl Findings {
         Ok(Self(std::sync::Mutex::new(db)))
     }
     /// Keep a finding once per report (`implementation run:seq`).
-    fn insert(&self, finding: &Finding) -> Result<()> {
+    pub(in crate::app) fn insert(&self, finding: &Finding) -> Result<()> {
         self.0.lock().unwrap().execute(
             "INSERT OR IGNORE INTO workflow_findings (id,key,workflow_id,run_id,state,created_at,payload) VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![

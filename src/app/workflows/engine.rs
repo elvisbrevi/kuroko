@@ -44,6 +44,8 @@ pub(in crate::app) struct State {
     pub(in crate::app) supervision: super::supervisor::Supervision,
     /// What the runs' coding sessions found (`findings`).
     pub(in crate::app) findings: super::findings::Findings,
+    /// The workflow leads' shifts (`shifts`).
+    pub(in crate::app) shifts: super::shifts::Shifts,
     locks: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
     admission: Mutex<()>,
     /// One director classification at a time, apart from the `concurrency` slots.
@@ -64,6 +66,7 @@ impl State {
             watcher: super::watcher::Watcher::open(&root.join("workflows.db"))?,
             supervision: super::supervisor::Supervision::open(&root.join("workflows.db"))?,
             findings: super::findings::Findings::open(&root.join("workflows.db"))?,
+            shifts: super::shifts::Shifts::open(&root.join("workflows.db"))?,
             locks: std::sync::Mutex::new(HashMap::new()),
             admission: Mutex::new(()),
             classifying: Mutex::new(()),
@@ -72,6 +75,10 @@ impl State {
             settled: AtomicBool::new(false),
             inflight: std::sync::Mutex::new(std::collections::HashSet::new()),
         })
+    }
+    /// Held while something the updater waits for runs (a lead's turn).
+    pub(in crate::app) fn busy(&self) -> Advancing<'_> {
+        Advancing::new(&self.advancing)
     }
     /// The lock every change of one run holds: a step of the engine, a cancel, a resume.
     pub(in crate::app) fn lock(&self, id: &str) -> Arc<Mutex<()>> {
@@ -104,7 +111,7 @@ impl Drop for Inflight {
             .remove(&self.1);
     }
 }
-struct Advancing<'a>(&'a AtomicUsize);
+pub(in crate::app) struct Advancing<'a>(&'a AtomicUsize);
 impl<'a> Advancing<'a> {
     fn new(count: &'a AtomicUsize) -> Self {
         count.fetch_add(1, Ordering::SeqCst);
@@ -544,6 +551,8 @@ pub(in crate::app) async fn tick(
         futures_util::future::join_all(tasks),
     )
     .await;
+    // The leads see what changed; a turn that is due runs in its own task.
+    super::shifts::tick(host, now).await;
     Ok(())
 }
 

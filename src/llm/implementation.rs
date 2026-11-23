@@ -2,6 +2,7 @@
 use super::agent;
 mod codex;
 mod failure;
+pub(crate) mod lead;
 mod lines;
 pub(crate) mod mobile;
 pub(crate) mod name;

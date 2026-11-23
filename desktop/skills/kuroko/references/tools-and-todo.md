@@ -693,8 +693,13 @@ run (any state but `done` and `cancelled`).
   LEAD --confirmed` (refused while a workflow names it); MCP `workflow_leads_list`,
   `workflow_lead_show`, `workflow_lead_save`, `workflow_lead_remove` (confirmed). A workflow names
   its lead with `lead: {"id": ...}` and its completion criteria with `done_when`, saved with
-  `workflows save --confirmed` (the question names the lead). For now a lead follows nothing:
-  its shifts arrive in a later version.
+  `workflows save --confirmed` (the question names the lead). While its workflows have active
+  runs a lead has a shift: a Claude conversation on the coordinator woken by what changes (at
+  most every 5 minutes, 48 a day), whose decisions are only recorded for now (in shadow).
+  `kuroko workflows leads shifts` (MCP `workflow_lead_shifts`) lists the shifts briefly (state,
+  last look, decisions), `leads shifts LEAD` shows a lead's whole (turns, journal and record)
+  and `--run RUN` what its leads recorded about one run; `kuroko workflows leads wake LEAD` (MCP
+  `workflow_lead_wake`) asks it to look at its next tick. A lead turned off ends its shift.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may

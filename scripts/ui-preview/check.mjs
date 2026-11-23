@@ -2478,6 +2478,8 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   check(`workflow settings ${label}: each project says which director it gets and from where`,
     /Director: .+, de /.test(await page.locator('#workflow-ready-states [data-project="Payments"] .workflow-director-line').textContent() ?? ''));
   await page.waitForSelector('#workflow-leads [data-lead="pagos"]');
+  check(`workflow settings ${label}: a lead says it follows its runs, with its last look and decisions`,
+    /Siguiendo sus ejecuciones.*1 decisi/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
   check(`workflow settings ${label}: the workflow leads list each lead with its agent and workflows`,
     /Claude · claude-opus-5-5 · high/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()) && /payments-features/.test(await page.locator('#workflow-leads [data-lead="pagos"]').innerText()));
   check(`workflow settings ${label}: the category passes axe`, (await scan(page)).length === 0, JSON.stringify(await scan(page)));
@@ -2793,6 +2795,8 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForSelector('#runs-open-findings [data-finding="f1"]');
   await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
   await page.waitForSelector('#run-findings [data-finding="f1"]');
+  check(`runs ${label}: what the run's lead said shows in its detail, beside the run's state in words`,
+    /Seguir esperando/.test(await page.locator('#run-lead').innerText()) && /Requiere atención en Pull requests/.test(await page.locator('#run-lead').innerText()));
   check(`runs ${label}: a reported finding shows in the run's detail with its severity and evidence`,
     /Importante/.test(await page.locator('#run-findings').innerText()) && /Rounding\.cs:42/.test(await page.locator('#run-findings').innerText()));
   const findingScan = await scan(page);

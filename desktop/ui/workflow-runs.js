@@ -25,7 +25,7 @@ import { planChildrenReview } from './implementation.js';
 import { renderPauses } from './workflow-pause.js';
 import { ensureWorkflowSettings, workflowSettings } from './settings-workflows.js';
 import { act, proposal, renderAudit, supervision } from './workflow-supervisor.js';
-import { blocks, children, dependencies, findingsPanel, foundPanels, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
+import { blocks, children, dependencies, findingsPanel, foundPanels, leadPanel, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
 
 /** The states in which a run waits on the person (src/app/workflows/record.rs `waits_on_user`). */
 const WAITING = ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'];
@@ -252,6 +252,7 @@ async function loadRunDetail() {
   let sessions = [];
   try { sessions = (await invoke('implementation_sessions', { urls })).sessions ?? []; } catch { /* shown without sessions */ }
   try { run.findings = (await invoke('workflow_findings', { run: id })).findings ?? []; } catch { /* shown without findings */ }
+  try { run.lead = (await invoke('workflow_lead_shifts', { run: id })).shifts ?? []; } catch { /* shown without its lead */ }
   if (generation !== runsData.detailGeneration || runsData.open !== id) return;
   const detail = $('#run-detail-content');
   const typing = detail.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '');
@@ -310,7 +311,7 @@ function renderRunDetail(run, sessions) {
   const shared = { twice, when, hold: held => { runsData.holding = held; }, restart: proposed => showRestart(run, area, refresh, proposed) };
   detail.replaceChildren(head, facts, ...notes, runActions(run, sessionButton, area, refresh), supervision(run, area, refresh, shared),
     timeline(run), dependencies(run), children(run, sessionButton, sessions),
-    findingsPanel(run.findings ?? [], refresh, 'run-findings', tn((run.findings ?? []).length, 'Findings (1)', 'Findings ({n})')), rounds(run), blocks(run), summaries(run));
+    findingsPanel(run.findings ?? [], refresh, 'run-findings', tn((run.findings ?? []).length, 'Findings (1)', 'Findings ({n})')), leadPanel(run.lead ?? []), rounds(run), blocks(run), summaries(run));
   if (focusId) /** @type {HTMLElement | null} */ (document.getElementById(focusId))?.focus({ preventScroll: true });
 }
 
