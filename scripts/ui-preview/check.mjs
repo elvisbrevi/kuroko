@@ -3057,6 +3057,12 @@ for (const [label, options] of [['desktop', {}], ['phone', { context: { viewport
   await source.scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${out}/${label}-agent-sessions.png`, fullPage: false });
   await source.locator('input[type=number]').fill('20');
+  const excluded = source.getByLabel('Proyectos que nunca lee');
+  await excluded.fill('receipts, drafts');
+  await source.locator('button', { hasText: 'Ver lo que lee' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.session-preview .session-summary').length === 1);
+  check(`agent sessions ${label}: an excluded project is left out of the preview`, !(await source.locator('.session-preview').innerText()).includes('receipts'));
+  check(`agent sessions ${label}: the card says which projects it never reads`, (await source.locator('.resource-facts').innerText()).includes('nunca receipts, drafts'));
   await page.evaluate(() => { showTab('settings'); selectTab($('#settings-tabs'), 'general'); });
   check(`agent sessions ${label}: the thread context defaults to 10`, await page.inputValue('#history-messages') === '10');
   await page.fill('#history-messages', '15');
@@ -3065,6 +3071,8 @@ for (const [label, options] of [['desktop', {}], ['phone', { context: { viewport
   const added = saved?.map.resources.find(r => r.tool?.type === 'agent_sessions');
   check(`agent sessions ${label}: it is saved disabled, without audiences or external processing`, added && !added.enabled && !added.external_processing
     && !added.allowed_conversations.length && !added.allowed_senders.length && added.tool.sessions === 20, JSON.stringify(added));
+  check(`agent sessions ${label}: the filters are saved, and an empty one is left out`, JSON.stringify(added?.tool.exclude_projects) === '["receipts","drafts"]'
+    && !('only_projects' in (added?.tool ?? {})), JSON.stringify(added?.tool));
   check(`agent sessions ${label}: the thread context setting is saved`, saved?.config.policy.history_messages === 15);
   check(`agent sessions ${label}: no client errors`, errors.length === 0, errors.join('; '));
   await context.close();

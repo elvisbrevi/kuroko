@@ -10,12 +10,12 @@ use personal_teams_assistant::{
         MessageAdapter,
         teams::{ConversationKind, HistoryMessage, IncomingMessage},
     },
-    knowledge::{Access, KnowledgeMap, Resource},
+    knowledge::{Access, KnowledgeMap, Person, Resource},
     llm::{GeneratedAnswer, GenerationInput, LlmProvider},
     pipeline::Pipeline,
     questions::Question,
     security::Redactor,
-    sessions::{Listing, Reader, Roots, Unavailable},
+    sessions::{Filter, Listing, Reader, Roots, Unavailable},
     tools::{ReadOnlyTool, ToolSpec},
 };
 use serde_json::json;
@@ -43,7 +43,7 @@ fn machines() -> &'static SyntheticMachines {
         let asked = format!(
             "Check the connection to the payments database from the QA server.\nIts string is {CONNECTION}\nThe token is {TOKEN}\n{key}"
         );
-        let answer = "The QA server reaches the payments database host, but the connection times out on port 1433 at the firewall. I asked networking to open it and am waiting for their change.";
+        let answer = "The QA server reaches the payments database host, but the connection times out on port 1433 at the firewall. I asked networking to open it and am waiting for their change.\nLuis Rojas from networking said the rule is queued.";
         let path = dir
             .path()
             .join("claude/projects/-home-user-src-payments/c1.jsonl");
@@ -75,16 +75,18 @@ fn machines() -> &'static SyntheticMachines {
 struct FakeFleet;
 #[async_trait]
 impl Reader for FakeFleet {
-    async fn recent(&self, limit: usize) -> Result<Listing> {
+    async fn recent(&self, limit: usize, filter: &Filter) -> Result<Listing> {
         let root = machines().0.path();
         let mut listing = personal_teams_assistant::sessions::local(
             &Roots {
+                home: Some("/home/user".into()),
                 claude: Some(root.join("claude")),
                 codex: Some(root.join("codex")),
                 opencode: None,
             },
             limit,
             "laptop",
+            filter,
         );
         listing.unavailable.push(Unavailable {
             machine: "desk".into(),
@@ -155,6 +157,8 @@ impl MessageAdapter for Thread {
 struct Model {
     selections: Mutex<Vec<(String, BTreeMap<String, String>)>>,
     generated: Mutex<Vec<(String, bool, String)>>,
+    /// The answer it writes instead of the usual one.
+    answer: Option<String>,
 }
 #[async_trait]
 impl LlmProvider for Model {
@@ -199,7 +203,7 @@ impl LlmProvider for Model {
             input.history.into(),
         ));
         Ok(GeneratedAnswer {
-            answer: "Ya lo estoy revisando en una sesión de trabajo: hasta ahora el servidor de QA llega a la base de pagos, pero la conexión se corta en el firewall y estoy esperando que redes abra el puerto.".into(),
+            answer: self.answer.clone().unwrap_or_else(|| "Ya lo estoy revisando en una sesión de trabajo: hasta ahora el servidor de QA llega a la base de pagos, pero la conexión se corta en el firewall y estoy esperando que redes abra el puerto.".into()),
             detailed: false,
             used_sources: vec![],
             provider: Some("fake:model:default".into()),
@@ -216,6 +220,9 @@ impl ReadOnlyTool for NoTools {
 }
 
 fn map(enabled: bool, senders: Vec<String>) -> KnowledgeMap {
+    filtered_map(enabled, senders, vec![])
+}
+fn filtered_map(enabled: bool, senders: Vec<String>, exclude: Vec<String>) -> KnowledgeMap {
     let mut map = KnowledgeMap::parse("").unwrap();
     map.resources = vec![
         Resource {
@@ -239,10 +246,22 @@ fn map(enabled: bool, senders: Vec<String>) -> KnowledgeMap {
             allowed_conversations: vec!["chats/chat1".into()],
             allowed_senders: senders,
             access: Access::Tool {
-                tool: ToolSpec::AgentSessions { sessions: 10 },
+                tool: ToolSpec::AgentSessions {
+                    sessions: 10,
+                    exclude_projects: exclude,
+                    only_projects: vec![],
+                },
             },
         },
     ];
+    map.people = vec![Person {
+        id: "luis".into(),
+        name: "Luis Rojas".into(),
+        senders: vec![],
+        aliases: vec![],
+        address: String::new(),
+        notes: String::new(),
+    }];
     map.questions = Some(vec![Question {
         id: "support-hours".into(),
         text: "When is support open?".into(),
@@ -259,6 +278,14 @@ struct Run {
     _dir: tempfile::TempDir,
 }
 async fn run(knowledge: KnowledgeMap, history_messages: Option<usize>, sender: &str) -> Run {
+    run_answering(knowledge, history_messages, sender, None).await
+}
+async fn run_answering(
+    knowledge: KnowledgeMap,
+    history_messages: Option<usize>,
+    sender: &str,
+    answer: Option<&str>,
+) -> Run {
     machines();
     let dir = tempfile::tempdir().unwrap();
     let store = support::store(&dir);
@@ -274,7 +301,10 @@ async fn run(knowledge: KnowledgeMap, history_messages: Option<usize>, sender: &
         asked_limit: Mutex::default(),
         sent: Mutex::default(),
     });
-    let model = Arc::new(Model::default());
+    let model = Arc::new(Model {
+        answer: answer.map(str::to_owned),
+        ..Default::default()
+    });
     let pipeline = Pipeline {
         config: Arc::new(config),
         store: store.clone(),
@@ -407,4 +437,61 @@ async fn the_thread_context_setting_reads_that_many_earlier_messages() {
     let selections = run.model.selections.lock().unwrap();
     assert_eq!(selections[0].0.lines().count(), 26);
     assert!(selections[0].0.contains("Mensaje 5 "));
+}
+
+#[tokio::test]
+async fn people_are_named_neither_to_the_model_nor_in_the_answer() {
+    let run = run(map(true, vec![]), None, "colleague").await;
+    assert_eq!(run.audit.reason, "agent_session_answer");
+    {
+        let selections = run.model.selections.lock().unwrap();
+        let generated = run.model.generated.lock().unwrap();
+        // A person the user keeps is «someone» in what the model reads.
+        for text in [
+            serde_json::to_string(&selections[0].1).unwrap(),
+            generated[0].0.clone(),
+        ] {
+            assert!(!text.contains("Luis") && !text.contains("Rojas"), "{text}");
+            assert!(text.contains("someone from networking"), "{text}");
+        }
+    }
+    // An answer that names them anyway, or a work item, is withheld and never sent; one that
+    // addresses the sender is not.
+    for (answer, withheld) in [
+        (
+            "Ya lo estoy revisando; Luis está esperando el cambio del firewall.",
+            true,
+        ),
+        ("Ya lo estoy revisando; la tarea 4521 sigue abierta.", true),
+        (
+            "Hola Ana, ya lo estoy revisando: falta que se abra el puerto.",
+            false,
+        ),
+    ] {
+        let run = run_answering(map(true, vec![]), None, "colleague", Some(answer)).await;
+        if withheld {
+            assert_eq!(run.audit.reason, "session_answer_names_people", "{answer}");
+            assert!(run.thread.sent.lock().unwrap().is_empty(), "{answer}");
+        } else {
+            assert_eq!(run.audit.reason, "agent_session_answer", "{answer}");
+            assert_eq!(run.thread.sent.lock().unwrap().len(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_excluded_project_is_never_offered_nor_answered_from() {
+    let run = run(
+        filtered_map(true, vec![], vec!["payments".into()]),
+        None,
+        "colleague",
+    )
+    .await;
+    assert_eq!(run.audit.reason, "no_matching_question");
+    let selections = run.model.selections.lock().unwrap();
+    let offered = serde_json::to_string(&selections[0].1).unwrap();
+    assert!(!offered.contains("payments"), "{offered}");
+    assert!(offered.contains("billing"));
+    assert!(run.model.generated.lock().unwrap().is_empty());
+    assert!(run.thread.sent.lock().unwrap().is_empty());
 }

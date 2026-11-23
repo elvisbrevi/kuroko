@@ -87,6 +87,10 @@ struct Machine {
     /// Whether its last poll said it summarizes its agent sessions (`agent_sessions_local`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     agent_sessions: bool,
+    /// Whether its last poll said it applies a source's project filter to its agent sessions
+    /// (`agent_session_filters_support`); an older one is never asked with a filter.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    session_filters: bool,
     /// Whether its last poll said a director's call may carry the item for the session's name
     /// (`session_names_support`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1928,7 +1932,12 @@ pub(in crate::app) async fn run_session_summaries(
     }
     let listing = tokio::time::timeout(
         Duration::from_secs(crate::sessions::READ_SECONDS),
-        sessions::gather(host, crate::sessions::MAX_LIMIT),
+        sessions::gather_reading(
+            host,
+            crate::sessions::MAX_LIMIT,
+            &crate::sessions::Filter::default(),
+            true,
+        ),
     )
     .await
     .map_err(|_| anyhow::anyhow!("The agent sessions did not answer in time."))??;

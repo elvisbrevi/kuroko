@@ -73,7 +73,9 @@ function accessText(resource) {
   if (tool.repository) return `${t('Catalog')}: ${tool.repository} / ${tool.path}`;
   if (tool.catalog?.length) return `${t('Catalog')}: ${catalogText(tool.catalog)}`;
   if (tool.type === 'activity_record') return t('Daily task record, read on this device');
-  if (tool.type === 'agent_sessions') return tn(tool.sessions ?? 10, 'The most recent session of your coding agents, on every machine of your account', 'The {n} most recent sessions of your coding agents, on every machine of your account');
+  if (tool.type === 'agent_sessions') return [tn(tool.sessions ?? 10, 'The most recent session of your coding agents, on every machine of your account', 'The {n} most recent sessions of your coding agents, on every machine of your account'),
+    tool.only_projects?.length ? t('only {projects}', { projects: tool.only_projects.join(', ') }) : '',
+    tool.exclude_projects?.length ? t('never {projects}', { projects: tool.exclude_projects.join(', ') }) : ''].filter(Boolean).join(' · ');
   if (tool.url) return tool.url;
   if (tool.operation) return `${t('Fixed query')}: ${tool.operation}`;
   if (tool.type === 'teams_messages') return t('Your own messages, read with the connected Microsoft account');
@@ -161,11 +163,26 @@ function renderResources() {
         const n = Number(count.value);
         if (Number.isInteger(n) && n >= 1 && n <= 50) { resource.tool.sessions = n; renderFacts(); markDirty({ target: count }); }
       };
+      // The project filters, applied on each machine before a summary leaves it; empty lists are not saved.
+      const projects = (key, label, hint, placeholder) => {
+        const element = el('input', { value: (resource.tool[key] ?? []).join(', '), placeholder, spellcheck: false, autocapitalize: 'off' });
+        element.oninput = () => {
+          const list = names(element.value);
+          if (list.length) resource.tool[key] = list; else delete resource.tool[key];
+          renderFacts(); markDirty({ target: element });
+        };
+        return el('label', {}, label, el('small', { textContent: hint }), element);
+      };
       const shown = el('div', { class: 'list session-preview', 'aria-live': 'polite' });
       const preview = el('button', { type: 'button', class: 'secondary small', textContent: t('Show what it reads') });
-      preview.onclick = () => busy(preview, async () => renderSessionPreview(shown, await invoke('implementation_recent_sessions', { limit: resource.tool.sessions ?? 10 })));
+      preview.onclick = () => busy(preview, async () => renderSessionPreview(shown, await invoke('implementation_recent_sessions', {
+        limit: resource.tool.sessions ?? 10, exclude_projects: resource.tool.exclude_projects ?? [], only_projects: resource.tool.only_projects ?? [] })));
       edit.querySelector('.actions').prepend(preview);
       edit.insertBefore(el('label', {}, t('Sessions to read'), el('small', { textContent: t('Newest first across Claude Code, Codex and OpenCode, at most 50. A session whose requests contain #private is never read.') }), count), edit.lastElementChild);
+      edit.insertBefore(projects('exclude_projects', t('Projects it never reads'),
+        t('Comma separated. A project is its Git repository (a worktree counts as its repository) or a folder under your home: drafts leaves out everything under it. When this source reads, their sessions never leave their machine.'),
+        t('hobby-game, journal, drafts')), edit.lastElementChild);
+      edit.insertBefore(projects('only_projects', t('Only these projects'), t('Comma separated; empty reads every project not left out.'), t('kuroko, payments')), edit.lastElementChild);
       edit.append(shown);
     }
     if (resource.kind === 'urls' || Array.isArray(resource.tool?.page_urls)) {

@@ -1,11 +1,13 @@
 //! The account's recent coding-agent sessions, for the agent sessions source
-//! (`crate::sessions`). Each machine summarizes its own; the coordinator asks every online
-//! machine of the account through the machine channel and adds the sessions PTA started, with
-//! their work items; another installation asks the coordinator. A machine that is offline, too
-//! old or does not answer is reported unavailable, never as having no sessions.
+//! (`crate::sessions`). Each machine summarizes its own, leaving out the projects the source's
+//! filter excludes; the coordinator asks every online machine of the account through the
+//! machine channel and adds the sessions PTA started, with their work items; another
+//! installation asks the coordinator. A machine that is offline, too old or does not answer is
+//! reported unavailable, never as having no sessions; with a filter, a machine too old to apply
+//! it is never asked.
 
 use super::*;
-use crate::sessions::{Listing, Started, Unavailable};
+use crate::sessions::{Filter, Listing, Started, Unavailable};
 
 /// The reader the message pipeline uses, installed when the host starts.
 pub(in crate::app) struct FleetReader(std::sync::Weak<Host>);
@@ -16,15 +18,37 @@ impl FleetReader {
 }
 #[async_trait::async_trait]
 impl crate::sessions::Reader for FleetReader {
-    async fn recent(&self, limit: usize) -> Result<Listing> {
+    async fn recent(&self, limit: usize, filter: &Filter) -> Result<Listing> {
         let host = self.0.upgrade().context("The host stopped.")?;
-        recent(&host, limit).await
+        recent(&host, limit, filter.clone()).await
     }
 }
 
-/// `implementation_recent_sessions`: what an agent sessions source would read now.
+/// `implementation_recent_sessions`: what an agent sessions source would read now. `source`
+/// names one, whose count and project filter it uses; otherwise `limit`, `exclude_projects` and
+/// `only_projects` say them.
 pub(super) async fn operate(host: &Arc<Host>, args: &Value) -> Result<Value> {
-    Ok(serde_json::to_value(recent(host, limit(args)?).await?)?)
+    let (limit, filter) = match args["source"].as_str() {
+        Some(id) => {
+            let map = host.state.settings.map()?;
+            let tool = map
+                .resources
+                .iter()
+                .find(|r| r.id == id)
+                .and_then(|r| match &r.access {
+                    crate::knowledge::Access::Tool {
+                        tool: tool @ crate::tools::ToolSpec::AgentSessions { sessions, .. },
+                    } => Some((*sessions, tool.session_filter().unwrap_or_default())),
+                    _ => None,
+                });
+            tool.context("No agent sessions source has that ID.")?
+        }
+        None => (limit(args)?, filter(args)?),
+    };
+    let listing = recent(host, limit, filter.clone())
+        .await?
+        .admitted(&filter)?;
+    Ok(serde_json::to_value(listing)?)
 }
 fn limit(args: &Value) -> Result<usize> {
     match &args["limit"] {
@@ -38,28 +62,47 @@ fn limit(args: &Value) -> Result<usize> {
         }
     }
 }
+/// The project filter a call carries; none from a caller that predates filters.
+fn filter(args: &Value) -> Result<Filter> {
+    let list = |key: &str| -> Result<Vec<String>> {
+        match &args[key] {
+            Value::Null => Ok(Vec::new()),
+            value => serde_json::from_value(value.clone())
+                .with_context(|| format!("{key} is a list of project names.")),
+        }
+    };
+    let filter = Filter {
+        exclude_projects: list("exclude_projects")?,
+        only_projects: list("only_projects")?,
+    };
+    filter.validate()?;
+    Ok(filter)
+}
 
 /// Boxed with its `Send` bound written out: a machine call can reach this operation again
 /// through the host's dispatch, and the compiler cannot infer the bound through that cycle.
 pub(in crate::app) fn recent(
     host: &Arc<Host>,
     limit: usize,
+    filter: Filter,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Listing>> + Send + '_>> {
-    Box::pin(async move { recent_now(host, limit).await })
+    Box::pin(async move { recent_now(host, limit, &filter).await })
 }
-async fn recent_now(host: &Arc<Host>, limit: usize) -> Result<Listing> {
+async fn recent_now(host: &Arc<Host>, limit: usize, filter: &Filter) -> Result<Listing> {
     if let Some(connection) = host.state.implementation.connection()? {
-        // Another installation of the account: the coordinator gathers every machine's.
+        // Another installation of the account: the coordinator gathers every machine's. One
+        // that predates filters would not apply it, and its answer is not used.
         let asked = fleet::remote(
             &connection,
-            json!({"action":"call","method":"implementation_recent_sessions","args":{"limit":limit}}),
+            json!({"action":"call","method":"implementation_recent_sessions","args":{"limit":limit,"exclude_projects":filter.exclude_projects,"only_projects":filter.only_projects}}),
         )
         .await
-        .and_then(|value| Ok(serde_json::from_value::<Listing>(value)?));
+        .and_then(|value| Ok(serde_json::from_value::<Listing>(value)?))
+        .and_then(|listing| listing.admitted(filter));
         return Ok(match asked {
             Ok(listing) => listing,
             Err(_) => {
-                let mut listing = own(host, limit).await?;
+                let mut listing = own(host, limit, filter, false).await?;
                 listing.unavailable.push(Unavailable {
                     machine: "coordinator".into(),
                     provider: String::new(),
@@ -69,12 +112,22 @@ async fn recent_now(host: &Arc<Host>, limit: usize) -> Result<Listing> {
             }
         });
     }
-    gather(host, limit).await
+    gather(host, limit, filter).await
 }
 
 /// On the coordinator: its own sessions and every online machine's, named with the runs PTA
 /// recorded for them.
-pub(super) async fn gather(host: &Arc<Host>, limit: usize) -> Result<Listing> {
+pub(super) async fn gather(host: &Arc<Host>, limit: usize, filter: &Filter) -> Result<Listing> {
+    gather_reading(host, limit, filter, false).await
+}
+/// `gather`, keeping on every machine the lines that name work items or who did something when
+/// `keep_references`: the workflow supervisor reads its runs' sessions so, never the source.
+pub(super) async fn gather_reading(
+    host: &Arc<Host>,
+    limit: usize,
+    filter: &Filter,
+    keep_references: bool,
+) -> Result<Listing> {
     let version = management::version(host)?;
     let (own_name, machines) = {
         let data = host.state.implementation.registry.lock().await;
@@ -85,7 +138,9 @@ pub(super) async fn gather(host: &Arc<Host>, limit: usize) -> Result<Listing> {
             .map(|m| {
                 let gap = if !m.online() || m.account_version != version {
                     Some("offline")
-                } else if !m.agent_sessions {
+                } else if !m.agent_sessions || (!filter.is_empty() && !m.session_filters) {
+                    // A machine that cannot apply the filter is never asked: what it would
+                    // leave out must not leave it.
                     Some("outdated")
                 } else {
                     None
@@ -95,7 +150,7 @@ pub(super) async fn gather(host: &Arc<Host>, limit: usize) -> Result<Listing> {
             .collect();
         (data.settings.name.clone(), machines)
     };
-    let mut parts = vec![own(host, limit).await?];
+    let mut parts = vec![own(host, limit, filter, keep_references).await?];
     let mut unavailable = Vec::new();
     let mut asks = tokio::task::JoinSet::new();
     let mut asked_of = std::collections::HashMap::new();
@@ -109,20 +164,28 @@ pub(super) async fn gather(host: &Arc<Host>, limit: usize) -> Result<Listing> {
             continue;
         }
         let host = host.clone();
+        let mut args = json!({"limit":limit});
+        if !filter.is_empty() {
+            args["exclude_projects"] = json!(filter.exclude_projects);
+            args["only_projects"] = json!(filter.only_projects);
+        }
+        if keep_references {
+            args["keep_references"] = json!(true);
+        }
         let task = asks.spawn(async move {
             // Bounded inside the call, so a machine that does not answer leaves nothing pending.
             fleet::call_within(
                 &host,
                 &id,
                 "agent_sessions_local",
-                json!({"limit":limit}),
+                args,
                 Duration::from_secs(crate::sessions::READ_SECONDS - 5),
             )
             .await
         });
         asked_of.insert(task.id(), name);
     }
-    let (answered, silent) = answers(asks, asked_of).await;
+    let (answered, silent) = answers(asks, asked_of, filter).await;
     parts.extend(answered);
     unavailable.extend(silent);
     let (runs, gap) = runs_or_gap(
@@ -130,13 +193,17 @@ pub(super) async fn gather(host: &Arc<Host>, limit: usize) -> Result<Listing> {
         own_name,
     );
     unavailable.extend(gap);
-    Ok(combine(parts, unavailable, &runs, limit))
+    let mut listing = combine(parts, unavailable, &runs, limit);
+    listing.filtered = !filter.is_empty();
+    Ok(listing)
 }
 /// The machines' answers, each named by the coordinator; a machine whose answer failed, was
-/// not a listing or whose task ended abnormally is `no_answer`, never left out.
+/// not a listing, did not apply the filter or whose task ended abnormally is `no_answer`, never
+/// left out.
 async fn answers(
     mut asks: tokio::task::JoinSet<Result<Value>>,
     mut asked_of: std::collections::HashMap<tokio::task::Id, String>,
+    filter: &Filter,
 ) -> (Vec<Listing>, Vec<Unavailable>) {
     let (mut parts, mut unavailable) = (Vec::new(), Vec::new());
     while let Some(joined) = asks.join_next_with_id().await {
@@ -145,7 +212,10 @@ async fn answers(
             Err(error) => (error.id(), None),
         };
         let name = asked_of.remove(&task).unwrap_or_default();
-        match answer.and_then(|v| serde_json::from_value::<Listing>(v).ok()) {
+        match answer
+            .and_then(|v| serde_json::from_value::<Listing>(v).ok())
+            .and_then(|listing| listing.admitted(filter).ok())
+        {
             Some(mut listing) => {
                 // The coordinator's name for the machine, whatever it calls itself.
                 for session in &mut listing.sessions {
@@ -212,10 +282,19 @@ fn combine(
 
 /// This computer's own sessions, when the person this host acts for owns the computer: a
 /// shared account on another person's server never reads that person's agents.
-pub(super) async fn own(host: &Arc<Host>, limit: usize) -> Result<Listing> {
+pub(super) async fn own(
+    host: &Arc<Host>,
+    limit: usize,
+    filter: &Filter,
+    keep_references: bool,
+) -> Result<Listing> {
     if !authority::invocation(&host.state)?.scope.owner {
-        return Ok(Listing::default());
+        return Ok(Listing {
+            filtered: !filter.is_empty(),
+            ..Default::default()
+        });
     }
+    let filter = filter.clone();
     let name = host
         .state
         .implementation
@@ -226,13 +305,27 @@ pub(super) async fn own(host: &Arc<Host>, limit: usize) -> Result<Listing> {
         .name
         .clone();
     Ok(tokio::task::spawn_blocking(move || {
-        crate::sessions::local(&crate::sessions::Roots::from_env(), limit, &name)
+        crate::sessions::local_reading(
+            &crate::sessions::Roots::from_env(),
+            limit,
+            &name,
+            &filter,
+            keep_references,
+        )
     })
     .await?)
 }
-/// `agent_sessions_local`, which the coordinator asks of a machine.
+/// `agent_sessions_local`, which the coordinator asks of a machine, with the source's filter.
 pub(super) async fn local(host: &Arc<Host>, args: &Value) -> Result<Value> {
-    Ok(serde_json::to_value(own(host, limit(args)?).await?)?)
+    Ok(serde_json::to_value(
+        own(
+            host,
+            limit(args)?,
+            &filter(args)?,
+            args["keep_references"] == true,
+        )
+        .await?,
+    )?)
 }
 
 #[cfg(test)]
@@ -270,7 +363,7 @@ mod tests {
         let listing = combine(
             vec![Listing {
                 sessions: vec![summary("codex-native", "2026-11-12T10:00:00Z")],
-                unavailable: vec![],
+                ..Default::default()
             }],
             vec![offline.clone()],
             &[run("codex-native"), run("private-run")],
@@ -299,7 +392,7 @@ mod tests {
         asked_of.insert(failed.id(), "desk".to_string());
         let panicked = asks.spawn(async { panic!("synthetic panic") });
         asked_of.insert(panicked.id(), "build".to_string());
-        let (parts, mut gaps) = answers(asks, asked_of).await;
+        let (parts, mut gaps) = answers(asks, asked_of, &Filter::default()).await;
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].sessions[0].machine, "laptop");
         gaps.sort_by(|a, b| a.machine.cmp(&b.machine));
@@ -331,6 +424,7 @@ mod tests {
             machine.account_version = version;
             machine.seen = now();
             machine.agent_sessions = true;
+            machine.session_filters = true;
         }
         let pending = || async { host.state.implementation.calls.lock().await.len() };
         // A bounded wait that ends without an answer removes its call.

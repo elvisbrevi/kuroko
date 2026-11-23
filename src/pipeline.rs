@@ -26,6 +26,21 @@ pub const HISTORY_MESSAGES: usize = crate::config::DEFAULT_HISTORY_MESSAGES;
 const HISTORY_CHARS: usize = 6000;
 
 /// Model calls have no deadline; this tracks when to tell the sender the answer is coming.
+/// The names an answer from agent sessions must not carry (`Pipeline::session_names`).
+#[derive(Clone)]
+struct SessionNames {
+    /// Taken out of the summaries before a model reads them.
+    strip: crate::sessions::Names,
+    /// Withhold an answer that carries one: `strip` without the sender's.
+    check: crate::sessions::Names,
+}
+/// What the agent sessions gave a message no configured question matched.
+enum SessionsAnswer {
+    None,
+    Answer(String),
+    /// Written but withheld by the checks; the message is recorded.
+    Withheld,
+}
 struct Holding {
     enabled: bool,
     sent: bool,
@@ -360,6 +375,8 @@ impl Pipeline {
                 .available(&message.conversation, &message.sender)
         };
         let mut history: Option<String> = None;
+        // Who an answer drawn from agent sessions must not name, read once when needed.
+        let mut session_names: Option<SessionNames> = None;
         // An answer that says the user is already on it, from their working sessions.
         let mut sessions_answer: Option<String> = None;
         audit.available_sources = available.iter().map(|r| r.id.clone()).collect();
@@ -397,7 +414,7 @@ impl Pipeline {
         } else if self.knowledge.questions.is_some() && !drafting {
             // No question covers it; the user's working sessions may already be on it.
             let context = self.history(&message, &mut audit, &mut history).await;
-            sessions_answer = self
+            sessions_answer = match self
                 .answer_from_sessions(
                     resource,
                     &message,
@@ -407,8 +424,14 @@ impl Pipeline {
                     own_chat,
                     &mut audit,
                     &mut holding,
+                    &mut session_names,
                 )
-                .await?;
+                .await?
+            {
+                SessionsAnswer::Answer(answer) => Some(answer),
+                SessionsAnswer::Withheld => return Ok(()),
+                SessionsAnswer::None => None,
+            };
             if sessions_answer.is_none() {
                 audit.reason = "no_matching_question".into();
                 audit.step(
@@ -1237,6 +1260,19 @@ impl Pipeline {
                         }
                         _ => self.knowledge.retrieve(source, &question, total).await?,
                     };
+                    // Agent sessions reach the model without the names of people.
+                    let raw = match &source.access {
+                        Access::Tool {
+                            tool: crate::tools::ToolSpec::AgentSessions { .. },
+                        } => match self
+                            .session_names(&message, &history, &mut session_names)
+                            .await
+                        {
+                            Some(names) => names.strip.strip(&raw),
+                            None => "The agent sessions could not be used: the conversation's members could not be read.".into(),
+                        },
+                        _ => raw,
+                    };
                     let read = match &source.access {
                         Access::Tool {
                             tool: crate::tools::ToolSpec::AzureDevopsWiki { .. },
@@ -1617,6 +1653,20 @@ impl Pipeline {
                 }
             }
             audit.used_sources = used_sources.clone();
+            // Whenever sessions were read into the evidence, whatever the model says it used.
+            if let Some(names) = &session_names
+                && let Some(refusal) = Self::session_answer_refusal(&generated.answer, names)
+            {
+                audit.step("agent sessions", format!("the answer {refusal}"));
+                return self
+                    .withhold(
+                        resource,
+                        &message,
+                        &mut audit,
+                        "session_answer_names_people".into(),
+                    )
+                    .await;
+            }
             let answer = if !registry.references.is_empty() {
                 match crate::evidence::complete_answer(
                     &generated.answer,
@@ -2320,15 +2370,73 @@ impl Pipeline {
         audit.tools.push("read_recorded_activities".into());
         Some(evidence)
     }
-    /// Await a model call without a deadline. If it is still running when the holding
-    /// deadline passes, send the deterministic notice once; the intent is recorded first so
-    /// a retried job never sends it again, and a failed send is never retried.
+    /// The names an answer drawn from agent sessions must not carry: those of the people the
+    /// user keeps (and their aliases), the conversation's other members and the authors of its
+    /// earlier messages. `check` leaves out the sender, whom the answer may address. None
+    /// when the conversation's members cannot be read: then nothing is drawn from sessions.
+    async fn session_names(
+        &self,
+        message: &crate::adapters::teams::IncomingMessage,
+        history: &str,
+        cached: &mut Option<SessionNames>,
+    ) -> Option<SessionNames> {
+        if let Some(names) = cached {
+            return Some(names.clone());
+        }
+        let members = match self.adapter.members(message).await {
+            Ok(members) => members,
+            Err(_) => {
+                tracing::warn!(event = "conversation_members_unavailable");
+                return None;
+            }
+        };
+        let authors = history_authors(history);
+        let mut all: Vec<&str> = Vec::new();
+        for person in &self.knowledge.people {
+            all.push(&person.name);
+            all.extend(person.aliases.iter().map(String::as_str));
+        }
+        all.extend(members.iter().map(String::as_str));
+        all.extend(authors.iter().map(String::as_str));
+        all.push(&message.sender_name);
+        let strip = crate::sessions::Names::new(all);
+        let mut sender = vec![message.sender_name.as_str()];
+        if let Some(person) = self
+            .knowledge
+            .person_for(&message.sender, &message.sender_name)
+        {
+            sender.push(&person.name);
+            sender.extend(person.aliases.iter().map(String::as_str));
+        }
+        let names = SessionNames {
+            check: strip.clone().without(sender),
+            strip,
+        };
+        *cached = Some(names.clone());
+        Some(names)
+    }
+    /// Why an answer drawn from agent sessions may not be sent: it names someone of `names`
+    /// or a work item, pull request or commit by its number or link. Checked by code, whatever
+    /// the prompts say.
+    fn session_answer_refusal(answer: &str, names: &SessionNames) -> Option<String> {
+        let named = names.check.found(answer);
+        if !named.is_empty() {
+            return Some(format!("names {} people", named.len()));
+        }
+        let scrubber = crate::sessions::Scrubber::shared();
+        answer
+            .lines()
+            .any(|line| scrubber.names_work(line))
+            .then(|| "names a work item, pull request or commit".into())
+    }
     /// The answer that says the user is already on it, when no configured question matches
     /// and an agent sessions source is authorized for this conversation and sender: a model
     /// picks, among the closed keys of the recent sessions, those about what the message asks
     /// or refers to (with the chat's earlier messages), and the answer is written from them
-    /// alone. `None` leaves the message as it was: no such source, no session read, or none
-    /// about it. The tail of `run` checks and sends it like any other answer.
+    /// alone. The summaries reach a model without the names of the people of `session_names`,
+    /// and an answer that still names one, or a work item, is withheld. `None` leaves the
+    /// message as it was: no such source, no session read, or none about it. The tail of `run`
+    /// checks and sends an answer like any other.
     #[allow(clippy::too_many_arguments)]
     async fn answer_from_sessions(
         &self,
@@ -2340,27 +2448,32 @@ impl Pipeline {
         own_chat: bool,
         audit: &mut Audit,
         holding: &mut Holding,
-    ) -> Result<Option<String>> {
-        let Some((source, limit)) = available.iter().find_map(|r| match &r.access {
+        names: &mut Option<SessionNames>,
+    ) -> Result<SessionsAnswer> {
+        let Some((source, limit, filter)) = available.iter().find_map(|r| match &r.access {
             Access::Tool {
-                tool: crate::tools::ToolSpec::AgentSessions { sessions },
-            } => Some((*r, *sessions)),
+                tool: tool @ crate::tools::ToolSpec::AgentSessions { sessions, .. },
+            } => Some((*r, *sessions, tool.session_filter().unwrap_or_default())),
             _ => None,
         }) else {
-            return Ok(None);
+            return Ok(SessionsAnswer::None);
         };
         audit.tools.push("read_agent_sessions".into());
         let listing = match tokio::time::timeout(
             std::time::Duration::from_secs(crate::sessions::READ_SECONDS),
-            crate::sessions::reader().recent(limit),
+            crate::sessions::reader().recent(limit, &filter),
         )
         .await
         {
-            Ok(Ok(listing)) => listing,
-            _ => {
+            Ok(Ok(listing)) => listing.admitted(&filter),
+            _ => Err(anyhow::anyhow!("unreadable")),
+        };
+        let listing = match listing {
+            Ok(listing) => listing,
+            Err(_) => {
                 tracing::warn!(event = "agent_sessions_unavailable");
                 audit.step("agent sessions", format!("{}: unreadable", source.id));
-                return Ok(None);
+                return Ok(SessionsAnswer::None);
             }
         };
         audit.step(
@@ -2379,10 +2492,22 @@ impl Pipeline {
                 .map(|gap| crate::sessions::unavailable_note(gap).trim().to_owned()),
         );
         if listing.sessions.is_empty() {
-            return Ok(None);
+            return Ok(SessionsAnswer::None);
         }
-        let keyed: Vec<(String, &crate::sessions::Summary)> = listing
+        let Some(names) = self.session_names(message, history, names).await else {
+            audit.step(
+                "agent sessions",
+                "the conversation's members could not be read; no answer from sessions",
+            );
+            return Ok(SessionsAnswer::None);
+        };
+        // What a model reads of each session: without the names of people.
+        let unnamed: Vec<crate::sessions::Summary> = listing
             .sessions
+            .iter()
+            .map(|s| s.without_names(&names.strip))
+            .collect();
+        let keyed: Vec<(String, &crate::sessions::Summary)> = unnamed
             .iter()
             .enumerate()
             .map(|(i, s)| (format!("s{}", i + 1), s))
@@ -2411,7 +2536,7 @@ impl Pipeline {
             Err(_) => {
                 tracing::warn!(event = "session_selection_unavailable");
                 audit.step("agent sessions", "no model could choose among them");
-                return Ok(None);
+                return Ok(SessionsAnswer::None);
             }
         };
         let selected: Vec<(String, &crate::sessions::Summary)> = keyed
@@ -2421,7 +2546,7 @@ impl Pipeline {
             .collect();
         if selected.is_empty() {
             audit.step("agent sessions", "none is about this message");
-            return Ok(None);
+            return Ok(SessionsAnswer::None);
         }
         audit.step(
             "agent sessions",
@@ -2466,7 +2591,7 @@ impl Pipeline {
                     text.push_str(part.trim());
                 }
             }
-            self.redactor.redact(&text)
+            self.redactor.redact(&names.check.strip(&text))
         });
         if let Some(person) = person {
             audit.person = Some(person.id.clone());
@@ -2503,8 +2628,23 @@ impl Pipeline {
                 audit.provider.as_deref().unwrap_or("the model")
             ),
         );
-        Ok(Some(generated.answer))
+        if let Some(refusal) = Self::session_answer_refusal(&generated.answer, &names) {
+            audit.proposed = Some(self.redactor.redact(&generated.answer));
+            audit.step("agent sessions", format!("the answer {refusal}"));
+            self.withhold(
+                resource,
+                message,
+                audit,
+                "session_answer_names_people".into(),
+            )
+            .await?;
+            return Ok(SessionsAnswer::Withheld);
+        }
+        Ok(SessionsAnswer::Answer(generated.answer))
     }
+    /// Await a model call without a deadline. If it is still running when the holding
+    /// deadline passes, send the deterministic notice once; the intent is recorded first so
+    /// a retried job never sends it again, and a failed send is never retried.
     async fn awaiting_model<T>(
         &self,
         holding: &mut Holding,
@@ -3526,9 +3666,26 @@ fn unresolved(language: Language, rejected: &[u64]) -> String {
 }
 
 /// Plain-language cause of a withheld answer, without its content.
+/// The authors of the earlier messages in `history_text`'s lines (`[date time · author] text`),
+/// without the user (`me`) and this app (`assistant`).
+fn history_authors(history: &str) -> Vec<String> {
+    let mut authors: Vec<String> = history
+        .lines()
+        .filter_map(|line| {
+            let head = line.strip_prefix('[')?.split_once("] ")?.0;
+            let author = head.split_once(" · ")?.1.trim();
+            (!["me", "assistant", "current request", "otra persona"].contains(&author))
+                .then(|| author.to_owned())
+        })
+        .collect();
+    authors.sort();
+    authors.dedup();
+    authors
+}
 fn withheld_reason(reason: &str, language: Language) -> &'static str {
     let unsafe_answer = matches!(reason, "unsafe_proposal" | "unsafe_answer");
     let references = reason.starts_with("invalid_references");
+    let people = reason == "session_answer_names_people";
     match language {
         Language::Es if reason == "card_too_long" => {
             "no cabía en un mensaje de Teams, ni siquiera acortada"
@@ -3540,11 +3697,15 @@ fn withheld_reason(reason: &str, language: Language) -> &'static str {
             "contenía datos sensibles o no cabía en un mensaje de Teams"
         }
         Language::Es if references => "citaba referencias o enlaces que no se pudieron verificar",
+        Language::Es if people => {
+            "nombraba a personas o work items a partir de tus sesiones de agentes"
+        }
         Language::Es => "no pasó los controles de la aplicación",
         Language::En if unsafe_answer => {
             "contained sensitive data or didn't fit in a Teams message"
         }
         Language::En if references => "cited references or links that couldn't be verified",
+        Language::En if people => "named people or work items from your agent sessions",
         Language::En => "didn't pass the app's checks",
     }
 }

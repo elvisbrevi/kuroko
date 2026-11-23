@@ -53,6 +53,7 @@ mod portable;
 mod readiness;
 pub(crate) mod service;
 mod skill;
+mod sources;
 mod standing;
 mod tools;
 mod variables;

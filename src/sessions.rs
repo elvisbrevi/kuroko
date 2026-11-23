@@ -3,8 +3,10 @@
 //! Each summary is written by code from the session's own messages (no model call): when it
 //! ran, where, what the user asked, what the agent concluded and what is still open. Only the
 //! plain text of user and agent messages is read; tool calls and their results (file contents,
-//! command output) never are. Every line that looks like a secret is dropped and absolute paths
-//! keep only their last component before a summary leaves the machine that holds the session.
+//! command output) never are. Every line that looks like a secret, or that names a work item or
+//! pull request by its number or link, is dropped and absolute paths keep only their last
+//! component before a summary leaves the machine that holds the session. A source's project
+//! filter (`Filter`) is applied on that machine too, so a session it leaves out never leaves it.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -95,6 +97,10 @@ pub struct Listing {
     pub sessions: Vec<Summary>,
     #[serde(default)]
     pub unavailable: Vec<Unavailable>,
+    /// Whether whoever gathered it applied the project filter it was asked for. Absent from a
+    /// host that predates filters, which must not be trusted with one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub filtered: bool,
 }
 impl Listing {
     /// Join listings from several machines: the `limit` most recent, newest first.
@@ -111,6 +117,20 @@ impl Listing {
         all.sessions.truncate(limit.clamp(1, MAX_LIMIT));
         all
     }
+    /// The listing as a source with `filter` may read it: refused when whoever gathered it did
+    /// not apply the filter (a host older than filters), and without any session whose project
+    /// name the filter excludes.
+    pub fn admitted(mut self, filter: &Filter) -> Result<Self> {
+        if filter.is_empty() {
+            return Ok(self);
+        }
+        anyhow::ensure!(
+            self.filtered,
+            "the agent sessions were read by a host that cannot filter projects"
+        );
+        self.sessions.retain(|s| !filter.excludes_name(&s.project));
+        Ok(self)
+    }
     /// Mark the sessions PTA started with their run, from the runs it recorded.
     pub fn attribute(&mut self, runs: &[(String, Started)]) {
         for session in &mut self.sessions {
@@ -121,9 +141,244 @@ impl Listing {
     }
 }
 
+/// The most entries each list of a project filter holds, and the longest entry.
+const FILTER_ENTRIES: usize = 100;
+const FILTER_CHARS: usize = 120;
+
+/// Which projects an agent sessions source reads, decided by code on the machine that holds
+/// each session (never by a model). An entry names a project (the Git repository a session ran
+/// in, a worktree counting as its main repository) or a directory under the home
+/// (`drafts/sketchbook`, `drafts` for everything under it).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Filter {
+    /// Projects never read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_projects: Vec<String>,
+    /// When set, only these projects are read; a session whose project is unknown is not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub only_projects: Vec<String>,
+}
+impl Filter {
+    pub fn is_empty(&self) -> bool {
+        self.exclude_projects.is_empty() && self.only_projects.is_empty()
+    }
+    pub fn validate(&self) -> Result<()> {
+        for list in [&self.exclude_projects, &self.only_projects] {
+            anyhow::ensure!(
+                list.len() <= FILTER_ENTRIES,
+                "a project list holds at most {FILTER_ENTRIES} entries"
+            );
+            for entry in list {
+                let trimmed = entry.trim();
+                let parts = filter_entry(entry);
+                // An absolute path would never match a directory under the home: refused, not
+                // silently ignored.
+                let absolute = trimmed.starts_with(['/', '\\'])
+                    || trimmed.chars().nth(1) == Some(':')
+                    || trimmed.starts_with('$');
+                anyhow::ensure!(
+                    !parts.is_empty()
+                        && !absolute
+                        && entry.chars().count() <= FILTER_CHARS
+                        && !parts.iter().any(|p| p == ".." || p == "."),
+                    "a project is a name or a directory under the home (`~/src/name` or `src/name`), at most {FILTER_CHARS} characters"
+                );
+            }
+        }
+        Ok(())
+    }
+    /// Whether a session of `project` is read.
+    pub fn admits(&self, project: &Project) -> bool {
+        let matches = |entry: &String| project.matches(&filter_entry(entry));
+        !self.exclude_projects.iter().any(matches)
+            && (self.only_projects.is_empty() || self.only_projects.iter().any(matches))
+    }
+    /// Whether a gatherer that only knows a session's project name must leave it out: a second
+    /// check, after the machine's, of the excluded names.
+    pub fn excludes_name(&self, name: &str) -> bool {
+        !name.is_empty()
+            && self
+                .exclude_projects
+                .iter()
+                .any(|e| filter_entry(e) == [fold_name(name)])
+    }
+}
+/// An entry as its folded directory names: `~/src/Game/` is `["src", "game"]`.
+fn filter_entry(entry: &str) -> Vec<String> {
+    let entry = entry.trim();
+    let entry = entry
+        .strip_prefix("~/")
+        .or_else(|| entry.strip_prefix("~\\"))
+        .unwrap_or(entry);
+    entry
+        .split(['/', '\\'])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(fold_name)
+        .collect()
+}
+fn fold_name(text: &str) -> String {
+    crate::index::fold(text.trim())
+}
+
+/// Where a session ran, as a filter sees it: the project's name and its directories under the
+/// home. Worked out on the machine that holds the session and never sent: only `name` leaves.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Project {
+    /// The Git repository's name (a worktree's main repository), else the working directory's
+    /// last component.
+    pub name: String,
+    /// The folded directory names, under the home (or from the root), of the repository and
+    /// of the working directory itself: an entry may name either.
+    paths: Vec<Vec<String>>,
+}
+impl Project {
+    /// The project of working directory `cwd` on this computer: a `.claude/worktrees/X`
+    /// directory counts as the repository that holds it, a linked worktree (`.git` file) as its
+    /// main repository, and any other directory as the Git repository that contains it, below
+    /// the home (a home that is itself a repository is not a project).
+    pub fn of(cwd: &str, home: Option<&Path>) -> Self {
+        let cwd = cwd.trim();
+        if cwd.is_empty() {
+            return Self::default();
+        }
+        let given = lexical(Path::new(cwd));
+        let mut dir = given.clone();
+        // A worktree Claude Code made inside the repository: `<repo>/.claude/worktrees/<name>`.
+        if let Some(at) = components(&dir)
+            .windows(2)
+            .position(|w| w[0] == ".claude" && w[1] == "worktrees")
+        {
+            dir = rebuild(&dir, at);
+        }
+        let (root, name) = repository_root(&dir, home).unwrap_or_else(|| {
+            let name = components(&dir).pop().unwrap_or_default();
+            (dir.clone(), name)
+        });
+        let under_home = |path: &Path| -> Vec<String> {
+            let relative = home.and_then(|h| path.strip_prefix(h).ok()).unwrap_or(path);
+            components(relative).iter().map(|p| fold_name(p)).collect()
+        };
+        Self {
+            name,
+            paths: vec![under_home(&root), under_home(&given)],
+        }
+    }
+    /// Whether filter entry `entry` (folded directory names) names this project: its name, or
+    /// consecutive directory names of one of its paths.
+    fn matches(&self, entry: &[String]) -> bool {
+        if entry.is_empty() {
+            return false;
+        }
+        (entry.len() == 1 && entry[0] == fold_name(&self.name))
+            || self
+                .paths
+                .iter()
+                .any(|path| path.windows(entry.len()).any(|w| w == entry))
+    }
+}
+/// The normal components of a path, as text, whichever separator it uses.
+fn components(path: &Path) -> Vec<String> {
+    path.to_string_lossy()
+        .split(['/', '\\'])
+        .filter(|p| !p.is_empty() && *p != "." && !p.ends_with(':'))
+        .map(str::to_owned)
+        .collect()
+}
+/// `path` without `.` and with each `..` taking its parent away, without reading the disk.
+fn lexical(path: &Path) -> PathBuf {
+    let mut kept = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                kept.pop();
+            }
+            other => kept.push(other),
+        }
+    }
+    kept
+}
+/// `path` cut before its normal component number `at`, keeping its root.
+fn rebuild(path: &Path, at: usize) -> PathBuf {
+    let mut kept = PathBuf::new();
+    let mut seen = 0;
+    for part in path.components() {
+        match part {
+            std::path::Component::Normal(_) => {
+                if seen == at {
+                    break;
+                }
+                seen += 1;
+                kept.push(part);
+            }
+            other => kept.push(other),
+        }
+    }
+    kept
+}
+/// The main repository that holds `dir`, with its name: the nearest ancestor below the home
+/// with a `.git` directory, or with a `.git` file pointing to a worktree's Git directory (its
+/// `commondir`, or the `.git/worktrees/` it is in, names the main one; a bare `name.git` is
+/// named `name`). None outside a repository.
+fn repository_root(dir: &Path, home: Option<&Path>) -> Option<(PathBuf, String)> {
+    let named = |root: PathBuf| {
+        let name = components(&root).pop().unwrap_or_default();
+        (root, name)
+    };
+    for ancestor in dir.ancestors().take(64) {
+        if home.is_some_and(|h| ancestor == h) {
+            return None;
+        }
+        let git = ancestor.join(".git");
+        let Ok(meta) = std::fs::symlink_metadata(&git) else {
+            continue;
+        };
+        if meta.is_dir() {
+            return Some(named(ancestor.to_path_buf()));
+        }
+        if !meta.is_file() || meta.len() > 4096 {
+            return Some(named(ancestor.to_path_buf()));
+        }
+        let Some(target) = std::fs::read_to_string(&git).ok().and_then(|t| {
+            t.trim()
+                .strip_prefix("gitdir:")
+                .map(|g| g.trim().to_owned())
+        }) else {
+            return Some(named(ancestor.to_path_buf()));
+        };
+        let gitdir = lexical(&ancestor.join(target));
+        let common = std::fs::read_to_string(gitdir.join("commondir"))
+            .ok()
+            .filter(|c| c.len() <= 4096)
+            .map(|c| lexical(&gitdir.join(c.trim())))
+            .or_else(|| {
+                components(&gitdir)
+                    .iter()
+                    .rposition(|p| p == "worktrees")
+                    .map(|at| rebuild(&gitdir, at))
+            });
+        let Some(common) = common else {
+            // A submodule (`.git/modules/…`) is a project of its own.
+            return Some(named(ancestor.to_path_buf()));
+        };
+        let last = components(&common).pop().unwrap_or_default();
+        return Some(if last == ".git" {
+            named(common.parent().map(Path::to_path_buf).unwrap_or(common))
+        } else {
+            let name = last.strip_suffix(".git").unwrap_or(&last).to_owned();
+            (common, name)
+        });
+    }
+    None
+}
+
 /// Where this computer's coding CLIs keep their sessions.
 #[derive(Clone, Debug, Default)]
 pub struct Roots {
+    /// The user's home, which a project filter's directories are relative to.
+    pub home: Option<PathBuf>,
     /// Claude Code's configuration directory (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
     pub claude: Option<PathBuf>,
     /// Codex's home (`CODEX_HOME`, else `~/.codex`).
@@ -143,6 +398,7 @@ impl Roots {
                 .filter(|p| p.is_absolute())
         };
         Self {
+            home: home.clone(),
             claude: var("CLAUDE_CONFIG_DIR").or_else(|| home.as_ref().map(|h| h.join(".claude"))),
             codex: var("CODEX_HOME").or_else(|| home.as_ref().map(|h| h.join(".codex"))),
             opencode: var("XDG_DATA_HOME")
@@ -152,12 +408,56 @@ impl Roots {
     }
 }
 
-/// The `limit` most recent sessions of every CLI under `roots`, newest first. A CLI whose
-/// store does not exist adds nothing; one whose store, or any of whose sessions, cannot be
-/// read is reported unavailable, never as having fewer sessions.
-pub fn local(roots: &Roots, limit: usize, machine: &str) -> Listing {
+/// What each reader of a store needs besides the store: the scrubber, and which projects to
+/// read with the home they are relative to.
+pub(crate) struct Reading {
+    scrubber: Scrubber,
+    filter: Filter,
+    home: Option<PathBuf>,
+}
+impl Reading {
+    /// The project of a session that ran in `cwd`, when the filter admits it.
+    fn project(&self, cwd: &str) -> Option<Project> {
+        let project = Project::of(cwd, self.home.as_deref());
+        self.filter.admits(&project).then_some(project)
+    }
+    /// How many of the newest files a reader looks at for `limit` sessions: more when a filter
+    /// may leave some out.
+    fn candidates(&self, limit: usize, per: usize) -> usize {
+        if self.filter.is_empty() {
+            limit * per + 10
+        } else {
+            limit * (per + 2) + 20
+        }
+    }
+}
+
+/// The `limit` most recent sessions of every CLI under `roots` that `filter` admits, newest
+/// first. A CLI whose store does not exist adds nothing; one whose store, or any of whose
+/// sessions, cannot be read is reported unavailable, never as having fewer sessions.
+pub fn local(roots: &Roots, limit: usize, machine: &str, filter: &Filter) -> Listing {
+    local_reading(roots, limit, machine, filter, false)
+}
+/// `local`, keeping the lines that name work items or who did something when `keep_references`
+/// (Kuroko's own reading of its runs' sessions, never the source's).
+pub fn local_reading(
+    roots: &Roots,
+    limit: usize,
+    machine: &str,
+    filter: &Filter,
+    keep_references: bool,
+) -> Listing {
     let limit = limit.clamp(1, MAX_LIMIT);
-    let scrubber = Scrubber::new();
+    let scrubber = if keep_references {
+        Scrubber::new().keeping_references()
+    } else {
+        Scrubber::new()
+    };
+    let reading = Reading {
+        scrubber,
+        filter: filter.clone(),
+        home: roots.home.clone(),
+    };
     let mut parts = Vec::new();
     let mut unavailable = Vec::new();
     let mut read = |provider: &str, result: Result<Found>| match result {
@@ -171,7 +471,7 @@ pub fn local(roots: &Roots, limit: usize, machine: &str) -> Listing {
             }
             parts.push(Listing {
                 sessions: found.sessions,
-                unavailable: Vec::new(),
+                ..Default::default()
             });
         }
         Err(_) => unavailable.push(Unavailable {
@@ -183,21 +483,22 @@ pub fn local(roots: &Roots, limit: usize, machine: &str) -> Listing {
     if let Some(root) = roots.claude.as_ref().map(|r| r.join("projects"))
         && root.is_dir()
     {
-        read("claude", claude(&root, limit, &scrubber));
+        read("claude", claude(&root, limit, &reading));
     }
     if let Some(root) = roots.codex.as_ref().map(|r| r.join("sessions"))
         && root.is_dir()
     {
-        read("codex", codex(&root, limit, &scrubber));
+        read("codex", codex(&root, limit, &reading));
     }
     if let Some(root) = roots.opencode.as_ref().filter(|r| r.is_dir()) {
-        read("opencode", opencode(root, limit, &scrubber));
+        read("opencode", opencode(root, limit, &reading));
     }
     let mut listing = Listing::merge(parts, limit);
     for session in &mut listing.sessions {
         session.machine = machine.into();
     }
     listing.unavailable = unavailable;
+    listing.filtered = !filter.is_empty();
     listing
 }
 
@@ -205,13 +506,18 @@ pub fn local(roots: &Roots, limit: usize, machine: &str) -> Listing {
 /// account through the machine channel; without it only this computer's are read.
 #[async_trait]
 pub trait Reader: Send + Sync {
-    async fn recent(&self, limit: usize) -> Result<Listing>;
+    /// The `limit` most recent sessions `filter` admits; whoever reads them applies it.
+    async fn recent(&self, limit: usize, filter: &Filter) -> Result<Listing>;
 }
 struct LocalReader;
 #[async_trait]
 impl Reader for LocalReader {
-    async fn recent(&self, limit: usize) -> Result<Listing> {
-        Ok(tokio::task::spawn_blocking(move || local(&Roots::from_env(), limit, "")).await?)
+    async fn recent(&self, limit: usize, filter: &Filter) -> Result<Listing> {
+        let filter = filter.clone();
+        Ok(
+            tokio::task::spawn_blocking(move || local(&Roots::from_env(), limit, "", &filter))
+                .await?,
+        )
     }
 }
 static READER: RwLock<Option<Arc<dyn Reader>>> = RwLock::new(None);
@@ -274,6 +580,131 @@ pub fn evidence(sessions: &[(String, &Summary)]) -> String {
     }
     text
 }
+/// The people an answer from sessions must not name: their names are taken out of the
+/// summaries before a model reads them, and an answer that still names one is discarded. Each
+/// name counts by its words of three letters or more (not particles such as «de» or «van»), so
+/// «Ana Pérez» is also «Ana» and «Pérez»; a word counts only when written capitalized, so a
+/// surname that is also a common word («Mesa») is not seen in «la mesa». Accents and case are
+/// folded.
+#[derive(Clone, Debug, Default)]
+pub struct Names {
+    /// Folded words, longest first.
+    words: Vec<String>,
+}
+const PARTICLES: &[&str] = &[
+    "del", "las", "los", "van", "von", "der", "den", "dos", "das", "san", "the",
+];
+impl Names {
+    pub fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut words: Vec<String> = names
+            .into_iter()
+            .flat_map(name_words)
+            .map(|w| crate::index::fold(&w))
+            .filter(|w| w.chars().count() >= 3 && !PARTICLES.contains(&w.as_str()))
+            .collect();
+        words.sort_by(|a, b| b.len().cmp(&a.len()).then(a.cmp(b)));
+        words.dedup();
+        Self { words }
+    }
+    /// Without the words of `names`: so a sender is not seen as someone else.
+    pub fn without<'a>(mut self, names: impl IntoIterator<Item = &'a str>) -> Self {
+        let other = Self::new(names);
+        self.words.retain(|w| !other.words.contains(w));
+        self
+    }
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+    /// The capitalized words of `text` that are names, by their place in it.
+    fn spans(&self, text: &str) -> Vec<(usize, usize)> {
+        if self.words.is_empty() {
+            return Vec::new();
+        }
+        word_spans(text)
+            .into_iter()
+            .filter(|&(start, end)| {
+                let word = &text[start..end];
+                word.chars().next().is_some_and(char::is_uppercase)
+                    && self.words.contains(&crate::index::fold(word))
+            })
+            .collect()
+    }
+    /// `text` with every name replaced by «someone», a run of names («Ana Pérez») by one.
+    pub fn strip(&self, text: &str) -> String {
+        let spans = self.spans(text);
+        if spans.is_empty() {
+            return text.to_owned();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut at = 0;
+        for (start, end) in spans {
+            let between = &text[at..start];
+            // The next name of a run joins the replacement already written.
+            if at > 0 && out.ends_with("someone") && between.trim().is_empty() {
+                at = end;
+                continue;
+            }
+            out.push_str(between);
+            out.push_str("someone");
+            at = end;
+        }
+        out.push_str(&text[at..]);
+        out
+    }
+    /// The names `text` carries, as written.
+    pub fn found(&self, text: &str) -> Vec<String> {
+        let mut found: Vec<String> = self
+            .spans(text)
+            .into_iter()
+            .map(|(start, end)| text[start..end].to_owned())
+            .collect();
+        found.dedup();
+        found
+    }
+}
+/// The words of a name: its runs of letters, apostrophes and hyphens split apart.
+fn name_words(name: &str) -> Vec<String> {
+    name.split(|c: char| !c.is_alphabetic())
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+/// The byte ranges of the runs of letters of `text`.
+fn word_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        match (c.is_alphabetic(), start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                spans.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        spans.push((s, text.len()));
+    }
+    spans
+}
+impl Summary {
+    /// The summary without the names of `names` in any of its texts.
+    pub fn without_names(&self, names: &Names) -> Self {
+        let mut summary = self.clone();
+        for part in [
+            &mut summary.asked,
+            &mut summary.latest,
+            &mut summary.concluded,
+            &mut summary.open,
+            &mut summary.project,
+        ] {
+            *part = names.strip(part);
+        }
+        summary
+    }
+}
+
 /// A line of evidence saying whose sessions could not be read, so none is never assumed.
 pub fn unavailable_note(gap: &Unavailable) -> String {
     let whose = match (gap.machine.is_empty(), gap.provider.is_empty()) {
@@ -331,6 +762,13 @@ pub struct Scrubber {
     pending: regex::Regex,
     /// A key that leaves its value for the next line: `Password:`, `"secret" =`.
     bare_key: regex::Regex,
+    /// A work item, pull request or commit named by its number or link: the line is dropped.
+    work: Vec<regex::Regex>,
+    /// A table row, or who did or owns something: the line is dropped.
+    attribution: Vec<regex::Regex>,
+    /// Whether `work` and `attribution` lines are dropped: always for the agent sessions
+    /// source; Kuroko's own reading of its runs' sessions (the workflow supervisor) keeps them.
+    drop_references: bool,
 }
 impl Default for Scrubber {
     fn default() -> Self {
@@ -400,6 +838,27 @@ impl Scrubber {
                 r#"(?i)\b(?:password|passwd|passphrase|pwd|pass|secret|token|key|auth|authorization|credentials?|sas|signature|string|contraseña|contrasena|clave|credencial(?:es)?|is|are|was|es|son|era)\b["'*_`\s]*[:=][\s"'*_`]*$"#,
             )
             .expect("valid key pattern"),
+            work: [
+                // By number: `#1234`, `!45`, `AB#12`.
+                r"(?:^|[^\w&])[#!]\d+\b",
+                r"(?i)\bAB#\d+",
+                // By kind and number: `Task 1234`, `PBI-12`, `HU 123`, `tarea nº 4521`, `PR 77`.
+                r"(?i)\b(?:work ?items?|tasks?|tareas?|bugs?|pbis?|hus?|historias?(?: de usuario)?|user ?stor(?:y|ies)|features?|epics?|[ée]picas?|issues?|incidencias?|requerimientos?|prs?|pull ?requests?|commits?)\s*[-:#nº°]*\s*(?:no\.?\s*|nro\.?\s*|id\s*)?\d{2,}\b",
+                // By link.
+                r"(?i)/_workitems/|/pullrequest/\d|/pull/\d|/issues/\d|/commit/[0-9a-f]{7,}",
+            ]
+            .map(|p| regex::Regex::new(p).expect("valid work pattern"))
+            .to_vec(),
+            drop_references: true,
+            attribution: [
+                // A Markdown table row: lists of items with their people and states.
+                r"^\s*\|.*\|\s*$",
+                // Who did or owns something.
+                r"(?i)\b(?:assigned to|asignad[oa]s? a|created by|creado por|owner|responsable|author|autor)\b",
+                r"(?:^|\s)@[\p{L}\[]",
+            ]
+            .map(|p| regex::Regex::new(p).expect("valid attribution pattern"))
+            .to_vec(),
             pending: regex::Regex::new(
                 r"(?i)\b(?:todo|pending|pendiente|pendientes|next step|next steps|siguiente paso|próximo paso|falta|faltan|remaining|still|todavía|aún|blocked|bloquead[oa]s?|waiting|esperando|not yet|once|cuando termine)\b",
             )
@@ -413,9 +872,28 @@ impl Scrubber {
             || password_flag(line)
             || self.opaque.find_iter(line).any(|m| opaque(m.as_str()))
     }
+    /// Whether a line names a work item, pull request or commit by its number or link, is a
+    /// table row, or says who did or owns something.
+    pub fn references(&self, line: &str) -> bool {
+        self.names_work(line) || self.attribution.iter().any(|p| p.is_match(line))
+    }
+    /// Whether a line names a work item, pull request or commit by its number or link.
+    pub fn names_work(&self, line: &str) -> bool {
+        self.work.iter().any(|p| p.is_match(line))
+    }
+    /// The same scrubber, keeping the lines `references` names (they are still matched).
+    pub fn keeping_references(mut self) -> Self {
+        self.drop_references = false;
+        self
+    }
+    /// One scrubber for the process: its patterns are compiled once.
+    pub fn shared() -> &'static Self {
+        static SHARED: std::sync::LazyLock<Scrubber> = std::sync::LazyLock::new(Scrubber::new);
+        &SHARED
+    }
     /// The lines of `text` worth keeping: no fenced code, no injected blocks, no line that looks
-    /// like a secret (nor the line after a key that leaves its value for it), no PEM block, and
-    /// absolute paths reduced to their last component.
+    /// like a secret (nor the line after a key that leaves its value for it), no PEM block, no
+    /// line that `references` names, and absolute paths reduced to their last component.
     fn lines(&self, text: &str) -> Vec<String> {
         let text = without_injected(text);
         let mut kept = Vec::new();
@@ -452,6 +930,9 @@ impl Scrubber {
             if std::mem::take(&mut value_next) || secret {
                 // `Password:` alone leaves its value on the next line.
                 value_next = secret && self.bare_key.is_match(line);
+                continue;
+            }
+            if self.drop_references && self.references(line) {
                 continue;
             }
             let line = self.without_paths(line);
@@ -722,14 +1203,18 @@ impl Found {
     }
 }
 impl Parsed {
-    /// The summary, `None` for a session with no request of the user's or one marked private
-    /// in what was read, and an error when no time can be told for it.
+    /// The summary, `None` for a session with no request of the user's, one marked private
+    /// in what was read or one of a project the filter leaves out, and an error when no time
+    /// can be told for it.
     fn summary(
         self,
         provider: &str,
         modified: Option<SystemTime>,
-        scrubber: &Scrubber,
+        reading: &Reading,
     ) -> Result<Option<Summary>> {
+        let Some(project) = reading.project(&self.cwd) else {
+            return Ok(None);
+        };
         let requests: Vec<&Message> = self
             .messages
             .iter()
@@ -752,6 +1237,7 @@ impl Parsed {
             .or_else(|| self.messages.iter().find_map(|m| m.at.clone()))
             .and_then(|t| normalized(&t))
             .unwrap_or_else(|| updated.clone());
+        let scrubber = &reading.scrubber;
         let asked = scrubber.scrub(&requests[0].text);
         let last_request = requests.last().map(|m| scrubber.scrub(&m.text));
         let answer_index = self
@@ -767,17 +1253,12 @@ impl Parsed {
             (None, _) => last_request.clone().unwrap_or_default(),
             (Some(a), _) => scrubber.pending(&self.messages[a].text),
         };
-        let project = self
-            .cwd
-            .trim_end_matches(['/', '\\'])
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or_default();
+        let project = project.name;
         Ok(Some(Summary {
             provider: provider.into(),
             session_id: self.id.chars().take(128).collect(),
             machine: String::new(),
-            project: if scrubber.secret(project) {
+            project: if scrubber.secret(&project) {
                 String::new()
             } else {
                 project.chars().take(120).collect()
@@ -983,8 +1464,8 @@ pub fn claude_final_answer(root: &Path, session: &str, after: &str) -> Result<Op
     }))
 }
 /// Claude Code: one JSON-lines file per session under `projects/<directory>/`.
-fn claude(root: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
-    let files = newest(root, 2, limit * 2 + 10, &|p| {
+fn claude(root: &Path, limit: usize, reading: &Reading) -> Result<Found> {
+    let files = newest(root, 2, reading.candidates(limit, 2), &|p| {
         p.extension().is_some_and(|e| e == "jsonl")
     })?;
     let mut found = Found::default();
@@ -992,15 +1473,11 @@ fn claude(root: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
         if found.sessions.len() == limit {
             break;
         }
-        found.add(claude_session(&path, modified, scrubber));
+        found.add(claude_session(&path, modified, reading));
     }
     Ok(found)
 }
-fn claude_session(
-    path: &Path,
-    modified: SystemTime,
-    scrubber: &Scrubber,
-) -> Result<Option<Summary>> {
+fn claude_session(path: &Path, modified: SystemTime, reading: &Reading) -> Result<Option<Summary>> {
     if jsonl_private(path, &|line| {
         claude_message(line).and_then(|(user, text)| user.then_some(text))
     })? {
@@ -1030,7 +1507,7 @@ fn claude_session(
             });
         }
     }
-    parsed.summary("claude", Some(modified), scrubber)
+    parsed.summary("claude", Some(modified), reading)
 }
 
 /// A Codex rollout line as a message: from its events (`user_message`, `agent_message`) or,
@@ -1067,8 +1544,8 @@ fn codex_message(line: &Value) -> Option<(bool, bool, String)> {
     }
 }
 /// Codex: `sessions/YYYY/MM/DD/rollout-*.jsonl`, one file per session.
-fn codex(root: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
-    let files = newest(root, 4, limit * 2 + 10, &|p| {
+fn codex(root: &Path, limit: usize, reading: &Reading) -> Result<Found> {
+    let files = newest(root, 4, reading.candidates(limit, 2), &|p| {
         p.extension().is_some_and(|e| e == "jsonl")
             && p.file_name()
                 .and_then(|n| n.to_str())
@@ -1079,15 +1556,11 @@ fn codex(root: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
         if found.sessions.len() == limit {
             break;
         }
-        found.add(codex_session(&path, modified, scrubber));
+        found.add(codex_session(&path, modified, reading));
     }
     Ok(found)
 }
-fn codex_session(
-    path: &Path,
-    modified: SystemTime,
-    scrubber: &Scrubber,
-) -> Result<Option<Summary>> {
+fn codex_session(path: &Path, modified: SystemTime, reading: &Reading) -> Result<Option<Summary>> {
     if jsonl_private(path, &|line| {
         codex_message(line).and_then(|(_, user, text)| user.then_some(text))
     })? {
@@ -1129,28 +1602,31 @@ fn codex_session(
         .iter()
         .rev()
         .find_map(|l| l["timestamp"].as_str().map(str::to_owned));
-    parsed.summary("codex", Some(modified), scrubber)
+    parsed.summary("codex", Some(modified), reading)
 }
 
 /// OpenCode: its database (`opencode.db`) or, in older versions, JSON files under `storage/`.
-fn opencode(root: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
+fn opencode(root: &Path, limit: usize, reading: &Reading) -> Result<Found> {
     let database = root.join("opencode.db");
     if database.is_file() {
-        return opencode_database(&database, limit, scrubber);
+        return opencode_database(&database, limit, reading);
     }
     let storage = root.join("storage");
     if !storage.join("session").is_dir() {
         return Ok(Found::default());
     }
-    let files = newest(&storage.join("session"), 2, limit * 3 + 10, &|p| {
-        p.extension().is_some_and(|e| e == "json")
-    })?;
+    let files = newest(
+        &storage.join("session"),
+        2,
+        reading.candidates(limit, 3),
+        &|p| p.extension().is_some_and(|e| e == "json"),
+    )?;
     let mut found = Found::default();
     for (path, modified) in files {
         if found.sessions.len() == limit {
             break;
         }
-        found.add(opencode_file_session(&storage, &path, modified, scrubber));
+        found.add(opencode_file_session(&storage, &path, modified, reading));
     }
     Ok(found)
 }
@@ -1182,7 +1658,7 @@ fn opencode_file_session(
     storage: &Path,
     path: &Path,
     modified: SystemTime,
-    scrubber: &Scrubber,
+    reading: &Reading,
 ) -> Result<Option<Summary>> {
     let info = read_json(path)?;
     // A sub-agent's session belongs to its parent's.
@@ -1244,7 +1720,7 @@ fn opencode_file_session(
         updated: info["time"]["updated"].as_i64().and_then(from_millis),
         messages: read,
     }
-    .summary("opencode", Some(modified), scrubber)
+    .summary("opencode", Some(modified), reading)
 }
 /// The messages a summary reads: the first ones (the request) and the latest ones.
 fn first_and_last<T>(mut messages: Vec<T>) -> Vec<T> {
@@ -1264,12 +1740,23 @@ fn opencode_text(parts: &[Value]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-fn opencode_database(path: &Path, limit: usize, scrubber: &Scrubber) -> Result<Found> {
+/// The two layouts of OpenCode's database Kuroko reads.
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    /// `session`, `message` (metadata) and `part` (each text or tool part).
+    First,
+    /// `session_v2` and `session_message` (each message with its content); `session_part`, when
+    /// present, holds parts of messages that keep them apart.
+    Second { parts: bool },
+}
+fn opencode_database(path: &Path, limit: usize, reading: &Reading) -> Result<Found> {
     let db = rusqlite::Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     db.busy_timeout(std::time::Duration::from_secs(2))?;
+    // Only the session tables' own columns are looked at: the database also keeps accounts
+    // and credentials, which are never read.
     let columns = |table: &str| -> Result<Vec<String>> {
         let mut statement = db.prepare(&format!("PRAGMA table_info({table})"))?;
         let names = statement
@@ -1281,25 +1768,36 @@ fn opencode_database(path: &Path, limit: usize, scrubber: &Scrubber) -> Result<F
         let found = columns(table)?;
         Ok(wanted.iter().all(|c| found.iter().any(|f| f == c)))
     };
+    let session = |table: &str| has(table, &["id", "directory", "time_created", "time_updated"]);
     // An unknown layout is unreadable, never "no sessions".
-    anyhow::ensure!(
-        has(
-            "session",
-            &["id", "directory", "time_created", "time_updated"]
-        )? && has("message", &["id", "session_id", "time_created", "data"])?
-            && has("part", &["id", "message_id", "data"])?,
-        "unknown OpenCode database layout"
-    );
-    let child = if has("session", &["parent_id"])? {
+    let (layout, sessions) = if session("session_v2")?
+        && has(
+            "session_message",
+            &["id", "session_id", "type", "seq", "time_created", "data"],
+        )? {
+        let parts = has(
+            "session_part",
+            &["message_id", "session_id", "ordinal", "type", "data"],
+        )?;
+        (Layout::Second { parts }, "session_v2")
+    } else if session("session")?
+        && has("message", &["id", "session_id", "time_created", "data"])?
+        && has("part", &["id", "message_id", "data"])?
+    {
+        (Layout::First, "session")
+    } else {
+        anyhow::bail!("unknown OpenCode database layout")
+    };
+    let child = if has(sessions, &["parent_id"])? {
         "WHERE parent_id IS NULL"
     } else {
         ""
     };
     let mut statement = db.prepare(&format!(
-        "SELECT id, directory, time_created, time_updated FROM session {child} ORDER BY time_updated DESC LIMIT ?1"
+        "SELECT id, directory, time_created, time_updated FROM {sessions} {child} ORDER BY time_updated DESC LIMIT ?1"
     ))?;
     let rows = statement
-        .query_map([(limit * 3 + 10) as i64], |row| {
+        .query_map([reading.candidates(limit, 3) as i64], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1313,9 +1811,159 @@ fn opencode_database(path: &Path, limit: usize, scrubber: &Scrubber) -> Result<F
         if found.sessions.len() == limit {
             break;
         }
-        found.add(opencode_row(&db, id, directory, created, updated, scrubber));
+        // A project the filter leaves out is not read at all.
+        if reading.project(&directory).is_none() {
+            continue;
+        }
+        let read = match layout {
+            Layout::First => opencode_row(&db, id, directory, created, updated, reading),
+            Layout::Second { parts } => {
+                opencode_second_row(&db, parts, id, directory, created, updated, reading)
+            }
+        };
+        found.add(read);
+    }
+    // Messages whose types are none Kuroko knows mean another layout, not sessions without
+    // requests: unreadable.
+    if matches!(layout, Layout::Second { .. }) && found.sessions.is_empty() && found.failed == 0 {
+        let count = |filter: &str| -> Result<i64> {
+            Ok(db.query_row(
+                &format!("SELECT count(*) FROM session_message {filter}"),
+                [],
+                |row| row.get(0),
+            )?)
+        };
+        anyhow::ensure!(
+            count("")? == 0 || count("WHERE type IN ('user', 'assistant')")? > 0,
+            "unknown OpenCode message types"
+        );
     }
     Ok(found)
+}
+/// A message of the second layout: its ID, time, type and text.
+type SecondRow = (String, i64, String, Option<String>);
+/// A session of the second layout: the user's text is a message's `data.text`, the agent's the
+/// text items of its `data.content` (never its reasoning or tool items), and, where the layout
+/// has it, the text parts of `session_part`. Only those texts are taken out of the database.
+fn opencode_second_row(
+    db: &rusqlite::Connection,
+    parts: bool,
+    id: String,
+    directory: String,
+    created: i64,
+    updated: i64,
+    reading: &Reading,
+) -> Result<Option<Summary>> {
+    // Every request of the user, wherever it is, may mark the session private; one too long to
+    // decode counts as marked.
+    let mut marked = Vec::new();
+    let mut statement = db.prepare(
+        "SELECT CASE WHEN length(data) <= ?2 THEN \
+         CASE WHEN json_type(data, '$.text') = 'text' THEN json_extract(data, '$.text') ELSE '' END END \
+         FROM session_message WHERE session_id = ?1 AND type = 'user' \
+         AND instr(lower(data), '#private') > 0",
+    )?;
+    marked.extend(
+        statement
+            .query_map(rusqlite::params![&id, LINE_BYTES as i64], |row| {
+                row.get::<_, Option<String>>(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+    );
+    if parts {
+        let mut statement = db.prepare(
+            "SELECT CASE WHEN length(p.data) <= ?2 THEN \
+             CASE WHEN json_type(p.data, '$.text') = 'text' THEN json_extract(p.data, '$.text') ELSE '' END END \
+             FROM session_part p JOIN session_message m ON m.id = p.message_id \
+             WHERE p.session_id = ?1 AND m.type = 'user' AND p.type = 'text' \
+             AND instr(lower(p.data), '#private') > 0",
+        )?;
+        marked.extend(
+            statement
+                .query_map(rusqlite::params![&id, LINE_BYTES as i64], |row| {
+                    row.get::<_, Option<String>>(0)
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+    }
+    if marked
+        .iter()
+        .any(|text| text.as_deref().is_none_or(marked_private))
+    {
+        return Ok(None);
+    }
+    // The text of each message: the user's own, or the agent's text items.
+    // The agent's content is a list of items (or, in a shape not seen yet, plain text); an item
+    // that is not an object is skipped rather than parsed.
+    let text = "CASE WHEN m.type = 'user' THEN \
+         CASE WHEN json_type(m.data, '$.text') = 'text' THEN substr(json_extract(m.data, '$.text'), 1, ?3) END \
+         WHEN json_type(m.data, '$.content') = 'text' THEN substr(json_extract(m.data, '$.content'), 1, ?3) \
+         WHEN json_type(m.data, '$.content') = 'array' THEN \
+         (SELECT substr(group_concat(CASE WHEN e.type = 'object' THEN json_extract(e.value, '$.text') END, char(10)), 1, ?3) \
+         FROM json_each(m.data, '$.content') e \
+         WHERE (CASE WHEN e.type = 'object' THEN json_extract(e.value, '$.type') END) = 'text' \
+         AND (CASE WHEN e.type = 'object' THEN json_type(e.value, '$.text') END) = 'text' \
+         AND IFNULL(CASE WHEN e.type = 'object' THEN json_extract(e.value, '$.synthetic') END, 0) = 0) END";
+    let read = |order: &str, count: usize| -> Result<Vec<SecondRow>> {
+        let mut statement = db.prepare(&format!(
+            "SELECT m.id, m.time_created, m.type, {text} FROM session_message m \
+             WHERE m.session_id = ?1 AND m.type IN ('user', 'assistant') \
+             ORDER BY m.seq {order} LIMIT ?2"
+        ))?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![&id, count as i64, LINE_BYTES as i64],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    };
+    let mut rows = read("ASC", FIRST_MESSAGES)?;
+    let mut latest = read("DESC", LAST_MESSAGES)?;
+    latest.reverse();
+    for row in latest {
+        if !rows.iter().any(|(seen, ..)| seen == &row.0) {
+            rows.push(row);
+        }
+    }
+    let mut part_texts = if parts {
+        Some(db.prepare(
+            "SELECT json_extract(data, '$.text') FROM session_part WHERE message_id = ?1 \
+             AND type = 'text' AND length(data) <= ?2 AND json_type(data, '$.text') = 'text' \
+             AND IFNULL(json_extract(data, '$.synthetic'), 0) = 0 ORDER BY ordinal LIMIT 50",
+        )?)
+    } else {
+        None
+    };
+    let mut messages = Vec::new();
+    for (message_id, at, kind, inline) in rows {
+        let mut texts: Vec<String> = inline.into_iter().filter(|t| !t.is_empty()).collect();
+        if let Some(statement) = part_texts.as_mut() {
+            texts.extend(
+                statement
+                    .query_map(rusqlite::params![&message_id, LINE_BYTES as i64], |row| {
+                        row.get::<_, String>(0)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+        messages.push(Message {
+            user: kind == "user",
+            text: texts.join("\n"),
+            at: from_millis(at),
+        });
+    }
+    let modified = u64::try_from(updated)
+        .ok()
+        .and_then(|ms| SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(ms)));
+    Parsed {
+        id,
+        cwd: directory,
+        started: from_millis(created),
+        updated: from_millis(updated),
+        messages,
+    }
+    .summary("opencode", modified, reading)
 }
 fn opencode_row(
     db: &rusqlite::Connection,
@@ -1323,7 +1971,7 @@ fn opencode_row(
     directory: String,
     created: i64,
     updated: i64,
-    scrubber: &Scrubber,
+    reading: &Reading,
 ) -> Result<Option<Summary>> {
     // Every request of the user, wherever it is, may mark the session private.
     // Only the user's text parts that contain the mark's text; one too long to decode counts.
@@ -1399,7 +2047,7 @@ fn opencode_row(
         updated: from_millis(updated),
         messages,
     }
-    .summary("opencode", modified, scrubber)
+    .summary("opencode", modified, reading)
 }
 
 #[cfg(test)]

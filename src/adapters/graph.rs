@@ -1583,6 +1583,33 @@ impl MessageAdapter for Graph {
                 && m.deleted_date_time.is_none(),
         })
     }
+    async fn members(&self, m: &IncomingMessage) -> Result<Vec<String>> {
+        let resource = teams::canonical_resource(&m.resource)?;
+        let collection = teams::collection(&resource)?;
+        ensure!(
+            self.allowed_collection(&collection),
+            "conversation no longer allowed"
+        );
+        // The personal notes have no members; a channel's are not read.
+        let Some(chat) = m
+            .conversation
+            .strip_prefix("chats/")
+            .filter(|id| *id != "48:notes")
+        else {
+            return Ok(Vec::new());
+        };
+        let members = self
+            .list_collection(&format!("chats/{chat}/members"))
+            .await?;
+        Ok(members
+            .iter()
+            .filter(|member| member["userId"].as_str() != Some(&self.config.graph.user_id))
+            .filter_map(|member| member["displayName"].as_str())
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| name.chars().take(80).collect())
+            .take(200)
+            .collect())
+    }
     async fn history(
         &self,
         m: &IncomingMessage,

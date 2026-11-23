@@ -27,6 +27,10 @@ pub trait MessageAdapter: Send + Sync {
     ) -> Result<Vec<teams::HistoryMessage>> {
         Ok(Vec::new())
     }
+    /// The display names of the other members of `message`'s conversation (not the user).
+    async fn members(&self, _message: &teams::IncomingMessage) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 }
 pub async fn bounded_bytes(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     ensure!(
