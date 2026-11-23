@@ -3,7 +3,7 @@
 // record and change nothing. Settings › Workflows lists, edits and removes them
 // (`workflow_leads_list`, `workflow_lead_save`, `workflow_lead_remove`); a workflow's editor names
 // its lead and its completion criteria (`leadField`, `leadSent`).
-import { t, tx } from './i18n.js';
+import { t, tx, uiLocale } from './i18n.js';
 import { invoke } from './control.js';
 import { el } from './dom.js';
 import { busy, done } from './notices.js';
@@ -24,6 +24,11 @@ let warnings = [];
 function slug(name) {
   const plain = name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return (/^[a-z]/.test(plain) ? plain : `lead-${plain}`).slice(0, 64).replace(/-+$/, '') || 'lead';
+}
+
+/** Unix seconds in the device's locale. */
+function when(seconds) {
+  return seconds ? new Date(seconds * 1000).toLocaleString(uiLocale()) : '';
 }
 
 /** Reads the leads; the editor and the panel use the same list. */
@@ -49,6 +54,9 @@ function newId(name) {
  */
 async function renderLeads(container, { editable, coordinator }) {
   try { await readLeads(); } catch (error) { container.replaceChildren(el('p', { class: 'callout error', role: 'alert', textContent: String(error?.message ?? error) })); return; }
+  // Each lead's latest shift: whether it follows runs now, its last look and what it decided.
+  const shifts = new Map();
+  try { for (const shift of (await invoke('workflow_lead_shifts', { limit: 50 })).shifts ?? []) if (!shifts.has(shift.lead)) shifts.set(shift.lead, shift); } catch { /* shown without shifts */ }
   let providers = [];
   if (coordinator) {
     try { providers = ((await invoke('implementation_catalog', { machine: coordinator })).providers ?? []).filter(p => p.id === 'claude'); } catch { /* offered as saved */ }
@@ -91,8 +99,17 @@ async function renderLeads(container, { editable, coordinator }) {
         await renderLeads(container, { editable, coordinator });
       });
     };
+    const shift = shifts.get(lead.id);
+    const following = shift && shift.state !== 'ended';
+    const look = el('button', { type: 'button', class: 'secondary small', textContent: t('Look now'), hidden: !following || !editable });
+    look.onclick = () => busy(look, async () => { await invoke('workflow_lead_wake', { lead: lead.id }); done(t('{name} looks at its runs at its next tick.', { name: lead.name })); });
+    const last = shift?.last_wake;
+    const state = !shift ? null : following
+      ? `${shift.state === 'failing' ? t('Its turns are failing') : t('Following its runs')}${last ? ` · ${t('last look {time}', { time: when(last.at) })}` : ''} · ${t('{n} decisions', { n: String(shift.decisions ?? 0) })}`
+      : t('Last shift ended {time}', { time: when(shift.ended_at) });
     return el('div', { class: 'resource', 'data-lead': lead.id },
-      el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), edit, remove),
+      el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), look, edit, remove),
+      state ? el('p', { class: 'hint lead-shift', textContent: state }) : null,
       el('p', { class: 'resource-facts' }, el('small', { textContent: [`Claude · ${lead.agent.model} · ${lead.agent.effort}`, lead.enabled === false ? t('Off') : null,
         workflows.length ? t('Leads {names}', { names: workflows.join(', ') }) : t('Leads no workflow yet')].filter(Boolean).join(' · ') })),
       lead.description ? el('p', { class: 'hint', textContent: lead.description }) : null);

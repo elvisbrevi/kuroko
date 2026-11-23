@@ -530,6 +530,13 @@ Knowledge
   workflows resume RUN --confirmed       Continues a failed, interrupted or needs_attention run from its
                            stage, accepting what stopped it; never submits a plan or starts a started
                            coding run again.
+  workflows leads shifts [LEAD] [--run RUN] | leads wake LEAD
+                           A lead's shifts: while its workflows have active runs, a Claude conversation
+                           on the coordinator woken by what happens to them (at most every 5 minutes, 48
+                           a day), with its turns, its journal of notes, decisions (in shadow, recorded
+                           only) and findings, and its record once ended (in brief without LEAD,
+                           whole with it; --run, what was recorded about one run). wake asks it to look
+                           at its next tick.
   workflows leads list | leads show LEAD | leads save < lead.json | leads remove LEAD --confirmed
                            Workflow leads: agents you name (Claude on the coordinator, with a model and
                            effort) that follow the runs of the workflows that name them (a workflow's
@@ -765,6 +772,12 @@ fn words(args: &[String]) -> Vec<&str> {
                 | "--note"
                 | "--note-file"
                 | "--sessions"
+                | "--run"
+                | "--child"
+                | "--branch"
+                | "--pull-request"
+                | "--wiki-page"
+                | "--dependency"
         ) {
             skip = 1;
         } else if !arg.starts_with("--") {
@@ -1368,6 +1381,17 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
         }
         (Some("leads"), Some("list")) => ("workflow_leads_list", json!({})),
         (Some("leads"), Some("show")) => ("workflow_lead_show", json!({"lead": id(3)?})),
+        (Some("leads"), Some("shifts")) => {
+            let mut body = json!({});
+            if let Some(lead) = words.get(3) {
+                body["lead"] = json!(lead);
+            }
+            if let Some(run) = option(args, "--run") {
+                body["run"] = json!(run);
+            }
+            ("workflow_lead_shifts", body)
+        }
+        (Some("leads"), Some("wake")) => ("workflow_lead_wake", json!({"lead": id(3)?})),
         (Some("leads"), Some("save")) => ("workflow_lead_save", json!({"lead": input()?})),
         (Some("leads"), Some("remove")) => {
             let lead = id(3)?;
@@ -2907,7 +2931,13 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["workflows", "show" | "remove" | "enable" | "disable", _]
             | ["workflows", "blocks", "list" | "save"]
             | ["workflows", "leads", "list" | "save"]
-            | ["workflows", "leads", "show" | "remove", _]
+            | [
+                "workflows",
+                "leads",
+                "show" | "remove" | "wake" | "shifts",
+                _
+            ]
+            | ["workflows", "leads", "shifts"]
             | ["workflows", "blocks", "remove", _]
             | ["notes", "list" | "add"]
             | ["notes", "search" | "edit" | "remove", _]
@@ -3237,7 +3267,13 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             matches!(p.as_slice(), ["workflows", "requeue", _]),
         ),
         ("--sessions", p.as_slice() == ["workflows", "pause"]),
-        ("--run", p.as_slice() == ["workflows", "findings"]),
+        (
+            "--run",
+            matches!(
+                p.as_slice(),
+                ["workflows", "findings"] | ["workflows", "leads", "shifts", ..]
+            ),
+        ),
         (
             "--dependency",
             matches!(p.as_slice(), ["workflows", "skip-wait", _]),
@@ -5009,6 +5045,9 @@ mod wiki_tests {
             &["workflows", "leads", "show", "Pagos"],
             &["workflows", "leads", "save"],
             &["workflows", "leads", "remove", "pagos", "--confirmed"],
+            &["workflows", "leads", "shifts"],
+            &["workflows", "leads", "shifts", "Pagos", "--run", "r"],
+            &["workflows", "leads", "wake", "Pagos"],
             &["workflows", "find", "r", "--child", "200"],
             &[
                 "workflows",

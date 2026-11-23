@@ -454,7 +454,7 @@ async fn spawn(
 }
 
 /// The JSON-RPC reply of the SDK MCP server `kuroko` to one message of the CLI.
-fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
+pub(super) fn mcp_reply(reporter: &super::Reporter, message: &Value) -> Value {
     let id = message.get("id").cloned().filter(|id| !id.is_null());
     let result = match message["method"].as_str().unwrap_or_default() {
         "initialize" => Ok(json!({

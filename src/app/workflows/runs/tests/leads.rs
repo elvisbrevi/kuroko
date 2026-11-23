@@ -1,0 +1,164 @@
+//! A workflow lead's shift end to end, with a fake Claude: opened when a run of its workflow is
+//! active, woken by what changed with the opening and the facts, its decisions recorded beside
+//! the run's state and never applied, a person's request answered at once, and ended with its
+//! record when the last run has ended.
+use super::*;
+use crate::workflows::lead::{Lead, WorkflowLead};
+
+fn lead_to(bench: &Bench) {
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflow_leads = vec![Lead {
+        id: "pagos".into(),
+        name: "Pagos".into(),
+        description: "Say what is left in plain words.".into(),
+        agent: Agent {
+            provider: "claude".into(),
+            model: "model".into(),
+            effort: "high".into(),
+            time_limit_minutes: None,
+        },
+        enabled: true,
+        updated_at: 0,
+    }];
+    map.workflows[0].lead = Some(WorkflowLead { id: "pagos".into() });
+    map.workflows[0].done_when = "Done once its pull request is completed.".into();
+    bench.host.state.settings.save_map(&map).unwrap();
+}
+
+fn shift(bench: &Bench) -> super::super::shifts::Shift {
+    bench
+        .host
+        .state
+        .workflows
+        .shifts
+        .list(Some("pagos"), 1)
+        .unwrap()
+        .remove(0)
+}
+
+/// Tick until the lead's shift has `turns` turns.
+async fn turns(bench: &Bench, turns: usize) -> super::super::shifts::Shift {
+    for _ in 0..400 {
+        bench.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let found = bench
+            .host
+            .state
+            .workflows
+            .shifts
+            .list(Some("pagos"), 1)
+            .unwrap();
+        if found.first().is_some_and(|s| s.wakes.len() >= turns) {
+            return found.into_iter().next().unwrap();
+        }
+    }
+    panic!("the lead took no turn {turns}");
+}
+
+#[tokio::test]
+async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_record() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    bench
+        .until(&id, |r| {
+            r.state == Phase::Coding && r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    fs::write(
+        bench.log.join("lead_call"),
+        format!("{}\n", json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lead_decide","arguments":{"run":id,"decision":"wait","reason":"Its agent is still coding."}}}}})),
+    )
+    .unwrap();
+    let first = turns(&bench, 1).await;
+    assert_eq!(first.state, "active");
+    assert_eq!(first.wakes[0].outcome, "done", "{:?}", first.wakes);
+    assert_eq!(first.session_id.as_deref(), Some("ses_lead"));
+    // The opening: its rules, who it is, its workflow's criteria, what happened and the facts.
+    let prompt = fs::read_to_string(bench.log.join("lead_prompts")).unwrap();
+    for expected in [
+        "You are Pagos",
+        "Say what is left",
+        "Done once its pull request is completed",
+        "is now yours to follow",
+        "Your runs now",
+    ] {
+        assert!(prompt.contains(expected), "{expected}: {prompt}");
+    }
+    // Its decision is recorded beside the run's state, never applied.
+    let decision = first.journal.iter().find(|e| e.kind == "decision").unwrap();
+    assert_eq!(decision.decision.as_deref(), Some("wait"));
+    assert_eq!(decision.engine.as_deref(), Some("coding"));
+    assert_eq!(bench.run(&id).state, Phase::Coding);
+    // Listed brief: its state, last look and how many decisions, without its journal.
+    let listed =
+        super::super::shifts::operation(&bench.host, "workflow_lead_shifts", &json!({})).unwrap();
+    assert_eq!(listed["shifts"][0]["decisions"], 1, "{listed}");
+    assert!(listed["shifts"][0].get("journal").is_none());
+    // Nothing new and within the interval: no other turn.
+    bench.tick().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(shift(&bench).wakes.len(), 1);
+    // A person's request is answered at once, in the same conversation.
+    super::super::shifts::operation(&bench.host, "workflow_lead_wake", &json!({"lead": "Pagos"}))
+        .unwrap();
+    let second = turns(&bench, 2).await;
+    assert_eq!(second.wakes[1].outcome, "done");
+    let args = fs::read_to_string(bench.log.join("lead_args.1")).unwrap();
+    assert!(args.contains("--resume\nses_lead"), "{args}");
+    // The run ends: the closing turn ends the shift with its record.
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    bench.release();
+    bench.state(&id, Phase::PullRequests).await;
+    bench.pulls(WEB, "payments-web", "feature/child-1", 21, "completed");
+    bench.state(&id, Phase::Done).await;
+    bench.offset.store(600, Ordering::SeqCst);
+    let mut ended = shift(&bench);
+    for _ in 0..400 {
+        bench.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        ended = shift(&bench);
+        if ended.state == "ended" {
+            break;
+        }
+    }
+    assert_eq!(ended.state, "ended", "{:?}", ended.wakes);
+    let record = ended.record.unwrap();
+    assert_eq!(record["summary"], "The lead wrote no summary.");
+    assert_eq!(record["runs"][0]["state"], "done");
+    // Its runs were driven by the engine alone, and nothing was written.
+    assert_eq!(bench.count("starts"), 1);
+    assert!(bench.catalog.only_reads());
+}
+
+#[tokio::test]
+async fn a_lead_turned_off_ends_its_shift_without_a_turn_and_takes_no_request() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    bench
+        .until(&id, |r| {
+            r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    turns(&bench, 1).await;
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflow_leads[0].enabled = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.tick().await;
+    let ended = shift(&bench);
+    assert_eq!(ended.state, "ended");
+    assert_eq!(ended.wakes.len(), 1);
+    assert_eq!(ended.record.unwrap()["runs"][0]["run"], id.as_str());
+    let refused = super::super::shifts::operation(
+        &bench.host,
+        "workflow_lead_wake",
+        &json!({"lead": "pagos"}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("is off"), "{refused}");
+    bench.release();
+}

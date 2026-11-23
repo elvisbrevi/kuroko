@@ -502,7 +502,7 @@ struct Call {
     result: Option<Value>,
 }
 pub(super) struct State {
-    root: PathBuf,
+    pub(in crate::app) root: PathBuf,
     registry: Mutex<Registry>,
     tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
     calls: Mutex<Vec<Call>>,

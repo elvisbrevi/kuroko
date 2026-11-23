@@ -7,7 +7,7 @@ import { invoke } from './control.js';
 import { badge, el } from './dom.js';
 import { busy, done, notify } from './notices.js';
 import { link } from './markdown.js';
-import { failureText, stageLabel } from './run-states.js';
+import { failureText, runStateLabel, stageLabel } from './run-states.js';
 import { sessionLifeBadge } from './sessions.js';
 import { STAGE_NAMES } from './workflow-blocks.js';
 
@@ -196,4 +196,26 @@ function findingsPanel(findings, refresh, id, title) {
   return el('details', { class: 'fold', open: true, id }, el('summary', { textContent: title }), el('div', { class: 'list' }, ...rows));
 }
 
-export { blocks, children, dependencies, findingsPanel, foundPanels, otherBranches, rounds, timeline, when };
+/** What a decision of a lead means, as the person reads it. */
+const DECISIONS = { settle: 'Settle its child', close: 'Close the run', wait: 'Keep waiting', continue: 'Continue its agent session', ask_person: 'Ask you' };
+/**
+ * What the run's workflow lead recorded about it (`workflow_lead_shifts` with `run`): its
+ * decisions (in shadow, recorded and not applied, beside the run's state then), notes and findings.
+ */
+/** The run's state beside a lead's decision, as the host wrote it: `state` or `state in stage`. */
+function engineState(engine) {
+  const [state, stage] = engine.split(' in ');
+  return stage ? t('{state} in {stage}', { state: runStateLabel(state), stage: stageLabel(stage) }) : runStateLabel(state);
+}
+
+function leadPanel(shifts) {
+  const entries = shifts.flatMap(s => s.journal ?? []).sort((a, b) => b.at - a.at);
+  if (!entries.length) return el('div', {});
+  const rows = entries.map(e => el('li', {},
+    badge(e.kind === 'decision' ? t(DECISIONS[e.decision] ?? e.decision) : e.kind === 'finding' ? t('Finding') : t('Note'), e.kind === 'decision' ? 'info' : 'muted'), ' ',
+    el('span', { textContent: e.text }),
+    el('small', { textContent: ` · ${when(e.at)}${e.engine ? ` · ${t('the run was {state}', { state: engineState(e.engine) })}` : ''}` })));
+  return el('details', { class: 'fold', open: true, id: 'run-lead' }, el('summary', { textContent: t('What its lead said (in shadow: nothing is applied)') }), el('ul', { class: 'run-pulls' }, ...rows));
+}
+
+export { blocks, children, dependencies, findingsPanel, foundPanels, leadPanel, otherBranches, rounds, timeline, when };

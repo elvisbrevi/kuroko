@@ -672,6 +672,15 @@
       return { run: run.id, ahead: Boolean(args.ahead), ahead_since: run.ahead_since };
     },
     workflow_leads_list: () => ({ leads: (window.__ptaLeads ??= [{ lead: { id: 'pagos', name: 'Pagos', description: 'Payment workflows: report what is left in plain words.', agent: { provider: 'claude', model: 'claude-opus-5-5', effort: 'high' }, enabled: true, updated_at: 0 }, workflows: ['payments-features'] }]).map(l => structuredClone(l)), editable: true }),
+    workflow_lead_shifts: args => {
+      const shifts = [{ id: 's1', lead: 'pagos', state: 'active', opened_at: secs(NOW - 7_200_000), wakes: [{ at: secs(NOW - 600_000), events: 2, outcome: 'done', text: 'Waiting for its pull request.' }],
+        journal: [{ at: secs(NOW - 600_000), kind: 'decision', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', decision: 'wait', text: 'Its pull request is open for review.', engine: 'needs_attention in pull_requests' }] }];
+      // As the host lists them: a run's entries with `run`, the whole shift with `lead`, else brief.
+      const brief = s => ({ id: s.id, lead: s.lead, state: s.state, opened_at: s.opened_at, ended_at: s.ended_at ?? null, last_wake: s.wakes.at(-1) ?? null, pending: 0, decisions: s.journal.filter(e => e.kind === 'decision').length, summary: null });
+      if (args.run) return { shifts: shifts.filter(s => s.journal.some(e => e.run === args.run)).map(s => ({ ...brief(s), journal: s.journal.filter(e => e.run === args.run) })) };
+      return { shifts: args.lead ? shifts : shifts.map(brief) };
+    },
+    workflow_lead_wake: args => { window.__ptaWorkflowCalls.push({ method: 'workflow_lead_wake', ...structuredClone(args) }); return { shift: 's1', requested: true }; },
     workflow_lead_save: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_lead_save', ...structuredClone(args) });
       const leads = window.__ptaLeads ??= [];

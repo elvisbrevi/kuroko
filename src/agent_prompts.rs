@@ -205,6 +205,14 @@ pub const BUILT_IN: &[BuiltIn] = &[
         prompts::RUNNER_REPORTS
     ),
     built_in!(
+        "rules.lead",
+        "agent_rules",
+        "Workflow lead",
+        "What a workflow lead is told at the start of its conversation: name is the lead's name and language the language it answers in.",
+        prompts::LEAD_RULES,
+        ["name", "language"]
+    ),
+    built_in!(
         "rules.json",
         "agent_rules",
         "JSON answer",
