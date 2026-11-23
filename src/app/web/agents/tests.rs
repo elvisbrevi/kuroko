@@ -885,6 +885,7 @@ fn arguments(tool: &tools::Tool) -> Value {
         "organization_update" => json!({"name":"Synthetic"}),
         "teams_reading_update" => json!({"all_chats":false}),
         "source_authorize" => json!({"id":"synthetic","enabled":false}),
+        "source_update" => json!({"id":"synthetic","change":{"description":"Synthetic"}}),
         "assistant_mode" => json!({"mode":"observe"}),
         "assistant_control" => json!({"action":"stop"}),
         _ => args,

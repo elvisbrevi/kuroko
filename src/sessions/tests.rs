@@ -91,6 +91,7 @@ fn opencode_session(root: &Path, id: &str, minutes: u64, asked: &str, answer: &s
 }
 fn roots(dir: &Path) -> Roots {
     Roots {
+        home: None,
         claude: Some(dir.join("claude")),
         codex: Some(dir.join("codex")),
         opencode: Some(dir.join("opencode")),
@@ -125,7 +126,7 @@ fn the_most_recent_sessions_across_the_three_clis_come_newest_first() {
             "Drained.",
         );
     }
-    let listing = local(&roots, 10, "laptop");
+    let listing = local(&roots, 10, "laptop", &Filter::default());
     assert!(listing.unavailable.is_empty(), "{:?}", listing.unavailable);
     let order: Vec<_> = listing
         .sessions
@@ -187,8 +188,18 @@ fn the_most_recent_sessions_across_the_three_clis_come_newest_first() {
         assert!(!text.contains(never), "{never}");
     }
     // The number asked for is respected.
-    assert_eq!(local(&roots, 3, "laptop").sessions.len(), 3);
-    assert_eq!(local(&roots, 50, "laptop").sessions.len(), 12);
+    assert_eq!(
+        local(&roots, 3, "laptop", &Filter::default())
+            .sessions
+            .len(),
+        3
+    );
+    assert_eq!(
+        local(&roots, 50, "laptop", &Filter::default())
+            .sessions
+            .len(),
+        12
+    );
 }
 
 #[test]
@@ -217,7 +228,7 @@ fn secrets_never_reach_a_summary_or_its_evidence() {
         &asked,
         &answer,
     );
-    let listing = local(&roots, 10, "laptop");
+    let listing = local(&roots, 10, "laptop", &Filter::default());
     assert_eq!(listing.sessions.len(), 3);
     let keys: Vec<(String, &Summary)> = listing
         .sessions
@@ -288,7 +299,7 @@ fn private_and_empty_sessions_are_left_out_and_an_unreadable_store_is_unavailabl
         .unwrap()
         .execute_batch("CREATE TABLE other(id TEXT);")
         .unwrap();
-    let listing = local(&roots, 10, "laptop");
+    let listing = local(&roots, 10, "laptop", &Filter::default());
     let ids: Vec<_> = listing
         .sessions
         .iter()
@@ -331,6 +342,7 @@ fn an_opencode_database_is_read_without_its_tool_parts_or_sub_agents() {
         },
         10,
         "server",
+        &Filter::default(),
     );
     assert_eq!(listing.sessions.len(), 1);
     let session = &listing.sessions[0];
@@ -353,7 +365,7 @@ fn listings_merge_newest_first_and_name_the_runs_pta_started() {
         [
             Listing {
                 sessions: vec![summary("a", "2026-11-12T10:00:00Z")],
-                unavailable: vec![],
+                ..Default::default()
             },
             Listing {
                 sessions: vec![
@@ -365,6 +377,7 @@ fn listings_merge_newest_first_and_name_the_runs_pta_started() {
                     provider: String::new(),
                     reason: "offline".into(),
                 }],
+                ..Default::default()
             },
         ],
         10,
@@ -417,6 +430,7 @@ fn a_long_session_is_read_from_its_start_and_its_end_and_long_lines_are_skipped(
         },
         10,
         "",
+        &Filter::default(),
     );
     let session = &listing.sessions[0];
     assert_eq!(
@@ -494,7 +508,7 @@ fn the_private_mark_is_seen_in_any_form_and_anywhere_in_the_session() {
             agent("said", "Write #private in a request."),
         ],
     );
-    let listing = local(&claude_only(dir.path()), 10, "m");
+    let listing = local(&claude_only(dir.path()), 10, "m", &Filter::default());
     let ids: Vec<_> = listing
         .sessions
         .iter()
@@ -518,10 +532,10 @@ fn secrets_in_every_shape_never_reach_a_summary() {
         "Rotated most of them.\nexport API_KEY=sk-live-abc.def123 is still not yet rotated\nThe deploy is still pending.", // gitleaks:allow
     );
     assert_eq!(open, "The deploy is still pending");
-    // Ordinary words are kept.
+    // Ordinary words are kept (who did something is not: see the work item test).
     assert_eq!(
-        scrubber.scrub("Author: Ana. Tests passed: 12. Design: done."),
-        "Author: Ana. Tests passed: 12. Design: done."
+        scrubber.scrub("Reviewer notes. Tests passed: 12. Design: done."),
+        "Reviewer notes. Tests passed: 12. Design: done."
     );
 }
 
@@ -561,7 +575,7 @@ fn code_blocks_and_injected_text_are_dropped_by_their_own_markers() {
             agent("c", "Fixed."),
         ],
     );
-    let listing = local(&claude_only(dir.path()), 10, "m");
+    let listing = local(&claude_only(dir.path()), 10, "m", &Filter::default());
     let session = &listing.sessions[0];
     assert_eq!(
         (session.asked.as_str(), session.latest.as_str()),
@@ -598,8 +612,8 @@ fn absolute_paths_keep_only_their_last_component() {
         ("<p>/home/name/clients/y</p>", "<p>y</p>"),
         ("@/home/name/clients/z", "@z"),
         (
-            "PR at https://dev.azure.com/org/proj/_git/repo/pullrequest/12",
-            "PR at https://dev.azure.com/org/proj/_git/repo/pullrequest/12",
+            "Docs at https://dev.azure.com/org/proj/_git/repo?path=/home/x",
+            "Docs at https://dev.azure.com/org/proj/_git/repo?path=/home/x",
         ),
     ] {
         assert_eq!(scrubber.scrub(text), kept, "{text}");
@@ -630,6 +644,7 @@ fn a_store_or_session_that_cannot_be_read_is_unavailable_not_empty() {
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.sessions.is_empty());
     assert_eq!(
@@ -652,7 +667,7 @@ fn a_store_or_session_that_cannot_be_read_is_unavailable_not_empty() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         // Only meaningful when permissions bind (not as root).
         if std::fs::File::open(&path).is_err() {
-            let listing = local(&claude_only(dir.path()), 10, "m");
+            let listing = local(&claude_only(dir.path()), 10, "m", &Filter::default());
             assert!(listing.sessions.is_empty());
             assert_eq!(listing.unavailable[0].reason, "unreadable");
         }
@@ -728,6 +743,7 @@ fn opencode_reads_its_latest_messages_and_marks_beyond_them() {
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.unavailable.is_empty(), "{:?}", listing.unavailable);
     let ids: Vec<_> = listing
@@ -783,6 +799,7 @@ fn opencode_files_are_private_by_a_mark_beyond_the_messages_summarized() {
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.sessions.is_empty());
     assert!(listing.unavailable.is_empty());
@@ -815,7 +832,11 @@ fn a_mark_that_starts_a_line_is_seen_where_the_file_is_not_parsed() {
             agent("newline-long", "Done"),
         ],
     );
-    assert!(local(&claude_only(dir.path()), 10, "m").sessions.is_empty());
+    assert!(
+        local(&claude_only(dir.path()), 10, "m", &Filter::default())
+            .sessions
+            .is_empty()
+    );
     // An OpenCode file-store request beyond the messages summarized.
     let root = dir.path().join("opencode");
     let storage = root.join("storage");
@@ -843,6 +864,7 @@ fn a_mark_that_starts_a_line_is_seen_where_the_file_is_not_parsed() {
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.sessions.is_empty() && listing.unavailable.is_empty());
 }
@@ -965,6 +987,7 @@ fn opencode_marks_hide_behind_no_other_part_and_an_unreadable_part_fails_its_ses
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.sessions.is_empty() && listing.unavailable.is_empty());
     // A file-store part that cannot be read fails its session.
@@ -983,6 +1006,7 @@ fn opencode_marks_hide_behind_no_other_part_and_an_unreadable_part_fails_its_ses
         },
         10,
         "m",
+        &Filter::default(),
     );
     assert!(listing.sessions.is_empty());
     assert_eq!(listing.unavailable[0].reason, "unreadable");
@@ -1142,5 +1166,594 @@ fn the_final_report_of_a_continued_claude_session_is_its_last_answer_after_the_s
     assert_eq!(
         claude_final_answer(root.path(), private, &stopped).unwrap(),
         None
+    );
+}
+
+/// OpenCode's second database layout, as its newer versions write it: sessions in
+/// `session_v2`, each message with its content in `session_message`, `session_part` alongside,
+/// and other tables (accounts, credentials) that are never read.
+fn second_layout(root: &Path) -> rusqlite::Connection {
+    std::fs::create_dir_all(root).unwrap();
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE session_v2(id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, slug TEXT NOT NULL, directory TEXT NOT NULL, title TEXT, version TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
+         CREATE TABLE session_message(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+         CREATE TABLE session_part(message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+         CREATE TABLE credential(id TEXT, value TEXT);
+         INSERT INTO credential VALUES('c', 'oc_live_SYNTHETICCREDENTIAL9f8e7d6c5b4a'); -- gitleaks:allow",
+    )
+    .unwrap();
+    db
+}
+fn second_message(db: &rusqlite::Connection, session: &str, seq: i64, kind: &str, data: Value) {
+    db.execute(
+        "INSERT INTO session_message VALUES(?1, ?2, ?3, ?4, ?5, ?5, ?6)",
+        rusqlite::params![
+            format!("{session}-m{seq}"),
+            session,
+            kind,
+            seq,
+            1_793_000_000_000i64 + seq * 1000,
+            data.to_string()
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_second_opencode_layout_is_read_from_its_messages_without_reasoning_or_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("opencode");
+    let db = second_layout(&root);
+    db.execute_batch(
+        "INSERT INTO session_v2 VALUES('ses_a', 'p1', NULL, 'a', '/home/user/src/gateway', 'Gateway', '1', 1793000000000, 1793000600000, NULL);
+         INSERT INTO session_v2 VALUES('ses_child', 'p1', 'ses_a', 'b', '/home/user/src/gateway', 'Sub', '1', 1793000000000, 1793000900000, NULL);
+         INSERT INTO session_v2 VALUES('ses_private', 'p1', NULL, 'c', '/home/user/src/gateway', 'Mine', '1', 1793000000000, 1793000700000, NULL);
+         INSERT INTO session_v2 VALUES('ses_parts', 'p1', NULL, 'd', '/home/user/src/queue', 'Queue', '1', 1793000000000, 1793000500000, NULL);",
+    )
+    .unwrap();
+    second_message(
+        &db,
+        "ses_a",
+        1,
+        "system",
+        json!({"text":"SYSTEM NOTICE","time":{"created":1}}),
+    );
+    second_message(
+        &db,
+        "ses_a",
+        2,
+        "user",
+        json!({"text":"Why does the gateway return 502?","files":[],"agents":[],"time":{"created":1}}),
+    );
+    second_message(
+        &db,
+        "ses_a",
+        3,
+        "assistant",
+        json!({"content":[
+        {"type":"reasoning","text":"REASONING SHOULD NEVER APPEAR"},
+        {"type":"tool","id":"t1","name":"bash","state":{"output":"TOOL OUTPUT SHOULD NEVER APPEAR"}},
+        {"type":"text","text":"The upstream pool is exhausted; raising it is still pending."}],"time":{"created":2}}),
+    );
+    second_message(
+        &db,
+        "ses_a",
+        4,
+        "idle",
+        json!({"outcome":"done","time":{"created":3}}),
+    );
+    second_message(
+        &db,
+        "ses_child",
+        1,
+        "user",
+        json!({"text":"Sub-agent request"}),
+    );
+    second_message(
+        &db,
+        "ses_private",
+        1,
+        "user",
+        json!({"text":"Look at my notes"}),
+    );
+    second_message(
+        &db,
+        "ses_private",
+        2,
+        "assistant",
+        json!({"content":[{"type":"text","text":"Done."}]}),
+    );
+    second_message(
+        &db,
+        "ses_private",
+        3,
+        "user",
+        json!({"text":"#private and these too"}),
+    );
+    // A message that keeps its text in parts.
+    second_message(&db, "ses_parts", 1, "user", json!({"time":{"created":1}}));
+    second_message(
+        &db,
+        "ses_parts",
+        2,
+        "assistant",
+        json!({"time":{"created":2}}),
+    );
+    for (message, ordinal, kind, data) in [
+        (
+            "ses_parts-m1",
+            0,
+            "text",
+            json!({"type":"text","text":"Drain the dead letter queue"}),
+        ),
+        (
+            "ses_parts-m2",
+            0,
+            "tool",
+            json!({"type":"tool","state":{"output":"PART TOOL OUTPUT"}}),
+        ),
+        (
+            "ses_parts-m2",
+            1,
+            "text",
+            json!({"type":"text","text":"Drained 40 messages."}),
+        ),
+        (
+            "ses_parts-m2",
+            2,
+            "text",
+            json!({"type":"text","text":"SYNTHETIC PART","synthetic":true}),
+        ),
+    ] {
+        db.execute(
+            "INSERT INTO session_part VALUES(?1, 'ses_parts', ?2, ?3, NULL, 1, 1, ?4)",
+            rusqlite::params![message, ordinal, kind, data.to_string()],
+        )
+        .unwrap();
+    }
+    drop(db);
+    let listing = local(
+        &Roots {
+            opencode: Some(root),
+            ..Default::default()
+        },
+        10,
+        "server",
+        &Filter::default(),
+    );
+    assert!(listing.unavailable.is_empty(), "{:?}", listing.unavailable);
+    let ids: Vec<_> = listing
+        .sessions
+        .iter()
+        .map(|s| s.session_id.as_str())
+        .collect();
+    assert_eq!(ids, ["ses_a", "ses_parts"]);
+    let session = &listing.sessions[0];
+    assert_eq!(session.project, "gateway");
+    assert_eq!(session.asked, "Why does the gateway return 502?");
+    assert_eq!(
+        session.concluded,
+        "The upstream pool is exhausted; raising it is still pending."
+    );
+    assert_eq!(session.updated_at, from_millis(1_793_000_600_000).unwrap());
+    assert_eq!(listing.sessions[1].asked, "Drain the dead letter queue");
+    assert_eq!(listing.sessions[1].concluded, "Drained 40 messages.");
+    let text = serde_json::to_string(&listing).unwrap();
+    for never in [
+        "REASONING",
+        "TOOL OUTPUT",
+        "SYSTEM NOTICE",
+        "SYNTHETIC PART",
+        "oc_live",
+        "Sub-agent",
+    ] {
+        assert!(!text.contains(never), "{never} in {text}");
+    }
+}
+
+#[test]
+fn an_unknown_second_layout_is_unreadable_not_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("opencode");
+    std::fs::create_dir_all(&root).unwrap();
+    // `session_v2` without the messages' known columns, and no first layout to fall back to.
+    rusqlite::Connection::open(root.join("opencode.db"))
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE session_v2(id TEXT, directory TEXT, time_created INTEGER, time_updated INTEGER);
+             CREATE TABLE session_message(id TEXT, session_id TEXT, body TEXT);
+             INSERT INTO session_v2 VALUES('ses_a', '/home/user/x', 1, 2);",
+        )
+        .unwrap();
+    let listing = local(
+        &Roots {
+            opencode: Some(root),
+            ..Default::default()
+        },
+        10,
+        "server",
+        &Filter::default(),
+    );
+    assert!(listing.sessions.is_empty());
+    assert_eq!(listing.unavailable.len(), 1);
+    assert_eq!(listing.unavailable[0].reason, "unreadable");
+}
+
+#[test]
+fn a_project_is_its_repository_whatever_worktree_the_session_ran_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let src = home.join("src");
+    std::fs::create_dir_all(src.join("hobby-game/.git")).unwrap();
+    std::fs::create_dir_all(src.join("journal/.git/worktrees/wt")).unwrap();
+    // A linked worktree outside the repository.
+    let linked = home.join("worktrees/journal-wt");
+    std::fs::create_dir_all(linked.join("sub")).unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!(
+            "gitdir: {}\n",
+            src.join("journal/.git/worktrees/wt").display()
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(src.join("drafts/sketchbook")).unwrap();
+    let of = |cwd: PathBuf| Project::of(&cwd.to_string_lossy(), Some(&home));
+    // A Claude Code worktree, even one already removed, is its repository.
+    let game = of(src.join("hobby-game/.claude/worktrees/feature-x"));
+    assert_eq!(game.name, "hobby-game");
+    assert_eq!(of(src.join("hobby-game/assets/levels")).name, "hobby-game");
+    assert_eq!(of(linked.join("sub")).name, "journal");
+    let plain = of(src.join("drafts/sketchbook"));
+    assert_eq!(plain.name, "sketchbook");
+    let at_src = of(src.clone());
+    assert_eq!(at_src.name, "src");
+    let excluding = |entries: &[&str]| Filter {
+        exclude_projects: entries.iter().map(|e| e.to_string()).collect(),
+        only_projects: vec![],
+    };
+    for entry in [
+        "hobby-game",
+        "Hobby-game",
+        "~/src/hobby-game/",
+        "src/hobby-game",
+        "src",
+    ] {
+        assert!(!excluding(&[entry]).admits(&game), "{entry}");
+    }
+    for entry in ["drafts", "drafts/sketchbook", "sketchbook", "~/src/drafts"] {
+        assert!(!excluding(&[entry]).admits(&plain), "{entry}");
+    }
+    // An entry names whole directories, not a part of one.
+    for entry in ["hobby", "game", "src/journal", "drafts/other"] {
+        assert!(excluding(&[entry]).admits(&game), "{entry}");
+    }
+    let only = Filter {
+        exclude_projects: vec![],
+        only_projects: vec!["journal".into()],
+    };
+    assert!(only.admits(&of(linked.clone())));
+    assert!(!only.admits(&game));
+    assert!(
+        !only.admits(&Project::of("", Some(&home))),
+        "unknown project"
+    );
+    assert!(Filter::default().admits(&Project::of("", Some(&home))));
+    // Entries are names or directories under the home, bounded.
+    for invalid in [
+        "",
+        "  ",
+        "../etc",
+        "a/./b",
+        "/home/user/src/hobby-game",
+        r"C:\Users\user\src\hobby-game",
+        "$HOME/src",
+        &"x".repeat(121),
+    ] {
+        assert!(excluding(&[invalid]).validate().is_err(), "{invalid:?}");
+    }
+    assert!(
+        excluding(&["hobby-game", "drafts/sketchbook"])
+            .validate()
+            .is_ok()
+    );
+    assert!(excluding(&["p"; 101]).validate().is_err());
+}
+
+#[test]
+fn an_excluded_project_never_leaves_its_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join("src/hobby-game/.git")).unwrap();
+    std::fs::create_dir_all(home.join("src/payments/.git")).unwrap();
+    let claude = dir.path().join("claude");
+    for (id, cwd, minutes) in [
+        ("kept", home.join("src/payments"), 1),
+        (
+            "excluded",
+            home.join("src/hobby-game/.claude/worktrees/bridge-x"),
+            2,
+        ),
+    ] {
+        let path = claude.join(format!("projects/p/{id}.jsonl"));
+        write_lines(
+            &path,
+            &[
+                json!({"type":"user","cwd":cwd,"message":{"role":"user","content":format!("Publish the {id} build")},"timestamp":at(minutes)}),
+                json!({"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Published."}]},"timestamp":at(minutes)}),
+            ],
+        );
+        touch(&path, minutes);
+    }
+    let roots = Roots {
+        home: Some(home),
+        claude: Some(claude),
+        ..Default::default()
+    };
+    let filter = Filter {
+        exclude_projects: vec!["hobby-game".into()],
+        only_projects: vec![],
+    };
+    let listing = local(&roots, 10, "laptop", &filter);
+    assert!(listing.filtered);
+    let ids: Vec<_> = listing
+        .sessions
+        .iter()
+        .map(|s| s.session_id.as_str())
+        .collect();
+    assert_eq!(ids, ["kept"]);
+    assert_eq!(listing.sessions[0].project, "payments");
+    assert!(
+        !serde_json::to_string(&listing)
+            .unwrap()
+            .contains("excluded")
+    );
+    // Without the filter both are read, and the worktree's session names its repository.
+    let all = local(&roots, 10, "laptop", &Filter::default());
+    assert!(!all.filtered);
+    assert_eq!(all.sessions[0].project, "hobby-game");
+    // A listing gathered without the filter it needed is refused; one with it is checked again
+    // by the project names it carries.
+    assert!(all.clone().admitted(&filter).is_err());
+    assert_eq!(
+        all.clone()
+            .admitted(&Filter::default())
+            .unwrap()
+            .sessions
+            .len(),
+        2
+    );
+    let mut marked = all;
+    marked.filtered = true;
+    let admitted = marked.admitted(&filter).unwrap();
+    assert_eq!(admitted.sessions.len(), 1);
+    assert_eq!(admitted.sessions[0].session_id, "kept");
+}
+
+#[test]
+fn work_items_and_who_did_what_never_reach_a_summary() {
+    let scrubber = Scrubber::new();
+    let text = "Revisé el sprint del equipo.\n\
+        #4521 — Corregir el login de pagos\n\
+        Task 4522 asignada a Ana Pérez: actualizar la API\n\
+        | ID | Título | Responsable |\n\
+        | 4523 | Migrar reportes | Luis |\n\
+        Ver https://dev.azure.com/org/proj/_workitems/edit/4524\n\
+        El PR !87 sigue abierto\n\
+        HU-1234 lista para QA\n\
+        Creado por @Luis ayer\n\
+        La migración de la base terminó y faltan las pruebas de carga.";
+    let kept = scrubber.scrub(text);
+    assert_eq!(
+        kept,
+        "Revisé el sprint del equipo. La migración de la base terminó y faltan las pruebas de carga."
+    );
+    for line in [
+        "Fix #12",
+        "PBI 345",
+        "pull request 77",
+        "tarea nº 88",
+        "see /pull/9",
+        "Fixes AB#12",
+        "PR at https://dev.azure.com/org/proj/_git/repo/pullrequest/12",
+    ] {
+        assert!(scrubber.names_work(line), "{line}");
+        assert!(scrubber.scrub(line).is_empty(), "{line}");
+    }
+    assert!(scrubber.scrub("Author: Ana").is_empty());
+    for line in [
+        "Phase 2 is done",
+        "port 1433 at the firewall",
+        "a 3.2 release",
+        "user@example.com",
+    ] {
+        assert!(!scrubber.names_work(line), "{line}");
+    }
+}
+
+#[test]
+fn names_of_people_are_taken_out_and_found_by_their_capitalized_words() {
+    let names = Names::new(["Ana María Pérez", "Luis de la Mesa", "Bo"]);
+    assert_eq!(
+        names.strip("Ana María Pérez pidió el informe; Luis lo revisa con Perez."),
+        "someone pidió el informe; someone lo revisa con someone."
+    );
+    // Lowercase words and particles are not names; nor are short ones.
+    assert_eq!(
+        names.strip("Lo dejé sobre la mesa de Bo y de la ana"),
+        "Lo dejé sobre la mesa de Bo y de la ana"
+    );
+    assert_eq!(
+        names.found("Le pregunté a Mesa y a María"),
+        ["Mesa", "María"]
+    );
+    assert!(names.found("Ya lo estoy revisando").is_empty());
+    let without = names.clone().without(["Luis"]);
+    assert!(without.found("Hola Luis").is_empty());
+    assert_eq!(without.found("Hola Luis, Ana lo vio"), ["Ana"]);
+    let summary = Summary {
+        asked: "Ask Ana about the release".into(),
+        concluded: "Pérez approved it".into(),
+        ..Default::default()
+    }
+    .without_names(&names);
+    assert_eq!(summary.asked, "Ask someone about the release");
+    assert_eq!(summary.concluded, "someone approved it");
+}
+
+#[test]
+fn an_agent_sessions_source_without_filters_keeps_the_shape_older_hosts_read() {
+    // The variant as hosts before project filters declared it: unknown fields refused.
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum OlderSpec {
+        AgentSessions {
+            #[allow(dead_code)]
+            sessions: usize,
+        },
+    }
+    let spec = crate::tools::ToolSpec::AgentSessions {
+        sessions: 10,
+        exclude_projects: vec![],
+        only_projects: vec![],
+    };
+    let written = serde_json::to_value(&spec).unwrap();
+    assert_eq!(written, json!({"type":"agent_sessions","sessions":10}));
+    assert!(serde_json::from_value::<OlderSpec>(written).is_ok());
+    // A listing without a filter keeps its older shape too.
+    let listing = serde_json::to_value(Listing::default()).unwrap();
+    assert_eq!(listing, json!({"sessions":[],"unavailable":[]}));
+    // With filters the fields are written and read back.
+    let filtered = crate::tools::ToolSpec::AgentSessions {
+        sessions: 5,
+        exclude_projects: vec!["hobby-game".into()],
+        only_projects: vec![],
+    };
+    let text = serde_json::to_string(&filtered).unwrap();
+    assert_eq!(
+        text,
+        r#"{"type":"agent_sessions","sessions":5,"exclude_projects":["hobby-game"]}"#
+    );
+    let back: crate::tools::ToolSpec = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        back.session_filter().unwrap().exclude_projects,
+        ["hobby-game"]
+    );
+}
+
+#[test]
+fn a_home_that_is_a_repository_bare_repositories_and_relative_worktrees_name_their_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    // A home kept as a dotfiles repository is not every directory's project.
+    std::fs::create_dir_all(home.join(".git")).unwrap();
+    std::fs::create_dir_all(home.join("src/drafts/sketchbook")).unwrap();
+    let plain = Project::of(
+        &home.join("src/drafts/sketchbook").to_string_lossy(),
+        Some(&home),
+    );
+    assert_eq!(plain.name, "sketchbook");
+    let excluding = |entry: &str| Filter {
+        exclude_projects: vec![entry.into()],
+        only_projects: vec![],
+    };
+    assert!(!excluding("drafts").admits(&plain));
+    // A worktree of a bare repository (`commondir` names it), and one whose `.git` file points
+    // with a relative path.
+    let bare = home.join("repos/hobby-game.git");
+    std::fs::create_dir_all(bare.join("worktrees/wt")).unwrap();
+    std::fs::write(bare.join("worktrees/wt/commondir"), "../..\n").unwrap();
+    let worktree = home.join("work/wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", bare.join("worktrees/wt").display()),
+    )
+    .unwrap();
+    let in_bare = Project::of(&worktree.to_string_lossy(), Some(&home));
+    assert_eq!(in_bare.name, "hobby-game");
+    assert!(!excluding("hobby-game").admits(&in_bare));
+    std::fs::create_dir_all(home.join("src/journal/.git/worktrees/rel")).unwrap();
+    let relative = home.join("src/journal-rel");
+    std::fs::create_dir_all(&relative).unwrap();
+    std::fs::write(
+        relative.join(".git"),
+        "gitdir: ../journal/.git/worktrees/rel\n",
+    )
+    .unwrap();
+    let in_relative = Project::of(&relative.to_string_lossy(), Some(&home));
+    assert_eq!(in_relative.name, "journal");
+    assert!(!excluding("journal").admits(&in_relative));
+}
+
+#[test]
+fn the_second_opencode_layout_reads_plain_content_and_refuses_unknown_message_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("opencode");
+    let db = second_layout(&root);
+    db.execute_batch(
+        "INSERT INTO session_v2 VALUES('ses_s', 'p1', NULL, 'a', '/home/user/src/gateway', 'G', '1', 1793000000000, 1793000600000, NULL);",
+    )
+    .unwrap();
+    second_message(
+        &db,
+        "ses_s",
+        1,
+        "user",
+        json!({"text":"Restart the gateway"}),
+    );
+    second_message(
+        &db,
+        "ses_s",
+        2,
+        "assistant",
+        json!({"content":"Restarted."}),
+    );
+    second_message(&db, "ses_s", 3, "user", json!({"text":"And the cache?"}));
+    second_message(
+        &db,
+        "ses_s",
+        4,
+        "assistant",
+        json!({"content":["loose", {"type":"text","text":"Cleared too."}]}),
+    );
+    drop(db);
+    let roots = Roots {
+        opencode: Some(root.clone()),
+        ..Default::default()
+    };
+    let listing = local(&roots, 10, "server", &Filter::default());
+    assert!(listing.unavailable.is_empty(), "{:?}", listing.unavailable);
+    assert_eq!(listing.sessions[0].concluded, "Cleared too.");
+    // Messages of types Kuroko does not know are another layout, not sessions without requests.
+    let db = rusqlite::Connection::open(root.join("opencode.db")).unwrap();
+    db.execute_batch("UPDATE session_message SET type = 'turn';")
+        .unwrap();
+    drop(db);
+    let listing = local(&roots, 10, "server", &Filter::default());
+    assert!(listing.sessions.is_empty());
+    assert_eq!(listing.unavailable[0].reason, "unreadable");
+}
+
+#[test]
+fn kurokos_own_reading_of_its_runs_keeps_work_item_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let roots = claude_only(dir.path());
+    let path = claude_lines(
+        dir.path(),
+        "run",
+        &[
+            user("run", "Implement the export"),
+            agent("run", "PR #12 opened.\nThe export works."),
+        ],
+    );
+    touch(&path, 2);
+    let source = local(&roots, 10, "m", &Filter::default());
+    assert_eq!(source.sessions[0].concluded, "The export works.");
+    let own = local_reading(&roots, 10, "m", &Filter::default(), true);
+    assert_eq!(
+        own.sessions[0].concluded,
+        "PR #12 opened. The export works."
     );
 }

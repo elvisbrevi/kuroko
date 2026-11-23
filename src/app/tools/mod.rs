@@ -130,11 +130,14 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "implementation_recent_sessions",
         title: "Recent agent sessions",
-        description: "What an agent sessions source reads now: the most recent Claude Code, Codex and OpenCode sessions on the account's machines, newest first, each a bounded summary (when, machine, project, what was asked, what the agent concluded, what is open), never tool calls or their output; fixed rules drop lines that look like secrets, code and directory names, which is not a guarantee, so the source belongs only to audiences the user trusts with what their sessions discuss. Plus the sessions PTA started with their work items. Machines that are offline, too old or did not answer are listed in unavailable, never as having no sessions.",
+        description: "What an agent sessions source reads now: the most recent Claude Code, Codex and OpenCode sessions on the account's machines, newest first, each a bounded summary (when, machine, project, what was asked, what the agent concluded, what is open), never tool calls or their output; fixed rules drop lines that look like secrets, code, directory names, work item or pull request numbers and links, and who did or owns something, which is not a guarantee, so the source belongs only to audiences the user trusts with what their sessions discuss. A project filter is applied on each machine, so an excluded session never leaves it. Plus the sessions PTA started with their work items. Machines that are offline, too old (or too old to filter) or did not answer are listed in unavailable, never as having no sessions.",
         effect: Effect::Read,
         schema: || {
             object(
-                json!({"limit":{"type":"integer","minimum":1,"maximum":50,"description":"How many sessions, newest first across the agents (default 10)."}}),
+                json!({"limit":{"type":"integer","minimum":1,"maximum":50,"description":"How many sessions, newest first across the agents (default 10)."},
+                    "source": string("An agent sessions source's ID: read with its own count and project filter (leave out the other arguments)."),
+                    "exclude_projects": strings("Projects never read: a Git repository's name (a worktree counts as its main repository) or a directory under the home (drafts covers everything under it)."),
+                    "only_projects": strings("When set, only these projects are read.")}),
                 &[],
             )
         },
@@ -1960,6 +1963,37 @@ pub(super) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "source_add",
+        title: "Add a source",
+        description: "Adds a source to the knowledge map, as Knowledge › Sources does: disabled, without audiences and without external processing (authorize it afterward with source_authorize). source is the source as sources_list shows one: id, description, topics and its kind with its fields, e.g. {\"id\":\"agent-sessions\",\"description\":\"What my coding agents are working on\",\"kind\":\"tool\",\"tool\":{\"type\":\"agent_sessions\",\"sessions\":10,\"exclude_projects\":[\"hobby-game\"]}}, {\"kind\":\"tool\",\"tool\":{\"type\":\"activity_record\"}}, {\"kind\":\"repository\",\"repository\":\"ALIAS\"}, {\"kind\":\"urls\",\"urls\":[...]}, {\"kind\":\"notes\"}.",
+        effect: Effect::Local,
+        schema: || {
+            object(
+                json!({"source": {"type": "object", "description": "The new source."}}),
+                &["source"],
+            )
+        },
+    },
+    Tool {
+        name: "source_update",
+        title: "Change what a source reads",
+        description: "Changes a source's description, topics or what it reads: change holds the fields to replace (description, topics, urls…) and tool the tool's settings to replace, keeping its type (for agent sessions: sessions, exclude_projects, only_projects). Never its ID, kind or who may read it (source_authorize). It can widen what an authorized source sends to its audiences, so it needs the user's confirmation.",
+        effect: Effect::External,
+        schema: || {
+            object(
+                json!({"id": string("The source ID."), "change": {"type": "object", "description": "The fields to replace, e.g. {\"tool\":{\"exclude_projects\":[\"hobby-game\",\"journal\"]}}."}, "confirmed": confirmed()}),
+                &["id", "change"],
+            )
+        },
+    },
+    Tool {
+        name: "source_remove",
+        title: "Remove a source",
+        description: "Removes a source, and from the contexts and the organization that list it. A source a question reads is not removed: change or remove that question first.",
+        effect: Effect::Local,
+        schema: || object(json!({"id": string("The source ID.")}), &["id"]),
+    },
+    Tool {
         name: "source_authorize",
         title: "Authorize a source",
         description: "Enables or disables a source, its external processing (sending its content to the models) and the conversations and senders it may be read for. Needs the user's confirmation.",
@@ -2619,6 +2653,19 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
             })
             .await
         }
+        "source_add" => {
+            let source = args.get("source").cloned().filter(Value::is_object).ok_or("source must be an object.")?;
+            edit(|p| super::sources::add(&mut p["map"], source).map(|_| ()).map_err(|e| e.to_string())).await
+        }
+        "source_update" => {
+            let id = text(args, "id")?.to_owned();
+            let change = args.get("change").cloned().ok_or("change must be an object.")?;
+            edit(|p| super::sources::update(&mut p["map"], &id, &change).map_err(|e| e.to_string())).await
+        }
+        "source_remove" => {
+            let id = text(args, "id")?.to_owned();
+            edit(|p| super::sources::remove(&mut p["map"], &id).map_err(|e| e.to_string())).await
+        }
         "source_authorize" => {
             let id = text(args, "id")?.to_owned();
             let fields: Vec<(String, Value)> = ["enabled", "external_processing", "allowed_conversations", "allowed_senders"]
@@ -3049,6 +3096,11 @@ pub(super) fn confirmation(name: &str, args: &Value) -> Option<String> {
         "teams_reading_update" => format!(
             "Change which Teams chats every computer of the account may read on request: {}?",
             json!({"all_chats": args.get("all_chats"), "personal_chat": args.get("personal_chat"), "chats": args.get("chats")})
+        ),
+        "source_update" => format!(
+            "Change what the source {} reads: {}?",
+            args["id"].as_str().unwrap_or(""),
+            args.get("change").cloned().unwrap_or_default()
         ),
         "source_authorize" => format!(
             "Change who may read the source {}: {}?",

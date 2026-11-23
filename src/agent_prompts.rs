@@ -483,7 +483,7 @@ pub const BUILT_IN: &[BuiltIn] = &[
         "answers.in_progress",
         "answers",
         "Work in progress",
-        "Added when the evidence is your own sessions with coding agents.",
+        "Added when the evidence is your own sessions with coding agents. Whatever it says, the app withholds an answer that names a person other than the one it replies to, or a work item.",
         prompts::IN_PROGRESS
     ),
     built_in!(

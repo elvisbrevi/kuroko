@@ -181,6 +181,10 @@ _Avoid_: system prompt (in user-facing text)
 A coding agent's own conversation (Claude Code, Codex or OpenCode): one the user started on a machine of their account, or one an implementation run started for its work item. Its native session ID identifies it in that agent's tools and supported app links. The agent sessions source reads the most recent ones as summaries; one whose requests carry `#private` is never read.
 _Avoid_: run ID
 
+**Session project**:
+Where an agent session ran, as the agent sessions source's filters see it: the Git repository it worked in (a worktree counts as its main repository), or else its directory under the home. Worked out on the machine that holds the session; when the source reads, an excluded project's sessions never leave it.
+_Avoid_: workspace, folder (when the repository is meant)
+
 **Workflow**:
 A saved recipe for implementing the items of one Azure DevOps project: the repositories it works on, the execution machine and the checkout of each repository there, the coding agent, its instructions and an ordered list of workflow blocks. It travels with the account and changes only on the coordinator. It grants nothing: every directory, repository, agent, chat and launcher is checked when it is saved and again when it is used. The one exception is its `allow`, which the user confirms when saving it: the fixed rules its own coding runs may break (work item writes, Teams messages, merging, publishing and deploying).
 _Avoid_: pipeline (Azure DevOps' own), automation, recipe (in user-facing text)

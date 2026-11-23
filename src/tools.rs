@@ -83,6 +83,12 @@ pub enum ToolSpec {
         /// How many sessions, newest first across the agents (1–50).
         #[serde(default = "default_sessions")]
         sessions: usize,
+        /// Projects never read (`crate::sessions::Filter`), applied on each machine.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude_projects: Vec<String>,
+        /// When set, only these projects are read.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        only_projects: Vec<String>,
     },
 }
 fn default_sessions() -> usize {
@@ -198,10 +204,13 @@ impl ToolSpec {
                 }
             }
             Self::TeamsMessages {} | Self::ActivityRecord {} => {}
-            Self::AgentSessions { sessions } => ensure!(
-                (1..=crate::sessions::MAX_LIMIT).contains(sessions),
-                "an agent sessions source reads between 1 and 50 sessions"
-            ),
+            Self::AgentSessions { sessions, .. } => {
+                ensure!(
+                    (1..=crate::sessions::MAX_LIMIT).contains(sessions),
+                    "an agent sessions source reads between 1 and 50 sessions"
+                );
+                self.session_filter().unwrap_or_default().validate()?;
+            }
         }
         Ok(())
     }
@@ -270,6 +279,20 @@ impl ToolSpec {
                 catalog,
                 ..
             } if catalog.is_empty() => Some(repository),
+            _ => None,
+        }
+    }
+    /// The project filter of an agent sessions source.
+    pub fn session_filter(&self) -> Option<crate::sessions::Filter> {
+        match self {
+            Self::AgentSessions {
+                exclude_projects,
+                only_projects,
+                ..
+            } => Some(crate::sessions::Filter {
+                exclude_projects: exclude_projects.clone(),
+                only_projects: only_projects.clone(),
+            }),
             _ => None,
         }
     }
@@ -767,8 +790,10 @@ impl ReadOnlyTool for Tools {
                 ToolSpec::ActivityRecord {} => {
                     anyhow::bail!("the activity record is read by the pipeline")
                 }
-                ToolSpec::AgentSessions { sessions } => {
-                    let listing = crate::sessions::reader().recent(*sessions).await?;
+                ToolSpec::AgentSessions { sessions, .. } => {
+                    let filter = spec.session_filter().unwrap_or_default();
+                    let listing = crate::sessions::reader().recent(*sessions, &filter).await?;
+                    let listing = listing.admitted(&filter)?;
                     let keyed: Vec<_> = listing
                         .sessions
                         .iter()

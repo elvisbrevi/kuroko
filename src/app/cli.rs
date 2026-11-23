@@ -411,13 +411,21 @@ Knowledge
   repos list | repos add|edit ALIAS PATH | repos remove ALIAS
   repos clone OWNER/REPO ALIAS | repos sync ALIAS
   sources list | sources show ID | sources add | sources edit ID | sources remove ID
+                           add takes the source as JSON on stdin; it starts disabled, without
+                           audiences or external processing. remove refuses a source a question
+                           reads and drops it from contexts and the organization.
+  sources update ID        JSON on stdin with the fields to replace (description, topics, urls…;
+                           tool settings under \"tool\", keeping its type); never id, kind or who
+                           may read it. Agent sessions filters: {\"tool\":{\"exclude_projects\":
+                           [\"hobby-game\",\"drafts\"],\"only_projects\":[]}}.
   sources enable|disable ID
   sources audience ID      JSON on stdin: allowed_conversations, allowed_senders, external_processing.
                            A whole repository is a source too: {\"kind\":\"repository\",\"repository\":\"ALIAS\",...};
                            the verified notes: {\"kind\":\"notes\",...} (optional \"contexts\" keeps only theirs);
                            recent agent sessions: {\"kind\":\"tool\",\"tool\":{\"type\":\"agent_sessions\",\"sessions\":10}}.
-  sources sessions [--limit N]  What an agent sessions source reads now: the newest Claude Code, Codex and
-                           OpenCode sessions of the account's machines (default 10, at most 50), summarized;
+  sources sessions [--limit N | --source ID]  What an agent sessions source reads now: the newest Claude
+                           Code, Codex and OpenCode sessions of the account's machines (default 10, at most
+                           50; --source uses that source's count and project filter), summarized;
                            fixed rules drop lines that look like secrets, code and directory names, which is
                            not a guarantee: authorize the source only for audiences you would trust with what
                            your sessions discuss. Offline machines are listed as unavailable.
@@ -2716,7 +2724,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["sources", "list" | "add" | "sessions"]
             | [
                 "sources",
-                "show" | "edit" | "remove" | "enable" | "disable" | "audience",
+                "show" | "edit" | "update" | "remove" | "enable" | "disable" | "audience",
                 _
             ]
             | ["azure", "wiki", "list" | "search" | "read", _]
@@ -3044,6 +3052,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             "--source",
             p.as_slice().starts_with(&["answer", "refine"])
                 || p.as_slice().starts_with(&["knowledge", "search"])
+                || p.as_slice() == ["sources", "sessions"]
                 || matches!(
                     p.as_slice(),
                     [
@@ -3399,9 +3408,17 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
         let limit = option(&args, "--limit")
             .map(|v| v.parse::<u64>().context("invalid limit"))
             .transpose()?;
+        let source = option(&args, "--source");
+        ensure!(
+            limit.is_none() || source.is_none(),
+            "--source reads with that source's own count; leave out --limit"
+        );
         return call(
             "implementation_recent_sessions",
-            json!({"limit":limit}),
+            match source {
+                Some(id) => json!({"source":id}),
+                None => json!({"limit":limit}),
+            },
             None,
             true,
         )
@@ -3787,22 +3804,13 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
             return Ok(snap);
         }
         ("sources", "add") => {
-            let resource = input()?;
-            ensure!(
-                resource["allowed_senders"]
-                    .as_array()
-                    .is_none_or(|a| a.is_empty())
-                    && resource["allowed_conversations"]
-                        .as_array()
-                        .is_some_and(Vec::is_empty)
-                    && resource["enabled"] == false
-                    && resource["external_processing"] == false,
-                "add sources disabled, without audiences or external processing; authorize explicitly afterward"
-            );
-            data["map"]["resources"]
-                .as_array_mut()
-                .unwrap()
-                .push(resource);
+            super::sources::add(&mut data["map"], input()?)?;
+        }
+        ("sources", "update") => {
+            super::sources::update(&mut data["map"], positional(&args, 2)?, &input()?)?;
+        }
+        ("sources", "remove") => {
+            super::sources::remove(&mut data["map"], positional(&args, 2)?)?;
         }
         ("people" | "questions", "list") => {
             snap.data = data["map"][command].clone();
@@ -4071,7 +4079,7 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                 }
             }
         }
-        ("sources", "show" | "edit" | "remove" | "enable" | "disable" | "audience") => {
+        ("sources", "show" | "edit" | "enable" | "disable" | "audience") => {
             let id = positional(&args, 2)?;
             let list = data["map"]["resources"].as_array_mut().unwrap();
             let i = list
@@ -4087,9 +4095,6 @@ async fn execute(mut args: Vec<String>) -> Result<Reply> {
                     let resource = input()?;
                     ensure!(resource["id"] == id, "source ID cannot change");
                     list[i] = resource;
-                }
-                "remove" => {
-                    list.remove(i);
                 }
                 "enable" | "disable" => list[i]["enabled"] = json!(action == "enable"),
                 "audience" => {
