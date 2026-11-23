@@ -975,9 +975,8 @@ async fn the_audit_of_a_finished_batch_lists_its_items_findings_and_merged_branc
             r.children.first().is_some_and(|c| c.branch.is_some())
         })
         .await;
-    bench.pulls(WEB, "payments-web", "feature/child-1", 7, "completed");
-    bench.catalog.set_branch(WEB, "feature/child-1");
-    bench.state(&first, Phase::Done).await;
+    // The comment and the audit's answer are there before the batch ends: the engine's own tick
+    // may start the audit as soon as the run is done.
     bench.catalog.comment(
         TASK,
         "Ana Pérez",
@@ -995,6 +994,9 @@ async fn the_audit_of_a_finished_batch_lists_its_items_findings_and_merged_branc
     });
     let line = json!({"type":"text","part":{"text":audit.to_string()}});
     fs::write(bench.log.join("audit.jsonl"), format!("{line}\n")).unwrap();
+    bench.pulls(WEB, "payments-web", "feature/child-1", 7, "completed");
+    bench.catalog.set_branch(WEB, "feature/child-1");
+    bench.state(&first, Phase::Done).await;
     let looks = &bench.host.state.workflows.supervision.looks;
     for _ in 0..400 {
         bench.supervise().await;
@@ -1009,7 +1011,7 @@ async fn the_audit_of_a_finished_batch_lists_its_items_findings_and_merged_branc
     assert_eq!(stored.outcome, "done", "{stored:#?}");
     assert_eq!(stored.items.len(), 1);
     assert_eq!(stored.items[0].run, first);
-    assert_eq!(stored.items[0].result, "Merged.");
+    assert_eq!(stored.items[0].result, "Merged.", "{stored:#?}");
     assert_eq!(stored.merged_branches.len(), 1);
     assert_eq!(stored.merged_branches[0].branch, "feature/child-1");
     assert_eq!(stored.findings.len(), 1);
