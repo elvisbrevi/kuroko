@@ -255,6 +255,54 @@ pub(in crate::app) struct Child {
     /// vote turns negative, not while it stays so.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub votes: BTreeMap<String, i32>,
+    /// The pages of the project's Wiki it delivered, once the person accepted them: a child
+    /// delivered only so needs no pull request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wiki_pages: Vec<crate::ado::workflow::WikiPage>,
+    /// What code found that its coding run delivered without reporting it (`found`): candidates
+    /// for the person, never a delivery by themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<Found>,
+}
+
+/// What code read that a child's coding run delivered and did not report: the branches the
+/// user pushed to the repositories the run was given since it started, the pull requests of
+/// those branches and those linked to the work item, and the pages the user changed in the
+/// project's Wiki. Each was read with the source's read credential and has its verified link;
+/// none is claimed by another run.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::app) struct Found {
+    pub read_at: i64,
+    /// The end of the window it was read in (the child's coding, plus a minute): fixed by the
+    /// first read.
+    pub until: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branches: Vec<FoundBranch>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<PullRequest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wiki_pages: Vec<crate::ado::workflow::WikiPage>,
+    /// Some read failed, so what is listed may be incomplete.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
+}
+
+/// A branch found for a child: pushed by the user since its coding run started, or linked to
+/// its work item.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::app) struct FoundBranch {
+    pub repository: crate::workflows::Repository,
+    pub branch: String,
+    /// Its verified link.
+    pub url: String,
+    /// When the user last pushed it, when the pushes gave it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_at: Option<String>,
+    /// The work item links it (a branch or a pull request link).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linked: bool,
 }
 impl Child {
     /// The review round in progress, if any.
@@ -355,9 +403,14 @@ impl Child {
             )
             .collect()
     }
-    /// Whether it reported any branch.
+    /// Whether it reported any branch, or was given a delivery the person accepted (a branch or
+    /// a Wiki page found without its report).
     pub(in crate::app) fn reported(&self) -> bool {
-        self.branch.is_some() || !self.branches.is_empty()
+        self.branch.is_some() || !self.branches.is_empty() || !self.wiki_pages.is_empty()
+    }
+    /// Whether it delivered only Wiki pages: it waits for no pull request.
+    pub(in crate::app) fn wiki_only(&self) -> bool {
+        self.branch.is_none() && self.branches.is_empty() && !self.wiki_pages.is_empty()
     }
     /// The repositories of its reported branches that have no pull request yet.
     pub(in crate::app) fn without_pull_request(&self) -> Vec<String> {

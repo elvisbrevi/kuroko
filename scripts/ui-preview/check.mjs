@@ -2784,6 +2784,23 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_skip_dependency' && c.confirmed === true));
   check(`runs ${label}: skipping the wait takes a second press and the host's confirmed operation`, true);
   await page.evaluate(() => window.__ptaWaitRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
+  // A child that ended without naming its branch: what was found, with its links, accepted with a second press.
+  await page.evaluate(() => window.__ptaFoundRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', true));
+  await page.click('#run-detail-back');
+  await page.waitForSelector('#run-rows [data-run]');
+  await page.click('#run-rows [data-run="3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03"]');
+  await page.waitForSelector('#run-detail-content .run-found');
+  const foundText = await page.locator('#run-detail-content .run-found').first().innerText();
+  check(`runs ${label}: a child without its branch line shows what was found, with its links`,
+    /Rama feature\/receipts en payments-api/.test(foundText) && /Página de Wiki \/Procedures\/Receipts/.test(foundText)
+      && await page.locator('#run-detail-content .run-found :is(a, .ref)').count() === 3, foundText);
+  const foundScan = await scan(page);
+  check(`runs ${label}: what was found passes WCAG 2.2 AA`, foundScan.length === 0, JSON.stringify(foundScan));
+  await page.click('#run-detail-content .run-found [id^="run-accept-found-"]');
+  await page.click('#run-detail-content .run-found [id^="run-accept-found-"]');
+  await page.waitForFunction(() => window.__ptaWorkflowCalls.some(c => c.method === 'workflow_run_accept_found' && c.confirmed === true));
+  check(`runs ${label}: accepting what was found takes a second press and the host's confirmed operation`, true);
+  await page.evaluate(() => window.__ptaFoundRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', false));
   // A review round in the detail, and a run stopped on a conflict offering to update the branch.
   await page.evaluate(() => window.__ptaReviewRun('3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', 'conflict'));
   await page.click('#run-detail-back');

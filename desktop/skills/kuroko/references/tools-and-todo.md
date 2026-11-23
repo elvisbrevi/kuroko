@@ -687,6 +687,26 @@ run (any state but `done` and `cancelled`).
   continued session (below) has reported its branches since: then they are waited for. A child
   whose coding run has since ended done is delivered, not accepted. It never submits a plan again, never starts a coding run that was started, and writes
   nothing to Azure DevOps. Resume only after the user looked at the cause.
+- **What was delivered without its report:** when a coding run ends without a `Branch:` line
+  (or does not end done), the engine reads, with the source's read credential and only within
+  the child's coding (from a minute before it started to a minute after it ended), what it may
+  have delivered: the branches you pushed to the repositories it was given (never a branch a
+  pull request merges into, nor one another run delivered), their pull requests, the pull
+  requests you opened in that window and linked to the work item, and the pages you changed in
+  the project's Wiki. They are kept on the child as `found` (`branches` with `linked` and
+  `pushed_at`, `pull_requests` with their `source` branch, `wiki_pages`, `until`, and `partial`
+  when a read failed or a page was full) and named in the attention text («Found, not reported,
+  for CHILD: …»); none is a delivery by itself. `kuroko workflows find RUN [--child ID]` (MCP
+  `workflow_run_find`, local) reads them again and records them, also for a run stopped before
+  this existed. `kuroko workflows accept-found RUN [--child ID] [--branch REPOSITORY:BRANCH…]
+  [--pull-request ID…] [--wiki-page PATH…] --confirmed` (MCP `workflow_run_accept_found`,
+  confirmed; the question names what it takes) takes, for a run stopped while coding or waiting
+  for its pull requests, only what `found` recorded and is still there when read again (all of it
+  without a choice; a pull request stands for its source branch; one branch per repository) as
+  that child's delivery, as if its report had named it. The run then goes on by itself: the next
+  child is coded, or it waits for those branches' pull requests, and a child delivered only by
+  Wiki pages (`wiki_pages`) waits for none. Show the user what was found and accept only what
+  they recognize as the work.
 - **Continued sessions:** a coding session stopped while it worked (its time limit, a stream that
   ended, a restart, an agent error, no report, a permission prompt) can be continued by the
   person: reconnect it (`implementation_mobile_session`, Claude) and continue it, or resume it in

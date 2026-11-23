@@ -300,6 +300,83 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.conflicts(pull_request)),
         }
     }
+    /// The branches the user pushed to a workflow repository since a time: what a coding run
+    /// may have delivered without reporting it.
+    pub(in crate::app) async fn pushed_branches(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        repository: &crate::workflows::Repository,
+        window: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    ) -> Result<(Vec<crate::ado::workflow::Pushed>, bool), String> {
+        match self {
+            Self::Live => {
+                tools::todo::pushed_branches(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    &run.item.project,
+                    (&repository.id, &repository.name),
+                    window,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => {
+                Ok((catalog.pushed_branches(&repository.id, window), false))
+            }
+        }
+    }
+    /// One pull request of a workflow repository by its ID, when the user opened it since a
+    /// time (one linked to a work item).
+    pub(in crate::app) async fn pull_request(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        repository: &crate::workflows::Repository,
+        number: u64,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<PullRequest>, String> {
+        match self {
+            Self::Live => {
+                tools::todo::pull_request(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    &run.item.project,
+                    (&repository.id, &repository.name),
+                    number,
+                    since,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.pull_request(&repository.id, number, since)),
+        }
+    }
+    /// The pages of the run's project Wiki the user changed since a time, and whether part of
+    /// it could not be read.
+    pub(in crate::app) async fn wiki_pages(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        window: (chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>),
+    ) -> Result<(Vec<crate::ado::workflow::WikiPage>, bool), String> {
+        match self {
+            Self::Live => {
+                tools::todo::wiki_pages(
+                    state,
+                    run.item.source.as_deref(),
+                    &run.item.organization,
+                    &run.item.project,
+                    window,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok((catalog.wiki_pages(window), false)),
+        }
+    }
     /// Whether a branch exists in a workflow repository now (the workflow supervisor).
     pub(in crate::app) async fn branch_exists(
         &self,
@@ -2324,6 +2401,12 @@ async fn coding(
                 child.outcome = Some("done".into());
                 child.finished_at = Some(now);
             }
+            // A report without its branch: what the session delivered is looked for in the
+            // repositories and the Wiki, for the person to accept.
+            if !run.children[index].reported() {
+                let found = super::found::discover(host, azure, run, index, now).await;
+                run.children[index].found = Some(found);
+            }
             // The pull request the session opened, read once now; the next stage reads again.
             let _ = detect(host, azure, run, index).await;
             Ok(true)
@@ -2333,6 +2416,9 @@ async fn coding(
             if let Some(coding) = run.children[index].coding.as_mut() {
                 coding.failure = failure;
             }
+            let found = super::found::discover(host, azure, run, index, now).await;
+            let found_text = super::found::describe(&run.children[index].url, &found);
+            run.children[index].found = Some(found);
             let continued = if failure.is_some_and(|f| f.cause.continuable()) {
                 " If you continue its session to its final report, the run goes on with that report by itself."
             } else {
@@ -2342,7 +2428,7 @@ async fn coding(
                 Phase::NeedsAttention,
                 now,
                 format!(
-                    "Coding run {} of {} {} Read its record (implementation_runs), finish or fix the child, then resume to continue with the next child (this run is not started again).{continued}",
+                    "Coding run {} of {} {} Read its record (implementation_runs), finish or fix the child, then resume to continue with the next child (this run is not started again).{continued}{found_text}",
                     coding.id,
                     child.url,
                     ended(other, failure)
@@ -2399,11 +2485,16 @@ async fn pull_requests(
         .iter()
         .find(|c| c.outcome.as_deref() == Some("done") && !c.reported())
     {
+        let found_text = child
+            .found
+            .as_ref()
+            .map(|found| super::found::describe(&child.url, found))
+            .unwrap_or_default();
         run.stop(
             Phase::NeedsAttention,
             now,
             format!(
-                "The coding session of {} reported no branch, so its pull request cannot be found; open it by hand if it is missing, then resume.",
+                "The coding session of {} reported no branch, so its pull request cannot be found; open it by hand if it is missing, then resume.{found_text}",
                 child.url
             ),
         );
@@ -2442,8 +2533,13 @@ async fn pull_requests(
         .filter(|c| c.outcome.as_deref() == Some("done"))
         .collect();
     if coded.is_empty() && !run.undelivered_accepted {
+        let found_text: String = run
+            .children
+            .iter()
+            .filter_map(|c| Some(super::found::describe(&c.url, c.found.as_ref()?)))
+            .collect();
         let reason = format!(
-            "No child was delivered ({} children, none coded to done), so there is no pull request to wait for; cancel the run, or resume it to finish it as done without delivering anything.",
+            "No child was delivered ({} children, none coded to done), so there is no pull request to wait for; cancel the run, or resume it to finish it as done without delivering anything.{found_text}",
             run.children.len()
         );
         run.stop(Phase::NeedsAttention, now, reason);
@@ -2464,12 +2560,14 @@ async fn pull_requests(
     }
     // Every branch of every coded child has its pull request, each completed (or abandoned and
     // accepted).
+    // A child that delivered only Wiki pages waits for no pull request.
     let settled = coded.iter().all(|c| {
-        !c.pull_requests.is_empty()
-            && c.without_pull_request().is_empty()
-            && c.pull_requests
-                .iter()
-                .all(|p| p.status == "completed" || p.accepted)
+        c.wiki_only()
+            || !c.pull_requests.is_empty()
+                && c.without_pull_request().is_empty()
+                && c.pull_requests
+                    .iter()
+                    .all(|p| p.status == "completed" || p.accepted)
     });
     if settled {
         let count = coded.iter().map(|c| c.pull_requests.len()).sum::<usize>();
@@ -2494,7 +2592,9 @@ async fn pull_requests(
             .iter()
             .filter_map(|c| {
                 let without = c.without_pull_request();
-                if c.pull_requests.is_empty() {
+                if c.wiki_only() {
+                    None
+                } else if c.pull_requests.is_empty() {
                     Some(c.url.clone())
                 } else if !without.is_empty() {
                     Some(format!("{} ({})", c.url, without.join(", ")))

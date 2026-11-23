@@ -530,6 +530,15 @@ Knowledge
   workflows resume RUN --confirmed       Continues a failed, interrupted or needs_attention run from its
                            stage, accepting what stopped it; never submits a plan or starts a started
                            coding run again.
+  workflows find RUN [--child ID]
+                           Looks again, from facts, for what the run's coded children without a
+                           delivery delivered without reporting it: the branches you pushed to their
+                           repositories since they started, their pull requests and those linked to
+                           the work item, and the Wiki pages you changed. Records it; accepts nothing.
+  workflows accept-found RUN [--child ID] [--branch REPOSITORY:BRANCH…] [--pull-request ID…]
+                           [--wiki-page PATH…] --confirmed
+                           Takes what was found (all of it without a choice; read again first) as the
+                           child's delivery, and the run goes on by itself. Writes nothing to Azure.
   workflows skip-wait RUN [--dependency ID] --confirmed
                            Lets a run waiting for the dependencies of its work item
                            (waiting_dependency), or stopped by them in needs_attention, go on without
@@ -1485,6 +1494,56 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 "workflow_run_update_branch",
                 json!({"run":id(2)?,"confirmed":true}),
             )
+        }
+        (Some("find"), _) => {
+            let mut body = json!({"run":id(2)?});
+            if let Some(child) = option(args, "--child") {
+                body["child"] = json!(child.parse::<u64>().context("--child is a work item ID")?);
+            }
+            ("workflow_run_find", body)
+        }
+        (Some("accept-found"), _) => {
+            let mut body = json!({"run":id(2)?});
+            if let Some(child) = option(args, "--child") {
+                body["child"] = json!(child.parse::<u64>().context("--child is a work item ID")?);
+            }
+            let branches = options(args, "--branch")
+                .into_iter()
+                .map(|value| {
+                    let (repository, branch) = value
+                        .split_once(':')
+                        .filter(|(r, b)| !r.is_empty() && !b.is_empty())
+                        .context("--branch is REPOSITORY:BRANCH")?;
+                    Ok(json!({"repository": repository, "branch": branch}))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if !branches.is_empty() {
+                body["branches"] = json!(branches);
+            }
+            let pulls = options(args, "--pull-request")
+                .into_iter()
+                .map(|n| n.parse::<u64>().context("--pull-request is an ID"))
+                .collect::<Result<Vec<_>>>()?;
+            if !pulls.is_empty() {
+                body["pull_requests"] = json!(pulls);
+            }
+            let pages = options(args, "--wiki-page");
+            if !pages.is_empty() {
+                body["wiki_pages"] = json!(pages);
+            }
+            // What it takes, read from the coordinator for the question.
+            if !confirmed {
+                let question = super::tools::question("workflow_run_accept_found", &body)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+                if let Some(reply) = unconfirmed(args, question) {
+                    return Ok(reply);
+                }
+            }
+            body["confirmed"] = json!(true);
+            ("workflow_run_accept_found", body)
         }
         (Some("skip-wait"), _) => {
             let mut body = json!({"run":id(2)?});
@@ -2448,7 +2507,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | "--from" | "--chat" | "--query" | "--wiki" | "--author" | "--project"
             | "--organization" | "--workflow" | "--state" | "--send" | "--mention"
             | "--text-file" | "--summary" | "--image" | "--alt" | "--note" | "--note-file"
-            | "--sessions" => {
+            | "--sessions" | "--branch" | "--wiki-page" => {
                 i += 1;
                 ensure!(
                     args.get(i)
@@ -2493,6 +2552,14 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                 ensure!(
                     args.get(i).is_some_and(|v| v.parse::<u64>().is_ok()),
                     "invalid timeout"
+                );
+            }
+            "--dependency" | "--child" | "--pull-request" => {
+                i += 1;
+                ensure!(
+                    args.get(i)
+                        .is_some_and(|v| v.parse::<u64>().is_ok_and(|n| n > 0)),
+                    "invalid work item or pull request ID"
                 );
             }
             "--digest" => {
@@ -2766,6 +2833,11 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                 "run" | "status" | "resume" | "cancel" | "restart",
                 _
             ]
+            | [
+                "workflows",
+                "skip-wait" | "update-branch" | "find" | "accept-found",
+                _
+            ]
             | ["workflows", "assign", _, _]
             | [
                 "workflows",
@@ -2872,7 +2944,10 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                             | "restart"
                             | "pause"
                             | "unpause"
-                            | "act",
+                            | "act"
+                            | "skip-wait"
+                            | "update-branch"
+                            | "accept-found",
                         ..
                     ]
                 )
@@ -3095,6 +3170,26 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             matches!(p.as_slice(), ["workflows", "requeue", _]),
         ),
         ("--sessions", p.as_slice() == ["workflows", "pause"]),
+        (
+            "--dependency",
+            matches!(p.as_slice(), ["workflows", "skip-wait", _]),
+        ),
+        (
+            "--child",
+            matches!(p.as_slice(), ["workflows", "find" | "accept-found", _]),
+        ),
+        (
+            "--branch",
+            matches!(p.as_slice(), ["workflows", "accept-found", _]),
+        ),
+        (
+            "--pull-request",
+            matches!(p.as_slice(), ["workflows", "accept-found", _]),
+        ),
+        (
+            "--wiki-page",
+            matches!(p.as_slice(), ["workflows", "accept-found", _]),
+        ),
         (
             "--send",
             matches!(p.as_slice(), ["workflows", "summary", _]),
@@ -4769,6 +4864,12 @@ mod wiki_tests {
             &["workflows", "requeue", "r", "--confirmed"],
             &["workflows", "status", "r", "--ahead"],
             &["workflows", "summary", "r", "--chat", "19:x"],
+            &["workflows", "find", "r", "--branch", "web:feature/x"],
+            &["workflows", "find", "r", "--confirmed"],
+            &["workflows", "accept-found", "r", "--child", "x"],
+            &["workflows", "accept-found", "r", "--dependency", "4"],
+            &["workflows", "skip-wait", "r", "--child", "4"],
+            &["workflows", "update-branch", "r", "--branch", "x"],
         ] {
             assert!(check(args).is_err(), "{args:?}");
         }
@@ -4809,6 +4910,33 @@ mod wiki_tests {
             &["workflows", "audits", "latest"],
             &["workflows", "requeue", "r", "--ahead"],
             &["workflows", "requeue", "r", "--back"],
+            &[
+                "workflows",
+                "skip-wait",
+                "r",
+                "--dependency",
+                "41",
+                "--confirmed",
+            ],
+            &["workflows", "update-branch", "r", "--confirmed"],
+            &["workflows", "find", "r"],
+            &["workflows", "find", "r", "--child", "200"],
+            &[
+                "workflows",
+                "accept-found",
+                "r",
+                "--child",
+                "200",
+                "--branch",
+                "payments-web:feature/x",
+                "--branch",
+                "payments-api:feature/y",
+                "--pull-request",
+                "7",
+                "--wiki-page",
+                "/Procedures/Deploy",
+                "--confirmed",
+            ],
         ] {
             assert!(check(args).is_ok(), "{args:?}");
         }
