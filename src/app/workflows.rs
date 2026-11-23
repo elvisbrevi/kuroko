@@ -217,6 +217,44 @@ fn fits(workflow: &Workflow, blocks: &[Block], texts: &Texts) -> Result<(), Stri
     )))
 }
 
+/// Refuses a map in which lead `id`'s opening would not fit, naming each part, unless the lead
+/// is off or the opening does not grow from `before` (a lead already over the limit, through
+/// a block or the organization, can still be turned off or trimmed).
+// shortcut: a block's or the organization's save does not check the openings of the leads it
+// grows; a turn whose message is too large fails and says so. Check them there too if needed.
+fn lead_fits(
+    host: &Host,
+    map: &KnowledgeMap,
+    id: &str,
+    before: Option<&KnowledgeMap>,
+) -> Result<(), String> {
+    let size = |map: &KnowledgeMap| -> Option<(usize, Result<(), String>)> {
+        let lead = map
+            .workflow_leads
+            .iter()
+            .find(|l| l.id == id && l.enabled)?;
+        let workflows: Vec<Workflow> = map
+            .workflows
+            .iter()
+            .filter(|w| w.lead.as_ref().is_some_and(|l| l.id == id))
+            .cloned()
+            .collect();
+        let texts = Texts::new(&map.agent_prompts);
+        let parts = shifts::parts(host, map, &workflows, &texts);
+        Some((
+            shifts::opening_size(lead, &parts, &texts),
+            shifts::opening_fits(lead, &parts, &texts),
+        ))
+    };
+    let Some((used, fits)) = size(map) else {
+        return Ok(());
+    };
+    match fits {
+        Err(_) if before.and_then(size).is_some_and(|(was, _)| was >= used) => Ok(()),
+        result => result.map_err(invalid),
+    }
+}
+
 /// What a workflow larger than older hosts accept means for the account's other computers.
 /// A workflow that pre-approves anything is refused by a host from before the supervisor
 /// (`deny_unknown_fields`): the save names the machines of the account that report one.
@@ -657,6 +695,10 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
                 &candidate.workflow_blocks,
                 &Texts::new(&candidate.agent_prompts),
             )?;
+            let current = state.settings.map().map_err(fail)?;
+            if let Some(lead) = &workflow.lead {
+                lead_fits(host, &candidate, &lead.id, Some(&current))?;
+            }
             let mut warnings = verify(host, &mut workflow).await?;
             // A pre-approved post goes only to a chat the user belongs to.
             let saved = workflow.clone();
@@ -665,7 +707,12 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
                 let texts = Texts::new(&map.agent_prompts);
                 fits(&workflow, &map.workflow_blocks, &texts)?;
                 let used = usage(&workflow, &map.workflow_blocks, &texts);
+                let before = map.clone();
+                let lead = workflow.lead.clone();
                 upsert(&mut map.workflows, workflow, |w| &w.id);
+                if let Some(lead) = lead {
+                    lead_fits(host, map, &lead.id, Some(&before))?;
+                }
                 Ok(used)
             })
             .await?;
@@ -910,8 +957,11 @@ async fn save_lead(host: &Arc<Host>, args: LeadSaveArgs) -> Result<Value, String
     warnings.extend(older_leads(host, "The account now has workflow leads").await);
     let kept = saved.clone();
     change(host, |map| {
+        let id = kept.id.clone();
+        let before = map.clone();
         upsert(&mut map.workflow_leads, kept, |l| &l.id);
-        lead::validate(&map.workflow_leads, &map.workflows).map_err(invalid)
+        lead::validate(&map.workflow_leads, &map.workflows).map_err(invalid)?;
+        lead_fits(host, map, &id, Some(&before))
     })
     .await?;
     Ok(json!({"lead": saved, "saved": true, "warnings": warnings}))
