@@ -59,6 +59,19 @@ async fn turns(bench: &Bench, turns: usize) -> super::super::shifts::Shift {
 async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_record() {
     let bench = Bench::new().await;
     lead_to(&bench);
+    // The organization's norm for its project reaches its opening.
+    crate::store::organization::OrganizationStore::save_entry(
+        &crate::store::organization::LocalOrganization::new(&bench.host.state.settings),
+        &crate::organization::Entry {
+            id: "pr-norm".into(),
+            kind: crate::organization::Kind::Norm,
+            title: "Pull requests".into(),
+            text: "Every pull request completes itself and deletes its source branch.".into(),
+            projects: Vec::new(),
+            updated_at: 0,
+        },
+    )
+    .unwrap();
     bench.mode("mode", "block");
     let id = bench.start(TASK).await;
     bench
@@ -109,6 +122,7 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
         "Done once its pull request is completed",
         "is now yours to follow",
         "Your runs now",
+        "completes itself and deletes its source branch",
     ] {
         assert!(prompt.contains(expected), "{expected}: {prompt}");
     }
@@ -232,5 +246,42 @@ async fn a_lead_turned_off_ends_its_shift_without_a_turn_and_takes_no_request() 
     )
     .unwrap_err();
     assert!(refused.contains("is off"), "{refused}");
+    bench.release();
+}
+
+#[tokio::test]
+async fn a_turn_the_host_did_not_finish_is_marked_and_taken_again() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    bench
+        .until(&id, |r| {
+            r.children[0].coding.as_ref().is_some_and(|c| c.started)
+        })
+        .await;
+    let mut cut = turns(&bench, 1).await;
+    // A host that stopped in the middle of a turn leaves its mark.
+    cut.turn_started = Some(cut.wakes[0].at);
+    bench.host.state.workflows.shifts.save(&cut).unwrap();
+    // Taken again at its next turn, past the interval.
+    bench.offset.store(600, Ordering::SeqCst);
+    let again = turns(&bench, 3).await;
+    assert_eq!(
+        again.wakes[1].outcome, "host_restarted",
+        "{:?}",
+        again.wakes
+    );
+    assert_eq!(again.wakes[2].outcome, "done");
+    assert!(again.turn_started.is_none());
+    let prompts = fs::read_to_string(bench.log.join("lead_prompts")).unwrap();
+    assert!(
+        prompts
+            .lines()
+            .last()
+            .unwrap()
+            .contains("did not finish (Kuroko restarted)"),
+        "{prompts}"
+    );
     bench.release();
 }

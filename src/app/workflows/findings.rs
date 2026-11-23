@@ -69,6 +69,18 @@ impl Findings {
         )?;
         Ok(())
     }
+    /// The highest report number kept for `implementation_run` (a lead's findings after a cut
+    /// turn whose shift was not saved).
+    pub(in crate::app) fn last_seq(&self, implementation_run: &str) -> Result<u32> {
+        let db = self.0.lock().unwrap();
+        let mut query = db.prepare("SELECT key FROM workflow_findings WHERE key LIKE ?1")?;
+        let prefix = format!("{implementation_run}:");
+        let keys = query.query_map(params![format!("{prefix}%")], |r| r.get::<_, String>(0))?;
+        Ok(keys
+            .filter_map(|k| k.ok()?.strip_prefix(&prefix)?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0))
+    }
     pub(in crate::app) fn list(
         &self,
         workflow: Option<&str>,

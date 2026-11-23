@@ -1170,7 +1170,7 @@ fn checkouts(
 /// The workflow's instructions and instruction blocks, for the agents: the user's
 /// configuration, untrusted input under the fixed rules (`runs.workflow`, `runs.repository`,
 /// `runs.instructions` and `runs.block`).
-fn instructions(
+pub(in crate::app) fn instructions(
     workflow: &crate::workflows::Workflow,
     blocks: &[crate::workflows::Block],
     texts: &Texts,
