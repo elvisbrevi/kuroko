@@ -144,6 +144,11 @@ struct Endpoint {
     /// none, which also marks them as outdated once a new build is installed.
     #[serde(default)]
     binary: Option<String>,
+    /// Started by a systemd unit someone wrote (the shared server's), whose updater installs a
+    /// new build and restarts the unit when no work is in flight: a newer CLI meanwhile talks to
+    /// it instead of stopping it, which would leave its assistant stopped.
+    #[serde(default)]
+    unit_managed: bool,
 }
 
 const IDENTIFIER: &str = "dev.personalteams.assistant";
@@ -248,6 +253,9 @@ const HOST_ALIAS: &str = "personal-teams-assistant";
 fn outdated_at(dir: &Path, installed: &Path) -> Result<bool> {
     existing_host_at(dir)?;
     let endpoint: Endpoint = serde_json::from_slice(&fs::read(dir.join("control.json"))?)?;
+    if endpoint.unit_managed {
+        return Ok(false);
+    }
     let running = PathBuf::from(fs::read_to_string(dir.join("host-path.txt"))?.trim());
     if !running.is_file() {
         return Ok(true);
@@ -758,6 +766,8 @@ pub(crate) fn launch(
             port: listener.local_addr()?.port(),
             token: token.clone(),
             binary: fingerprint(&std::env::current_exe()?),
+            unit_managed: std::env::var_os("INVOCATION_ID").is_some()
+                && !std::env::args().any(|a| a == super::service::FLAG),
         })?,
     )?;
     let router = Router::new()
@@ -1645,6 +1655,7 @@ mod tests {
                 port: 1,
                 token: "stale-token".into(),
                 binary: None,
+                unit_managed: false,
                 web_support: true,
                 web_access_support: true,
                 implementation_support: true,
@@ -1694,6 +1705,7 @@ mod tests {
                 port: 2,
                 token: "new-instance".into(),
                 binary: None,
+                unit_managed: false,
                 web_support: true,
                 web_access_support: true,
                 implementation_support: true,
@@ -1758,6 +1770,7 @@ mod tests {
                     port: 1,
                     token: "instance".into(),
                     binary,
+                    unit_managed: false,
                     web_support: true,
                     web_access_support: true,
                     implementation_support: true,
@@ -1806,6 +1819,12 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         fs::write(&installed, b"new build, different size").unwrap();
         assert!(outdated_at(dir.path(), &installed).unwrap());
+        // A host its own systemd unit restarts is left to the unit's updater.
+        let descriptor = dir.path().join("control.json");
+        let mut managed: Value = serde_json::from_slice(&fs::read(&descriptor).unwrap()).unwrap();
+        managed["unit_managed"] = json!(true);
+        write_private(&descriptor, &managed.to_string()).unwrap();
+        assert!(!outdated_at(dir.path(), &installed).unwrap());
         // A host from before this field existed is outdated too.
         publish(None, &installed);
         assert!(outdated_at(dir.path(), &installed).unwrap());
