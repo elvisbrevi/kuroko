@@ -319,6 +319,11 @@ pub(crate) struct Launch {
     pub(crate) round: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) resume: Option<String>,
+    /// A workflow run's coding run, whose coordinator reads its reports: a Claude session gets
+    /// its report tools (`delivery_report`, `finding_report`). A worker that predates the field
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) reports: bool,
     /// The ID (never the value) of the variable holding the Azure source's personal access
     /// token, for an Azure work item. The machine that runs the agent resolves it there, from its
     /// own store or the coordinator's, and hands it to that run's coding process only
@@ -377,6 +382,43 @@ pub(crate) struct Run {
     /// session ended with its final report, which is now the run's (RFC 3339; `continued`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) continued_at: Option<String>,
+    /// What its coding session reported through its run's tools (`kuroko mcp --runner`), in
+    /// order, each kept the moment it was reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) reports: Vec<Report>,
+}
+/// At most this many reports are kept for one run.
+pub(crate) const MAX_REPORTS: usize = 50;
+/// One report of a coding session: a delivery (a branch it pushed, its pull request, Wiki pages
+/// it changed) or a finding (something someone must know or decide that is not the change).
+/// Its text was bounded and redacted on the machine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum Report {
+    Delivery {
+        seq: u32,
+        at: String,
+        /// The branch it pushed and its repository's name; both empty for a delivery of Wiki
+        /// pages only.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        repository: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pull_request: Option<u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        wiki_pages: Vec<String>,
+    },
+    Finding {
+        seq: u32,
+        at: String,
+        title: String,
+        detail: String,
+        /// `blocking`, `important` or `minor`.
+        severity: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        evidence: String,
+    },
 }
 impl Run {
     /// A coding run whose session the person may continue to its final report, which then
@@ -951,6 +993,96 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
     }
 }
 
+/// Keep a report of the coding session of run `id` through its tool `tool` (`delivery_report`,
+/// `finding_report`) on that run while it is coding: its text bounded and redacted, at most
+/// `MAX_REPORTS`.
+pub(in crate::app) fn report(
+    db: &store::Database,
+    id: &str,
+    tool: &str,
+    args: &Value,
+) -> Result<Value> {
+    ensure!(args.is_object(), "arguments must be an object");
+    let redactor = security::Redactor::new(&[], Vec::new())?;
+    // Single-line fields become one line; a detail keeps its lines.
+    let text = |key: &str, max: usize, lines: bool| -> String {
+        let clean: String = args[key]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .map(|c| {
+                if c.is_control() && !(lines && c == '\n') {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .take(max)
+            .collect();
+        redactor.redact(clean.trim())
+    };
+    let at = chrono::Utc::now().to_rfc3339();
+    let report = match tool {
+        "delivery_report" => {
+            let (repository, branch) = (text("repository", 100, false), text("branch", 250, false));
+            let wiki_pages: Vec<String> = args["wiki_pages"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str())
+                .map(|p| {
+                    redactor.redact(
+                        &p.chars()
+                            .filter(|c| !c.is_control())
+                            .take(300)
+                            .collect::<String>(),
+                    )
+                })
+                .filter(|p| !p.is_empty())
+                .take(10)
+                .collect();
+            // A repository by its plain name, as the workflow names it.
+            let plain = !repository.is_empty()
+                && repository
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || " ._-".contains(c));
+            ensure!(
+                branch.is_empty() && repository.is_empty() && !wiki_pages.is_empty()
+                    || crate::ado::workflow::valid_branch(&branch) && plain,
+                "Give the repository by its name and the branch as its plain name, or the Wiki pages you changed."
+            );
+            Report::Delivery {
+                seq: 0,
+                at,
+                repository,
+                branch,
+                pull_request: args["pull_request"].as_u64().filter(|n| *n > 0),
+                wiki_pages,
+            }
+        }
+        "finding_report" => {
+            let severity = args["severity"].as_str().unwrap_or_default();
+            ensure!(
+                matches!(severity, "blocking" | "important" | "minor"),
+                "Give the severity: blocking, important or minor."
+            );
+            let title = text("title", 200, false);
+            ensure!(!title.is_empty(), "Give the finding a title.");
+            Report::Finding {
+                seq: 0,
+                at,
+                title,
+                detail: text("detail", 4000, true),
+                severity: severity.into(),
+                evidence: text("evidence", 2000, true),
+            }
+        }
+        _ => anyhow::bail!("Unknown tool: {tool}"),
+    };
+    let seq = db.report(id, report)?;
+    Ok(json!({"recorded": true, "seq": seq}))
+}
+
 /// The launch of an implementation run: the user's instructions for its kind, the work item
 /// guides that apply (the item's own type, or every type of its project when planning) and the
 /// organization's entries for its project.
@@ -998,6 +1130,7 @@ fn build_launch(
         allow: Vec::new(),
         round: false,
         resume: None,
+        reports: false,
         azure_token,
         texts: crate::agent_prompts::Texts::new(&map.agent_prompts)
             .only(&crate::llm::implementation::RUN_TEXTS),
@@ -1102,6 +1235,7 @@ pub(super) async fn launch_planned(host: &Arc<Host>, planned: Planned) -> Result
         launch.allow = planned.allow;
         launch.round = planned.round;
         launch.resume = planned.resume;
+        launch.reports = !planned.round;
     }
     fleet::call(
         host,
@@ -1351,6 +1485,9 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
                 .list(args["work_item_url"].as_str(), args["id"].as_str(), false)?
             {
                 let mut value = json!({"id":run.launch.id,"item":run.launch.detail.item,"planning":run.launch.planning,"state":run.state,"created_at":run.created_at,"started_at":run.started_at,"finished_at":run.finished_at,"session_id":run.session_id,"remote":run.remote,"provider":run.launch.request.provider,"model":run.launch.request.model,"effort":run.launch.request.effort,"machine":run.launch.request.machine,"output":run.output,"plan":run.plan,"permission_mode":run.permission_mode,"prompts":run.prompts,"failure":run.failure,"continued_at":run.continued_at});
+                if !run.reports.is_empty() {
+                    value["reports"] = json!(run.reports);
+                }
                 time_limit(&mut value, &run);
                 with_failure(&mut value);
                 mark_session(&mut value, &own).await;
@@ -1457,6 +1594,7 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
                 ),
                 prompts: Vec::new(),
                 continued_at: None,
+                reports: Vec::new(),
             })?;
             let host = host.clone();
             let task = tokio::spawn(async move {
@@ -1715,87 +1853,115 @@ async fn run(host: &Arc<Host>, launch: Launch) {
     let limit = launch.time_limit();
     let stops_at = chrono::Utc::now()
         + chrono::Duration::from_std(limit).unwrap_or_else(|_| chrono::Duration::hours(2));
-    let time_rule = crate::llm::implementation::time_rule(&texts, limit, stops_at);
-    let result = crate::llm::implementation::RUN_LIMIT
+    let mut time_rule = crate::llm::implementation::time_rule(&texts, limit, stops_at);
+    // A workflow's Claude coding session reports through its own tools, served by this host
+    // over the session's control channel, and is told so.
+    let reports =
+        (launch.reports && !launch.planning && !launch.round && request.provider == "claude").then(
+            || {
+                let (host, id) = (host.clone(), launch.id.clone());
+                std::sync::Arc::new(crate::llm::implementation::Reporter {
+                    tools: json!(
+                        super::tools::RUNNER_TOOLS
+                            .iter()
+                            .map(super::mcp::listed)
+                            .collect::<Vec<_>>()
+                    ),
+                    call: std::sync::Arc::new(move |tool: &str, args: &Value| {
+                        report(&host.state.implementation.db, &id, tool, args)
+                            .map_err(|e| e.to_string())
+                    }),
+                })
+            },
+        );
+    if reports.is_some() {
+        time_rule.push(' ');
+        time_rule.push_str(&texts.render("rules.runner_reports", &[]));
+    }
+    let result = crate::llm::implementation::RUN_REPORTS
         .scope(
-            limit,
-            crate::llm::agent::RUN_CREDENTIALS.scope(credentials, async {
-                if launch.planning {
-                    async {
-                        let plan = crate::llm::implementation::plan(
-                            (&request.provider, &request.model, &request.effort),
+            reports,
+            crate::llm::implementation::RUN_LIMIT.scope(
+                limit,
+                crate::llm::agent::RUN_CREDENTIALS.scope(credentials, async {
+                    if launch.planning {
+                        async {
+                            let plan = crate::llm::implementation::plan(
+                                (&request.provider, &request.model, &request.effort),
+                                &request.directories,
+                                &instructions,
+                                &input,
+                                &texts,
+                                &name,
+                                &observer,
+                                remote.clone(),
+                            )
+                            .await?;
+                            let children =
+                                plan["children"].as_array().context("Invalid child plan.")?;
+                            ensure!(
+                                (1..=20).contains(&children.len()),
+                                "Invalid child plan size."
+                            );
+                            for child in children {
+                                validate_child(child)?;
+                            }
+                            validate_order(children)?;
+                            Ok((true, String::new(), Some(plan), Vec::new(), None))
+                        }
+                        .await
+                    } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round)
+                    {
+                        // One more turn of the session that coded the child: it has the item, the
+                        // instructions and its earlier work; this turn gets the fixed rules and the round.
+                        let prompt = format!(
+                            "{} {time_rule}\n{}",
+                            crate::llm::implementation::code_rules(&launch.allow, &texts),
+                            request.context
+                        );
+                        crate::llm::implementation::execute_resumed(
+                            &request.provider,
+                            &request.model,
+                            &request.effort,
                             &request.directories,
-                            &instructions,
-                            &input,
-                            &texts,
+                            (&prompt, &texts),
+                            &launch.allow,
+                            session,
                             &name,
                             &observer,
-                            remote.clone(),
+                            remote,
                         )
-                        .await?;
-                        let children =
-                            plan["children"].as_array().context("Invalid child plan.")?;
-                        ensure!(
-                            (1..=20).contains(&children.len()),
-                            "Invalid child plan size."
+                        .await
+                        .map(|outcome| {
+                            let failure = outcome.failure;
+                            (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                        })
+                    } else {
+                        let prompt = crate::llm::implementation::coding_prompt(
+                            &instructions,
+                            &input,
+                            (&launch.allow, &time_rule),
+                            &texts,
                         );
-                        for child in children {
-                            validate_child(child)?;
-                        }
-                        validate_order(children)?;
-                        Ok((true, String::new(), Some(plan), Vec::new(), None))
+                        crate::llm::implementation::execute(
+                            &request.provider,
+                            &request.model,
+                            &request.effort,
+                            &request.directories,
+                            (&prompt, &texts),
+                            &launch.allow,
+                            &name,
+                            &observer,
+                            remote,
+                        )
+                        .await
+                        .map(|outcome| {
+                            let failure = outcome.failure;
+                            (outcome.ok, outcome.text, None, outcome.prompts, failure)
+                        })
                     }
-                    .await
-                } else if let Some(session) = launch.resume.as_deref().filter(|_| launch.round) {
-                    // One more turn of the session that coded the child: it has the item, the
-                    // instructions and its earlier work; this turn gets the fixed rules and the round.
-                    let prompt = format!(
-                        "{} {time_rule}\n{}",
-                        crate::llm::implementation::code_rules(&launch.allow, &texts),
-                        request.context
-                    );
-                    crate::llm::implementation::execute_resumed(
-                        &request.provider,
-                        &request.model,
-                        &request.effort,
-                        &request.directories,
-                        (&prompt, &texts),
-                        &launch.allow,
-                        session,
-                        &name,
-                        &observer,
-                        remote,
-                    )
-                    .await
-                    .map(|outcome| {
-                        let failure = outcome.failure;
-                        (outcome.ok, outcome.text, None, outcome.prompts, failure)
-                    })
-                } else {
-                    let prompt = crate::llm::implementation::coding_prompt(
-                        &instructions,
-                        &input,
-                        (&launch.allow, &time_rule),
-                        &texts,
-                    );
-                    crate::llm::implementation::execute(
-                        &request.provider,
-                        &request.model,
-                        &request.effort,
-                        &request.directories,
-                        (&prompt, &texts),
-                        &launch.allow,
-                        &name,
-                        &observer,
-                        remote,
-                    )
-                    .await
-                    .map(|outcome| {
-                        let failure = outcome.failure;
-                        (outcome.ok, outcome.text, None, outcome.prompts, failure)
-                    })
-                }
-            }),
+                }),
+            ),
         )
         .await;
     use crate::llm::implementation::{Cause, Failure};

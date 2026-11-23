@@ -198,6 +198,13 @@ pub const BUILT_IN: &[BuiltIn] = &[
         ["minutes", "stops_at"]
     ),
     built_in!(
+        "rules.runner_reports",
+        "agent_rules",
+        "Delivery and finding reports",
+        "Added to the rules of a Claude coding run that has the delivery_report and finding_report tools.",
+        prompts::RUNNER_REPORTS
+    ),
+    built_in!(
         "rules.json",
         "agent_rules",
         "JSON answer",

@@ -292,6 +292,41 @@ impl Database {
         }
         Ok(changed)
     }
+    /// Keep a coding session's report on its run while the run codes, numbered in order;
+    /// returns its number. A finished or planning run, or one with `MAX_REPORTS`, refuses it.
+    pub(super) fn report(&self, id: &str, mut report: super::Report) -> Result<u32> {
+        let mut db = self.0.lock().unwrap();
+        let tx = db.transaction()?;
+        let payload: Option<String> = tx
+            .query_row(
+                "SELECT payload FROM agent_runs WHERE id=?1 AND state='running'",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let mut run: super::Run = serde_json::from_str(
+            &payload.context("Only a coding run that is running takes reports.")?,
+        )?;
+        anyhow::ensure!(!run.launch.planning, "Only a coding run takes reports.");
+        anyhow::ensure!(
+            run.reports.len() < super::MAX_REPORTS,
+            "This run already has {} reports.",
+            super::MAX_REPORTS
+        );
+        let seq = u32::try_from(run.reports.len())? + 1;
+        match &mut report {
+            super::Report::Delivery { seq: n, .. } | super::Report::Finding { seq: n, .. } => {
+                *n = seq
+            }
+        }
+        run.reports.push(report);
+        tx.execute(
+            "UPDATE agent_runs SET payload=?2 WHERE id=?1 AND state='running'",
+            params![id, serde_json::to_string(&run)?],
+        )?;
+        tx.commit()?;
+        Ok(seq)
+    }
     /// Record the permission prompts a run still raised, before it finishes.
     pub(super) fn prompts(&self, id: &str, prompts: &[String]) -> Result<()> {
         let value = serde_json::to_string(prompts)?;

@@ -530,6 +530,11 @@ Knowledge
   workflows resume RUN --confirmed       Continues a failed, interrupted or needs_attention run from its
                            stage, accepting what stopped it; never submits a plan or starts a started
                            coding run again.
+  workflows findings [--workflow WORKFLOW] [--run RUN] [--state open|resolved|dismissed]
+                           What the runs' coding sessions found that someone must know or decide,
+                           newest first, each as its session reported it (finding_report).
+  workflows resolve-finding ID [--note TEXT] | dismiss-finding ID [--note TEXT]
+                           Marks a finding resolved, or sets it aside; only its record changes.
   workflows find RUN [--child ID]
                            Looks again, from facts, for what the run's coded children without a
                            delivery delivered without reporting it: the branches you pushed to their
@@ -1501,6 +1506,31 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 body["child"] = json!(child.parse::<u64>().context("--child is a work item ID")?);
             }
             ("workflow_run_find", body)
+        }
+        (Some("findings"), _) => {
+            let mut body = json!({});
+            for (flag, key) in [
+                ("--workflow", "workflow"),
+                ("--run", "run"),
+                ("--state", "state"),
+            ] {
+                if let Some(value) = option(args, flag) {
+                    body[key] = json!(value);
+                }
+            }
+            ("workflow_findings", body)
+        }
+        (Some(action @ ("resolve-finding" | "dismiss-finding")), _) => {
+            let mut body = json!({"finding": id(2)?});
+            if let Some(note) = option(args, "--note") {
+                body["note"] = json!(note);
+            }
+            let method = if action == "resolve-finding" {
+                "workflow_finding_resolve"
+            } else {
+                "workflow_finding_dismiss"
+            };
+            (method, body)
         }
         (Some("accept-found"), _) => {
             let mut body = json!({"run":id(2)?});
@@ -2507,7 +2537,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | "--from" | "--chat" | "--query" | "--wiki" | "--author" | "--project"
             | "--organization" | "--workflow" | "--state" | "--send" | "--mention"
             | "--text-file" | "--summary" | "--image" | "--alt" | "--note" | "--note-file"
-            | "--sessions" | "--branch" | "--wiki-page" => {
+            | "--sessions" | "--branch" | "--wiki-page" | "--run" => {
                 i += 1;
                 ensure!(
                     args.get(i)
@@ -2835,9 +2865,15 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             ]
             | [
                 "workflows",
-                "skip-wait" | "update-branch" | "find" | "accept-found",
+                "skip-wait"
+                    | "update-branch"
+                    | "find"
+                    | "accept-found"
+                    | "resolve-finding"
+                    | "dismiss-finding",
                 _
             ]
+            | ["workflows", "findings"]
             | ["workflows", "assign", _, _]
             | [
                 "workflows",
@@ -3142,15 +3178,22 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             "--workflow",
             matches!(
                 p.as_slice(),
-                ["workflows", "run", _] | ["workflows", "runs"]
+                ["workflows", "run", _] | ["workflows", "runs" | "findings"]
             ),
         ),
-        ("--state", p.as_slice() == ["workflows", "runs"]),
+        (
+            "--state",
+            matches!(p.as_slice(), ["workflows", "runs" | "findings"]),
+        ),
         (
             "--note",
             matches!(
                 p.as_slice(),
-                ["workflows", "restart", _] | ["workflows", "act", _, _, _]
+                [
+                    "workflows",
+                    "restart" | "resolve-finding" | "dismiss-finding",
+                    _
+                ] | ["workflows", "act", _, _, _]
             ),
         ),
         (
@@ -3170,6 +3213,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             matches!(p.as_slice(), ["workflows", "requeue", _]),
         ),
         ("--sessions", p.as_slice() == ["workflows", "pause"]),
+        ("--run", p.as_slice() == ["workflows", "findings"]),
         (
             "--dependency",
             matches!(p.as_slice(), ["workflows", "skip-wait", _]),
@@ -4870,6 +4914,9 @@ mod wiki_tests {
             &["workflows", "accept-found", "r", "--dependency", "4"],
             &["workflows", "skip-wait", "r", "--child", "4"],
             &["workflows", "update-branch", "r", "--branch", "x"],
+            &["workflows", "findings", "--confirmed"],
+            &["workflows", "dismiss-finding", "f", "--run", "r"],
+            &["mcp", "--runner", "r"],
         ] {
             assert!(check(args).is_err(), "{args:?}");
         }
@@ -4920,6 +4967,18 @@ mod wiki_tests {
             ],
             &["workflows", "update-branch", "r", "--confirmed"],
             &["workflows", "find", "r"],
+            &[
+                "workflows",
+                "findings",
+                "--workflow",
+                "w",
+                "--run",
+                "r",
+                "--state",
+                "open",
+            ],
+            &["workflows", "resolve-finding", "f", "--note", "fixed in !7"],
+            &["workflows", "dismiss-finding", "f"],
             &["workflows", "find", "r", "--child", "200"],
             &[
                 "workflows",

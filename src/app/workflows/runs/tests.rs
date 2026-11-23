@@ -98,6 +98,7 @@ case "$(cat "$LOG/mode" 2>/dev/null)" in
   block) while [ ! -f "$LOG/release" ]; do sleep 0.05; done ;;
   prompt) printf '%s\n' '{"type":"permission.asked","data":{"action":"bash","resources":["git push"]}}' ;;
   fail) printf '%s\n' '{"type":"text","part":{"text":"Could not finish."}}'; exit 1 ;;
+  quiet) while [ ! -f "$LOG/release" ]; do sleep 0.05; done; printf '%s\n' "{\"type\":\"text\",\"part\":{\"text\":\"Documented it.\"}}"; exit 0 ;;
   nobranch) printf '%s\n' "{\"type\":\"text\",\"part\":{\"text\":\"Implemented change $n.\"}}"; exit 0 ;;
   multi) printf '%s\n' "{\"type\":\"text\",\"part\":{\"text\":\"Changed both.\\nBranch payments-api: feature/old-$n\\nBranch: feature/child-$n\\n**Branch payments-api:** feature/api-$n\\nBranch billing: feature/billing-$n\\nBranch ../x tool: feature/odd\"}}"; exit 0 ;;
 esac
@@ -2237,6 +2238,7 @@ async fn a_ledger_entry_for_another_parent_is_planned_again_on_resume_not_looped
 
 mod acting;
 mod dependencies;
+mod findings;
 mod found;
 mod limits;
 mod pause;

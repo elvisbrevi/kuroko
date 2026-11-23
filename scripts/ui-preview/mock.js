@@ -448,6 +448,11 @@
       run.state = saved.state; run.attention = null; run.stopped_in = null;
     }
   };
+  // A finding a coding session of a run reported (`finding_report`).
+  window.__ptaFindRun = (run, on) => {
+    window.__ptaFindings = on ? [{ id: 'f1', workflow: findRun(run).workflow, run, item: 6001, item_url: `${org}/Payments/_workitems/edit/6001`, implementation_run: 'c9f2e4b6-7a8d-4e0f-b123-4c5d6e7f8091', seq: 1,
+      title: 'Rounding differs from the legacy portal', detail: 'The legacy portal rounds half up; the new endpoint rounds half to even.', severity: 'important', evidence: 'Rounding.cs:42', source: 'runner', state: 'open', created_at: secs(NOW - 600_000), updated_at: secs(NOW - 600_000) }] : [];
+  };
   // A run waiting for the checkouts another run's agent holds (`waiting_for_checkouts`).
   window.__ptaHoldRun = (run, holder) => { const held = workflowRuns.find(r => r.id === run); held.queue_position = null; held.waiting_for_checkouts = holder ? { run: holder, item: findRun(holder).item.url } : null; };
   // A task's child that reported branches in two repositories and one the workflow does not have, as a resume past its
@@ -535,6 +540,17 @@
       const run = findRun(args.run); run.state = run.stopped_in ?? 'coding'; run.stopped_in = null; run.attention = null; run.updated_at = secs(Date.now());
       run.timeline.push({ stage: run.state, started_at: secs(Date.now()), finished_at: null, outcome: null });
       return { run: runView(run), resumed: true, accepted: true };
+    },
+    workflow_findings: args => ({ findings: (window.__ptaFindings ?? []).filter(f => (!args.run || f.run === args.run) && (!args.state || f.state === args.state) && (!args.workflow || f.workflow === args.workflow)) }),
+    workflow_finding_resolve: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_finding_resolve', ...structuredClone(args) });
+      const finding = (window.__ptaFindings ?? []).find(f => f.id === args.finding); finding.state = 'resolved'; finding.note = args.note ?? null;
+      return { finding };
+    },
+    workflow_finding_dismiss: args => {
+      window.__ptaWorkflowCalls.push({ method: 'workflow_finding_dismiss', ...structuredClone(args) });
+      const finding = (window.__ptaFindings ?? []).find(f => f.id === args.finding); finding.state = 'dismissed';
+      return { finding };
     },
     workflow_run_find: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_run_find', ...structuredClone(args) });

@@ -42,6 +42,8 @@ pub(in crate::app) struct State {
     pub(in crate::app) watcher: super::watcher::Watcher,
     /// The workflow supervisor: its events and looks, and whether one runs now.
     pub(in crate::app) supervision: super::supervisor::Supervision,
+    /// What the runs' coding sessions found (`findings`).
+    pub(in crate::app) findings: super::findings::Findings,
     locks: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
     admission: Mutex<()>,
     /// One director classification at a time, apart from the `concurrency` slots.
@@ -61,6 +63,7 @@ impl State {
             db: Store::open(&root.join("workflows.db"))?,
             watcher: super::watcher::Watcher::open(&root.join("workflows.db"))?,
             supervision: super::supervisor::Supervision::open(&root.join("workflows.db"))?,
+            findings: super::findings::Findings::open(&root.join("workflows.db"))?,
             locks: std::sync::Mutex::new(HashMap::new()),
             admission: Mutex::new(()),
             classifying: Mutex::new(()),
@@ -2390,22 +2393,34 @@ async fn coding(
     let changed = coding.state.as_deref() != Some(observed_state.as_str()) || run.error.is_some();
     run.error = None;
     set_observed(run, &observed_state);
+    // What its session found so far is kept as soon as it is read.
+    super::findings::record(&host.state, run, index, &observed);
     match observed_state.as_str() {
         "running" => Ok(changed),
         "done" => {
             let task = run.task();
             {
                 let child = &mut run.children[index];
-                let output = observed["output"].as_str().unwrap_or_default();
-                record_branches(child, workflow, task, output);
+                // Its delivery reports read as the branch lines a report ends with, after them.
+                let output = with_reports(child, &observed);
+                record_branches(child, workflow, task, &output);
                 child.outcome = Some("done".into());
                 child.finished_at = Some(now);
             }
             // A report without its branch: what the session delivered is looked for in the
-            // repositories and the Wiki, for the person to accept.
+            // repositories and the Wiki, for the person to accept; a Wiki page it reported and
+            // the user changed while it coded is its delivery.
             if !run.children[index].reported() {
                 let found = super::found::discover(host, azure, run, index, now).await;
-                run.children[index].found = Some(found);
+                let reported = reported_pages(&observed);
+                let child = &mut run.children[index];
+                child.wiki_pages = found
+                    .wiki_pages
+                    .iter()
+                    .filter(|p| reported.contains(&page_key(&p.path)))
+                    .cloned()
+                    .collect();
+                child.found = Some(found);
             }
             // The pull request the session opened, read once now; the next stage reads again.
             let _ = detect(host, azure, run, index).await;
@@ -2437,6 +2452,69 @@ async fn coding(
             Ok(true)
         }
     }
+}
+
+/// An observed coding run's final text followed by its delivery reports as the report lines
+/// they stand for, so a reported branch counts, and wins, like a line of the report.
+fn with_reports(child: &Child, observed: &Value) -> String {
+    format!(
+        "{}{}",
+        observed["output"].as_str().unwrap_or_default(),
+        reported_lines(child, observed)
+    )
+}
+
+/// A coding run's delivery reports (`observed["reports"]`) as report lines: `Branch: NAME` for
+/// the child's own repository, `Branch REPOSITORY: NAME` for another, checked like any line.
+fn reported_lines(child: &Child, observed: &Value) -> String {
+    let own = child.repository.as_ref().map(|r| r.name.to_lowercase());
+    observed["reports"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["kind"] == "delivery")
+        .filter_map(|r| {
+            let (repository, branch) = (r["repository"].as_str()?, r["branch"].as_str()?);
+            if branch.is_empty() {
+                return None;
+            }
+            Some(
+                if own.as_deref() == Some(repository.to_lowercase().as_str()) {
+                    format!("\nBranch: {branch}")
+                } else {
+                    format!("\nBranch {repository}: {branch}")
+                },
+            )
+        })
+        .collect()
+}
+
+/// The Wiki pages a coding run's delivery reports name, as lowercase paths without the leading
+/// `/`.
+fn reported_pages(observed: &Value) -> std::collections::BTreeSet<String> {
+    observed["reports"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["kind"] == "delivery")
+        .flat_map(|r| r["wiki_pages"].as_array().cloned().unwrap_or_default())
+        .filter_map(|p| p.as_str().map(page_key))
+        .collect()
+}
+
+/// A Wiki page's path compared loosely: as the Wiki shows it (`/Deploy the portal`) or as its
+/// repository stores it (`Deploy-the-portal.md`, `%2D` for a title's own `-`).
+fn page_key(path: &str) -> String {
+    let path = path.trim().trim_start_matches('/');
+    let path = path.strip_suffix(".md").unwrap_or(path);
+    url::form_urlencoded::parse(format!("k={}", path.replace('+', "%2B")).as_bytes())
+        .next()
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// Read the pull requests of each branch a child reported and record them, keeping what the
@@ -2653,8 +2731,8 @@ async fn recover_continued(host: &Arc<Host>, run: &mut Run, now: i64) -> Vec<Val
         if observed["state"] != "done" {
             continue;
         }
-        let output = observed["output"].as_str().unwrap_or_default();
-        let Some(delivered) = continued_delivery(child, &workflow, task, output, now) else {
+        let output = with_reports(child, &observed);
+        let Some(delivered) = continued_delivery(child, &workflow, task, &output, now) else {
             continue;
         };
         recovered.push(json!({"child": delivered.url, "coding_run": coding.id, "continued": true}));
@@ -2759,8 +2837,8 @@ async fn watch_continued(
     let (Some(workflow), task) = (run.definition.clone(), run.task()) else {
         return true;
     };
-    let output = observed["output"].as_str().unwrap_or_default();
-    let Some(delivered) = continued_delivery(&run.children[index], &workflow, task, output, now)
+    let output = with_reports(&run.children[index], &observed);
+    let Some(delivered) = continued_delivery(&run.children[index], &workflow, task, &output, now)
     else {
         return true;
     };
@@ -2868,7 +2946,7 @@ pub(in crate::app) async fn resume(host: &Arc<Host>, run: &mut Run, now: i64) ->
                     {
                         Ok(Some(observed)) => (
                             observed["state"].as_str().map(str::to_owned),
-                            observed["output"].as_str().map(str::to_owned),
+                            Some(with_reports(&run.children[index], &observed)),
                         ),
                         Ok(None) => (Some("missing".to_owned()), None),
                         Err(_) => (coding.state.clone(), None),

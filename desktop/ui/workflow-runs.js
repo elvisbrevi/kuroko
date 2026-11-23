@@ -25,7 +25,7 @@ import { planChildrenReview } from './implementation.js';
 import { renderPauses } from './workflow-pause.js';
 import { ensureWorkflowSettings, workflowSettings } from './settings-workflows.js';
 import { act, proposal, renderAudit, supervision } from './workflow-supervisor.js';
-import { blocks, children, dependencies, foundPanels, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
+import { blocks, children, dependencies, findingsPanel, foundPanels, otherBranches, rounds, timeline, when } from './workflow-run-parts.js';
 
 /** The states in which a run waits on the person (src/app/workflows/record.rs `waits_on_user`). */
 const WAITING = ['plan_review', 'unassigned', 'needs_attention', 'interrupted', 'failed'];
@@ -115,6 +115,10 @@ async function loadWorkflowRuns() {
     if (list.partial) $('#run-rows').append(el('p', { class: 'hint', textContent: t('Showing the most recent runs.') }));
     ensureWorkflowSettings();
     renderAudit($('#runs-audit'), Boolean(workflowSettings?.settings?.supervisor?.enabled), { when });
+    // The open findings of the runs listed: of the chosen workflow, or of every one.
+    const open = (await invoke('workflow_findings', { ...(workflow ? { workflow } : {}), state: 'open' }).catch(() => ({ findings: [] }))).findings ?? [];
+    if (generation !== runsData.listGeneration) return;
+    $('#runs-findings').replaceChildren(findingsPanel(open, loadWorkflowRuns, 'runs-open-findings', tn(open.length, 'Open findings (1)', 'Open findings ({n})')));
   } catch (error) {
     if (generation !== runsData.listGeneration) return;
     problem.hidden = false; problem.textContent = message(error);
@@ -247,6 +251,7 @@ async function loadRunDetail() {
   const urls = [run.item.url, ...run.children.map(c => c.url)];
   let sessions = [];
   try { sessions = (await invoke('implementation_sessions', { urls })).sessions ?? []; } catch { /* shown without sessions */ }
+  try { run.findings = (await invoke('workflow_findings', { run: id })).findings ?? []; } catch { /* shown without findings */ }
   if (generation !== runsData.detailGeneration || runsData.open !== id) return;
   const detail = $('#run-detail-content');
   const typing = detail.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '');
@@ -304,7 +309,8 @@ function renderRunDetail(run, sessions) {
   notes.push(...foundPanels(run, { twice, refresh, resumable: RESUMABLE.includes(run.state) }));
   const shared = { twice, when, hold: held => { runsData.holding = held; }, restart: proposed => showRestart(run, area, refresh, proposed) };
   detail.replaceChildren(head, facts, ...notes, runActions(run, sessionButton, area, refresh), supervision(run, area, refresh, shared),
-    timeline(run), dependencies(run), children(run, sessionButton, sessions), rounds(run), blocks(run), summaries(run));
+    timeline(run), dependencies(run), children(run, sessionButton, sessions),
+    findingsPanel(run.findings ?? [], refresh, 'run-findings', tn((run.findings ?? []).length, 'Findings (1)', 'Findings ({n})')), rounds(run), blocks(run), summaries(run));
   if (focusId) /** @type {HTMLElement | null} */ (document.getElementById(focusId))?.focus({ preventScroll: true });
 }
 

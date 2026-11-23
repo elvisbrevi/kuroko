@@ -10,7 +10,7 @@ use super::engine::{self, Azure};
 use super::record::{self, Item, Run, State as Phase};
 use super::*;
 
-pub(in crate::app) const METHODS: [&str; 13] = [
+pub(in crate::app) const METHODS: [&str; 16] = [
     "workflow_run_start",
     "workflow_runs",
     "workflow_run_status",
@@ -24,6 +24,9 @@ pub(in crate::app) const METHODS: [&str; 13] = [
     "workflow_run_update_branch",
     "workflow_run_find",
     "workflow_run_accept_found",
+    "workflow_findings",
+    "workflow_finding_resolve",
+    "workflow_finding_dismiss",
 ];
 
 #[derive(Deserialize)]
@@ -281,6 +284,9 @@ pub(super) async fn operation(
         "workflow_run_update_branch" => super::review::update_branch(host, args).await,
         "workflow_run_find" | "workflow_run_accept_found" => {
             super::found::operation(host, method, args, azure).await
+        }
+        "workflow_findings" | "workflow_finding_resolve" | "workflow_finding_dismiss" => {
+            super::findings::operation(&host.state, method, args)
         }
         _ => Err(invalid("Unknown workflow operation.")),
     }

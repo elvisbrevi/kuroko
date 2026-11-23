@@ -707,6 +707,17 @@ run (any state but `done` and `cancelled`).
   child is coded, or it waits for those branches' pull requests, and a child delivered only by
   Wiki pages (`wiki_pages`) waits for none. Show the user what was found and accept only what
   they recognize as the work.
+- **Reports and findings:** a workflow's Claude coding run has two tools of its own,
+  `mcp__kuroko__delivery_report` (a branch it pushed with its pull request, and the Wiki pages
+  it changed) and `mcp__kuroko__finding_report` (something that is not the change but someone
+  must know or decide, with severity `blocking`, `important` or `minor` and its evidence),
+  served by its host in the session itself and recorded the moment it calls them, so
+  a cut session keeps them. A reported branch counts like a `Branch:` line; a reported Wiki page
+  counts when the user changed it while the child coded. `kuroko workflows findings [--workflow W]
+  [--run RUN] [--state open|resolved|dismissed]` (MCP `workflow_findings`) lists the findings;
+  `kuroko workflows resolve-finding ID [--note TEXT]` and `dismiss-finding ID` (MCP
+  `workflow_finding_resolve`, `workflow_finding_dismiss`, local) settle one. Nothing is written to
+  Azure DevOps.
 - **Continued sessions:** a coding session stopped while it worked (its time limit, a stream that
   ended, a restart, an agent error, no report, a permission prompt) can be continued by the
   person: reconnect it (`implementation_mobile_session`, Claude) and continue it, or resume it in
