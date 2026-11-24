@@ -575,6 +575,8 @@
     workflow_summary: args => {
       window.__ptaWorkflowCalls.push({ method: 'workflow_summary', ...structuredClone(args) });
       const run = findRun(args.run);
+      // A run its lead follows (src/app/workflows/shifts.rs `ask_summary`): the lead writes it later.
+      if (window.__ptaSummaryByLead) return { workflow_run: run.id, requested: { lead: 'pagos', name: 'Pagos', shift: 's1' } };
       const summary = { id: crypto.randomUUID(), text: `**${run.item.title}** va en «${run.state}»: ${run.children.length} hijos, ${run.children.flatMap(c => c.pull_requests).length} pull requests.\n\nEnlaces\n- #${run.item.id} ${run.item.title}`, created_at: secs(Date.now()), provider: 'claude', model: 'claude-sonnet-5-5', session_id: `sess-synthetic-summary-${run.summaries.length + 2}` };
       run.summaries.push(summary); if (run.summaries.length > 20) run.summaries.shift();
       return { workflow_run: run.id, summary: structuredClone(summary), run: summary.id };

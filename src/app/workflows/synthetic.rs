@@ -51,7 +51,6 @@ pub(in crate::app) struct Catalog {
     pub written: Mutex<Vec<crate::ado::workflow::Written>>,
 }
 
-#[cfg(unix)]
 pub(in crate::app) const ORGANIZATION: &str = "https://dev.azure.com/example";
 
 /// A work item of project Payments (also built by tests that run on every platform).
@@ -406,7 +405,6 @@ impl Catalog {
             .collect()
     }
     /// Change the state an item is in.
-    #[cfg(unix)]
     pub(in crate::app) fn set_state(&self, id: u64, state: &str) {
         if let Some(detail) = self.items.lock().unwrap().get_mut(&id) {
             detail.item.state = state.into();

@@ -495,10 +495,16 @@ fn pull_request_links<'a>(
         .join("\n")
 }
 
-/// The latest stored summary of the run written by the director on request, or nothing: a
-/// summary the workflow supervisor drafted is never posted by a block.
+/// The latest stored summary of the run written by the director on request, or nothing: one
+/// the workflow supervisor drafted or a lead wrote is never posted by a block (a person reads
+/// it and sends it).
 pub(in crate::app::workflows) fn latest_summary(run: &Run) -> String {
-    let Some(last) = run.summaries.iter().rev().find(|s| s["by"] != "supervisor") else {
+    let Some(last) = run
+        .summaries
+        .iter()
+        .rev()
+        .find(|s| s["by"] != "supervisor" && s["by"] != "lead")
+    else {
         return String::new();
     };
     last["text"]

@@ -1069,3 +1069,84 @@ async fn what_a_coding_agent_writes_to_a_backlog_its_lead_keeps_is_a_finding_onc
     );
     bench.release();
 }
+
+#[tokio::test]
+async fn a_runs_summary_comes_from_its_lead_and_says_what_its_workflow_lets_it_do() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    bench.pulls(WEB, "payments-web", "feature/child-1", 21, "active");
+    bench.state(&id, Phase::PullRequests).await;
+    // Its first turn opened the shift, in shadow for this workflow.
+    for _ in 0..400 {
+        bench.tick().await;
+        let opened = bench
+            .host
+            .state
+            .workflows
+            .shifts
+            .list(Some("pagos"), 1)
+            .unwrap();
+        if opened.first().is_some_and(|s| !s.wakes.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let call = json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+        "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_write_summary","arguments":{"run": id, "text": "Coded; its pull request waits for review."}}}}});
+    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+    // The person asks: its lead writes it, at its next turn.
+    let asked =
+        super::super::summary::operation(&bench.host, "workflow_summary", &json!({"run": id}))
+            .await
+            .unwrap();
+    assert_eq!(asked["requested"]["lead"], "pagos", "{asked}");
+    let mut written = None;
+    for _ in 0..400 {
+        bench.tick().await;
+        let run = bench.run(&id);
+        if let Some(summary) = run.summaries.last() {
+            written = Some(summary.clone());
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let written = written.expect("its lead wrote no summary");
+    assert_eq!(written["by"], "lead");
+    assert!(
+        written["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Coded; its pull request waits for review."),
+        "{written}"
+    );
+    let prompts = fs::read_to_string(bench.log.join("lead_prompts")).unwrap();
+    assert!(
+        prompts.contains("The person asks you for a progress summary of run"),
+        "{prompts}"
+    );
+    assert!(
+        prompts.contains("What you may do by yourself: nothing yet: you are in shadow"),
+        "{prompts}"
+    );
+    // One per request: a summary nobody asked for is refused, and a block never posts the
+    // lead's (a person reads it first).
+    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+    super::super::shifts::operation(&bench.host, "workflow_lead_wake", &json!({"lead": "pagos"}))
+        .unwrap();
+    let mut refused = String::new();
+    for _ in 0..400 {
+        bench.tick().await;
+        refused = fs::read_to_string(bench.log.join("lead_replies")).unwrap_or_default();
+        if refused.contains("did not ask for a summary") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(refused.contains("did not ask for a summary"), "{refused}");
+    let run = bench.run(&id);
+    assert_eq!(run.summaries.len(), 1);
+    assert_eq!(super::super::acting::latest_summary(&run), "");
+    bench.release();
+}

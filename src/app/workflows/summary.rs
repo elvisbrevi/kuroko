@@ -397,6 +397,10 @@ async fn summarize(host: &Arc<Host>, args: SummaryArgs) -> Result<Value, String>
     let state = &host.state;
     require_engine(state)?;
     let run = found(state, &args.run)?;
+    // A run whose workflow's lead follows it now: its lead writes it, at its next turn.
+    if let Some(requested) = super::shifts::ask_summary(state, &run) {
+        return Ok(requested);
+    }
     let map = state.settings.map().map_err(fail)?;
     // The same director that classifies the run's project.
     let director = super::director::director_for(&map, &run.item.organization, &run.item.project)
@@ -507,6 +511,50 @@ async fn summarize(host: &Arc<Host>, args: SummaryArgs) -> Result<Value, String>
         state.workflows.db.save(&run).map_err(fail)?;
     }
     Ok(json!({"workflow_run": run.id, "summary": stored, "run": session}))
+}
+
+/// A progress summary its lead wrote (`lead_write_summary`), stored on the run like the
+/// director's: cleaned, with the links code builds, at most `MAX_CHARS`.
+pub(super) async fn store_lead(
+    host: &Arc<Host>,
+    run: &str,
+    lead: &str,
+    text: &str,
+) -> Result<Value, String> {
+    let state = &host.state;
+    let language = state.settings.config().map_err(fail)?.llm.language;
+    let model = state
+        .settings
+        .map()
+        .ok()
+        .and_then(|m| m.workflow_leads.into_iter().find(|l| l.id == lead))
+        .map(|l| l.agent.model)
+        .unwrap_or_default();
+    let lock = state.workflows.lock(run);
+    let _guard = lock.lock().await;
+    let mut found = found(state, run)?;
+    // It may quote what the lead read (files, pages, items): nothing that looks like a secret.
+    let text = crate::security::Redactor::new(&[], Vec::new())
+        .map(|r| r.redact(text))
+        .map_err(fail)?;
+    if clean(&text, MAX_CHARS).is_empty() {
+        return Err("Write the summary.".into());
+    }
+    let stored = json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "text": compose(&text, &found, language),
+        "created_at": now(),
+        "provider": "claude",
+        "model": model,
+        "by": "lead",
+        "lead": lead,
+    });
+    found.summaries.push(stored.clone());
+    while found.summaries.len() > MAX_SUMMARIES {
+        found.summaries.remove(0);
+    }
+    state.workflows.db.save(&found).map_err(fail)?;
+    Ok(stored)
 }
 
 /// What a person confirms before a summary is sent: the run, summary, chat and mentions and the
