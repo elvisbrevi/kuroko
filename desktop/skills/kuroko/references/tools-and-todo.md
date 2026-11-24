@@ -541,11 +541,9 @@ How a workflow takes an item from its ready state to its release, and where the 
    (`workflows pause`, every project or one, stopping the live sessions or letting them finish)
    and unpause when it is back; restart each interrupted run with its note, in the order that
    makes sense.
-12. **Let the supervisor follow the runs** (Settings › Workflows, `--set supervisor.*`): when a
-   run stops, waits too long, loses its machine or disagrees with its session, it reads what the
-   agents did, checks their final reports and drafts the handover note, work items and a
-   summary; read its look (`workflows supervision RUN`) and carry out what the person agrees to
-   (`workflows act`), once each.
+12. **Let a workflow lead follow the runs** (Settings › Workflows › Workflow leads): it reads what
+   the agents did, checks their reports against the facts and, out of shadow, decides only what its
+   workflow lets it; read its shifts (`workflows leads shifts`) and answer its questions.
 
 ### Workflow settings and the director
 
@@ -876,81 +874,16 @@ The engine never merges, completes or changes a pull request or a work item; the
 opens the pull request as its instructions ask. A run uses the workflow as it was when the run got
 it.
 
-### The workflow supervisor
+### The retired workflow supervisor
 
-Requires host and CLI `workflow_supervisor_support: true`, on the owner's coordinator. It is off
-by default and an update never turns it on.
-
-- **Settings:** `kuroko workflows settings` shows `supervisor` (`enabled`, `machine`, `provider`,
-  `model`, `effort`, and the bounds `looks_per_day` 1–100 (default 24, the person's requests not
-  counted), `min_interval_minutes` 10–1440 (30), `wait_hours` 1–48 (3), `offline_minutes` 5–240
-  (15), `session_seconds` 60–600 (180)); change them with `kuroko workflows settings --set
-  supervisor.FIELD VALUE` (MCP `workflow_settings_update {supervisor: {...}}`, merged with the
-  stored values; `--set supervisor none` turns it off and clears it). Turning it on needs its
-  machine and agent, checked against the machine's installed CLIs like the director's; its own
-  prompt is `supervise` (`kuroko prompts show supervise`).
-- **When it looks:** once per run per event (a run stopped in `needs_attention`, `failed` or
-  `interrupted`, but not a stop the person caused with a pause; a run waited for a slot or a
-  launch longer than `wait_hours`; its machine unseen for `offline_minutes`; a session alive on
-  a run that ended, or a coding run without a live session), at most one look at a time, looks of
-  one run at least `min_interval_minutes` apart, at most `looks_per_day` automatic looks in 24
-  hours; nothing while a pause covers the run's project. A look that fails is never retried.
-  `kuroko workflows supervise RUN` (MCP `workflow_supervise`, local, no confirmation; it runs a
-  model on the supervisor's machine and uses its quota) asks for one now; it returns at once with
-  the look queued or running, and is refused within five minutes of that run's previous look.
-- **What a look holds:** `kuroko workflows supervision RUN` (MCP `workflow_supervision`; also
-  `supervision` in `workflow_run_status`, and the latest in each `workflow_runs` entry) gives
-  each look's `assessment` (`done`, `left`, `recommendation`), `checks` (each claim of the final
-  report, `verified` or `not_verified` with code's `fact`, such as «Pull request !7 is active.»:
-  report a `not_verified` claim as not verified, never as done), `unverified`, `unread` and
-  `truncated` (what code could not read or cut), the drafted `handover`, `work_items` and
-  `summary`, and `actions` with their `state`. Code read the facts (item and child states, pull
-  requests, branches, machines, session ends) with the read credential; comments, reports and
-  session summaries reached the supervisor only as untrusted text, and nothing it wrote can
-  choose a chat, a person, a link, a repository or another run.
-- **What it did by itself:** stored the look, and possibly moved the run ahead in the queue
-  (`move_ahead`, `done`). `kuroko workflows requeue RUN --ahead|--back` (MCP `workflow_run_requeue`,
-  local) moves a run waiting for a slot ahead, or back to its place by creation.
-- **Carry out a proposal:** `kuroko workflows act RUN LOOK ACTION [--note TEXT | --note-file PATH]
-  [--chat ID] [--mention NAME…] --confirmed` (MCP `workflow_supervision_act`, needs
-  confirmation: show the user the action and its exact draft first). `restart` restarts with the
-  drafted note when no `note` is given (it reaches the coding runs as the supervisor's text),
-  with the person's edited `note`, or without any note when `note` is empty; `resume`, `cancel` and `pause_project` run those operations;
-  `post_summary` posts the drafted summary to the chat the person chose (`teams_chats`), once,
-  never retried; `create_work_item` returns the draft for Create request
-  (`implementation_request_start`, with its own confirmation and the type's work item guide).
-  Each runs once, even when confirmed twice at once (`executed`, `refused` or `uncertain`; one
-  the operation refused before acting stays `proposed`; one a stopped host left `attempting`
-  becomes `uncertain`); an action of a run that moved on since the look is `expired`. The
-  confirmation of a post names its chat and every mention. `kuroko workflows dismiss RUN LOOK ACTION` (MCP
-  `workflow_supervision_dismiss`) sets one aside.
-- **Pre-approval per workflow:** a workflow's `preapprove` (in its JSON for `kuroko workflows save`,
-  MCP `workflow_save`; the editor's «What the supervisor may do without asking»; saved only with
-  `confirmed`, which names each entry, like `allow`) lists at most `{"action":
-  "restart_after_cut"}` and `{"action": "post_summary", "chat": {"id", "name"}, "mentions":
-  [...]}`. After a look at a stopped run the supervisor carries them out itself, once, recorded
-  with `by: "preapproval"`, only when code finds every condition: a restart only when the coding
-  session was cut (stream ended, over the line limit, time limit, host restart, machine offline),
-  no session is alive, no pause, the workflow is enabled, the run is as the look saw it, and the
-  run is not itself a pre-approved restart (so restarts never chain); a post only to the chat and
-  members saved there (the chat must be in the user's chat list under that name, read when the
-  workflow is saved; the save is refused when the list cannot be read), at most 3 a day per
-  workflow, and only when the drafted summary passes the same checks as an answer, otherwise it
-  stays proposed for the person. The post goes first, then the restart, whatever order the model
-  wrote them in. Nothing else is ever pre-approved. Tell the user plainly: a pre-approved restart
-  gives a fully permitted coding agent a note written by a model that read the item's comments;
-  prompts, a 4000-character bound, the cleaner and one automatic restart lower that risk, they
-  are not a guarantee.
-- **Audits:** when every run created since the last audit has ended (one reached coding), or with
-  `kuroko workflows supervise --audit [--since TIME]` (MCP `workflow_supervise {audit: true}`), the
-  supervisor writes an audit: per run its result, the pull requests and unverified claims, the
-  branches of completed pull requests that still exist, the findings left only in comments (and
-  whether they need a work item), proposals and drafted work items. Read them with `kuroko workflows
-  audits [ID|latest]` (MCP `workflow_supervision {audit}` or `{audits: true}`); the Runs view
-  shows the latest. An audit posts and writes nothing.
-
-It never changes code, merges, deploys or writes to Azure DevOps by itself, and posts to Teams only
-what the person confirmed or a workflow pre-approved, to the chat that workflow names.
+Workflow leads replaced the workflow supervisor (0.20.16). What it stored stays readable:
+`kuroko workflows supervision RUN` (MCP `workflow_supervision {run}`) gives a run's earlier looks,
+`kuroko workflows audits [ID|latest]` (MCP `workflow_supervision {audit}` or `{audits: true}`)
+its audits. Asking for a look or an audit, carrying out or setting aside a proposal, and its
+settings answer that it was retired; a workflow's `preapprove` and the settings' `supervisor`
+from an older configuration are accepted and do nothing. `kuroko workflows requeue RUN
+--ahead|--back` (MCP `workflow_run_requeue`, local) still moves a run waiting for a slot ahead, or
+back to its place by creation.
 
 ### Automatic starts and the Implement choice
 

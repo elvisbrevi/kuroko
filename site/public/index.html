@@ -151,7 +151,7 @@
               <li><strong>Workflows.</strong> A saved recipe per Azure DevOps project: its repositories, the machine and checkouts, the agent and its instructions. A director picks the workflow that fits each item, and a watcher can start runs for items that reach a ready state. The plan review always waits for you.</li>
               <li><strong>Dependencies and limits.</strong> A run waits for its predecessors' pull requests or stacks on their branch, and a workflow can cap how many pull requests it keeps open.</li>
               <li><strong>Review rounds.</strong> When a reviewer rejects a pull request or asks for changes, the agent corrects the same branch, answers each thread and sends it back. Past the workflow's limit, a person decides.</li>
-              <li><strong>A supervisor, if you want one.</strong> It reads what the agents did, checks their reports against facts, drafts handover notes and summaries, and proposes the next step for you to confirm.</li>
+              <li><strong>A lead for each workflow, if you want one.</strong> It follows the runs, checks what the agents report against facts, asks you what only you know and, once you let it, settles what it may by itself, code checking each decision.</li>
               <li><strong>Every session on record.</strong> Each agent session keeps its state and times; progress summaries go to Teams only with the text you approved.</li>
             </ul>
             <p class="fine">Coding runs are autonomous, with full permissions on the computer you choose: that trusted machine and its allowed directories are the boundary.</p>

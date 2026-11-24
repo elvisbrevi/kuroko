@@ -531,30 +531,6 @@ impl Azure {
             Self::Synthetic(catalog) => Ok((catalog.wiki_pages(window), false)),
         }
     }
-    /// Whether a branch exists in a workflow repository now (the workflow supervisor).
-    pub(in crate::app) async fn branch_exists(
-        &self,
-        state: &DesktopState,
-        run: &Run,
-        repository: &str,
-        branch: &str,
-    ) -> Result<bool, String> {
-        match self {
-            Self::Live => {
-                tools::todo::branch_exists(
-                    state,
-                    run.item.source.as_deref(),
-                    &run.item.organization,
-                    &run.item.project,
-                    repository,
-                    branch,
-                )
-                .await
-            }
-            #[cfg(test)]
-            Self::Synthetic(catalog) => Ok(catalog.branch_exists(repository, branch)),
-        }
-    }
 }
 
 /// Whether this installation advances workflow runs: the account's coordinator, with the
@@ -3626,13 +3602,6 @@ pub(in crate::app) async fn schedule(host: Arc<Host>) {
             .is_err()
         {
             tracing::warn!(event = "workflow_engine_not_ready");
-        }
-        // The supervisor looks after the runs the engine just advanced (nothing when it is off).
-        if super::supervisor::tick(&host, &Azure::Live, now)
-            .await
-            .is_err()
-        {
-            tracing::warn!(event = "workflow_supervisor_not_ready");
         }
         tokio::time::sleep(std::time::Duration::from_secs(TICK_SECONDS)).await;
     }

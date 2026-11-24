@@ -609,7 +609,7 @@ pub(in crate::app) struct Run {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub preapproved_restart: bool,
     /// The workflow supervisor's looks at this run (`supervisor::Look`), oldest first, at most
-    /// `supervisor::MAX_LOOKS`.
+    /// 20 (read only since the supervisor was retired).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supervision: Vec<super::supervisor::Look>,
     /// When it was moved ahead in the line for a slot (by the supervisor or the person); the

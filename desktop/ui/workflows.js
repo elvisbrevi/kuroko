@@ -13,7 +13,6 @@ import { providerNames } from './home.js';
 import { fillAgentChoices } from './settings-models.js';
 import { blockSummary, KIND_NAMES, loadLaunchers, renderBlocks, STAGE_NAMES } from './workflow-blocks.js';
 import { ALLOWS, allowNames } from './run-states.js';
-import { preapproveField, preapproveLines, preapproveSent } from './workflow-supervisor.js';
 import { deliveryField, deliverySent } from './workflow-delivery.js';
 import { leadField, leadLines, leadSent } from './workflow-leads.js';
 
@@ -470,20 +469,18 @@ function workflowEditor(draft, saved, renderFacts) {
       auto_start: Boolean(draft.auto_start), organization: draft.organization, project: draft.project,
       repositories: draft.repositories.map(({ id, name }) => ({ id, name })), machine: draft.machine, checkouts: { ...draft.checkouts },
       agent: { ...draft.agent }, instructions: draft.instructions, blocks: [...draft.blocks], allow: [...draft.allow],
-      preapprove: preapproveSent(draft.preapprove), updated_at: saved?.updated_at ?? 0,
+      updated_at: saved?.updated_at ?? 0,
     };
     const delivery = deliverySent(draft.delivery);
     if (Object.keys(delivery).length) workflow.delivery = delivery;
     Object.assign(workflow, leadSent(draft));
-    if (workflow.preapprove.some(p => p.action === 'post_summary' && !p.chat)) { report({ error: t('Choose the chat the supervisor posts to.') }); return; }
-    // Lifting a fixed rule, or pre-approving the supervisor, is confirmed with what it lets them do, before it is sent.
-    const lifting = workflow.allow.length > 0 || workflow.preapprove.length > 0 || Boolean(workflow.lead);
+    // Lifting a fixed rule, or naming a lead, is confirmed with what it lets them do, before it is sent.
+    const lifting = workflow.allow.length > 0 || Boolean(workflow.lead);
     if (lifting && !reviewing) {
       reviewing = true;
       confirmation.replaceChildren(
         ...(workflow.allow.length ? [el('p', { textContent: t('In every coding run of this workflow, also those that start by themselves, the agent will be able to, as you and without asking:') }),
           el('ul', {}, ...ALLOWS.filter(a => workflow.allow.includes(a.id)).map(a => el('li', {}, el('strong', { textContent: a.name() }), ` · ${a.effect()}`)))] : []),
-        ...(workflow.preapprove.length ? [el('p', { textContent: t('For this workflow\'s runs, without asking you first:') }), el('ul', {}, ...preapproveLines(workflow.preapprove))] : []),
         ...(workflow.lead ? leadLines(workflow.lead) : []));
       confirmation.hidden = false;
       save.textContent = t('Confirm and save');
@@ -561,7 +558,6 @@ function workflowEditor(draft, saved, renderFacts) {
       el('div', { class: 'workflow-add' }, el('label', {}, t('Block from the library'), addChoice), addBlock), el('div', { class: 'actions' }, library)),
     contextUse,
     allowField,
-    preapproveField(draft, () => { unreview(); touched(); }),
     deliveryField(draft, touched),
     leadField(draft, () => { unreview(); touched(); }),
     el('label', { class: 'check' }, autoStart, el('span', {}, t('Start by itself when an assigned item reaches a ready state'),

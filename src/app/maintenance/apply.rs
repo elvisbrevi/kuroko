@@ -122,9 +122,6 @@ async fn in_memory(host: &Host) -> Vec<String> {
     if host.state.workflows.advancing() {
         reasons.push("A workflow run is advancing a stage.".to_owned());
     }
-    if host.state.workflows.supervision.looking() {
-        reasons.push("The workflow supervisor is looking at a run.".to_owned());
-    }
     reasons
 }
 

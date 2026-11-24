@@ -222,12 +222,9 @@ pub(super) const TOOLS: &[(&str, Remote)] = &[
     // the user's confirmation of the exact text and chat, as every Teams post does.
     ("workflow_summary", Offered),
     ("workflow_summary_send", Offered),
-    // The supervisor's looks, on the owner's coordinator only. Its actions run through the
-    // operations above, each with the user's confirmation; a post sends only the stored draft.
-    ("workflow_supervise", Offered),
+    // What the retired supervisor stored, and the person's control of the line for slots, on
+    // the owner's coordinator only.
     ("workflow_supervision", Offered),
-    ("workflow_supervision_act", Offered),
-    ("workflow_supervision_dismiss", Offered),
     ("workflow_run_requeue", Offered),
     ("answer_rate", Offered),
     ("answer_draft", Offered),
@@ -371,10 +368,7 @@ pub(super) const METHODS: &[&str] = &[
     "workflow_runs_unpause",
     "workflow_summary",
     "workflow_summary_send",
-    "workflow_supervise",
     "workflow_supervision",
-    "workflow_supervision_act",
-    "workflow_supervision_dismiss",
     "workflow_run_requeue",
     "audit_list",
     "audit",

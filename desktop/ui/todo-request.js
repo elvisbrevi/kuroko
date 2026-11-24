@@ -17,15 +17,11 @@ import { failureText } from './run-states.js';
 // ---------------------------------------------------------------- request creation and agent history
 let requestForm = null;
 let requestGeneration = 0;
-/**
- * Opens Create request; a draft (the workflow supervisor's drafted work item) fills its project,
- * type and context, and is written only when the person creates it there.
- * @param {{ provider: 'azure', project?: string, organization?: string, kind?: 'hu' | 'bug', context?: string } | null} draft
- */
-async function openRequest(draft = null) {
+/** Opens Create request for the provider To-Do shows. */
+async function openRequest() {
   const generation = ++requestGeneration;
   requestForm = null;
-  const azure = draft ? draft.provider === 'azure' : $('#todo-provider').value === 'azure';
+  const azure = $('#todo-provider').value === 'azure';
   const source = $('#todo-source').value;
   showTab('create-request');
   $('#create-request h1').focus();
@@ -47,7 +43,7 @@ async function openRequest(draft = null) {
     const result = el('div', { id: 'request-result', 'aria-live': 'polite' });
     const kind = el('fieldset', {}, el('legend', { textContent: t('Request type') }));
     const filter = $('#todo-kind').value;
-    const requested = draft?.kind ?? (filter === 'bug' || todoTypes.some(type => `type:${type.name}` === filter && type.group === 'bug') ? 'bug' : 'hu');
+    const requested = filter === 'bug' || todoTypes.some(type => `type:${type.name}` === filter && type.group === 'bug') ? 'bug' : 'hu';
     for (const [value, label] of [['hu', t('HU')], ['bug', t('Bug')]]) {
       const radio = el('input', { type: 'radio', name: 'request-kind', value, checked: value === requested });
       kind.append(el('label', { class: 'check' }, radio, label));
@@ -57,12 +53,6 @@ async function openRequest(draft = null) {
     provider.onchange = () => implementationModels(form);
     model.onchange = () => implementationEfforts(form);
     effort.onchange = context.oninput = target.onchange = () => implementationReady(form);
-    if (draft) {
-      context.value = draft.context ?? '';
-      const index = catalog.targets.findIndex(target => target.project?.toLowerCase() === draft.project?.toLowerCase()
-        && (!draft.organization || !target.organization || String(target.organization).toLowerCase().replace(/\/$/, '') === draft.organization.toLowerCase().replace(/\/$/, '')));
-      if (index >= 0) { target.value = String(index); target.textContent = requestTargetLabel(catalog.targets[index]); }
-    }
     implementationModels(form);
     start.onclick = () => busy(start, async () => {
       if (form.submitted) return;

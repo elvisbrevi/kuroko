@@ -80,12 +80,6 @@ struct RestartArgs {
     note: Option<String>,
     #[serde(default)]
     confirmed: bool,
-    /// The note is the workflow supervisor's draft, unedited (never from the arguments).
-    #[serde(skip)]
-    drafted: bool,
-    /// The supervisor restarts it as the workflow pre-approved (never from the arguments).
-    #[serde(skip)]
-    preapproved: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,7 +266,6 @@ pub(super) async fn operation(
             let mut view = placed(run.view(), &run, &places(&host.state)?);
             sessions(host, &mut view).await;
             item_state(host, azure, &run, &mut view).await;
-            view["supervising"] = json!(super::supervisor::queued(&host.state, &run.id));
             Ok(json!({ "run": view }))
         }
         "workflow_run_resume" => resume(host, parse(args)?).await,
@@ -774,8 +767,6 @@ async fn restart(host: &Arc<Host>, args: RestartArgs, azure: &Azure) -> Result<V
     let now = now();
     let mut next = Run::new(item, now);
     next.continues = Some(run.id.clone());
-    next.handover_drafted = args.drafted && note.is_some();
-    next.preapproved_restart = args.preapproved;
     next.handover = note;
     next.classification = Some(json!({"workflow":workflow.id,"outcome":"restarted"}));
     engine::assign(&mut next, workflow, &map.workflow_blocks, now, "restarted");
@@ -799,25 +790,6 @@ async fn restart(host: &Arc<Host>, args: RestartArgs, azure: &Azure) -> Result<V
         "warning": ended.warning,
         "paused": paused,
     }))
-}
-
-/// Restart a run with the workflow supervisor's drafted handover, as the person confirmed it
-/// unedited: its coding runs get the note as the supervisor's text.
-pub(super) async fn restart_drafted(
-    host: &Arc<Host>,
-    run: &str,
-    note: &str,
-    preapproved: bool,
-    azure: &Azure,
-) -> Result<Value, String> {
-    let args = RestartArgs {
-        run: run.to_owned(),
-        note: Some(note.to_owned()),
-        confirmed: true,
-        drafted: true,
-        preapproved,
-    };
-    restart(host, args, azure).await
 }
 
 /// A pause's project as given: trimmed, none for every project.

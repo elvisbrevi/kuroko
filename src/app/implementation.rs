@@ -717,12 +717,8 @@ pub(super) struct MachineFacts {
     pub inspect: bool,
     /// It runs the workflow director (`workflow_direct`).
     pub direct: bool,
-    /// It runs the workflow supervisor's looks (`workflow_supervise_support`).
-    pub supervise: bool,
     /// It continues an existing coding session in a launch (`implementation_resume_support`).
     pub resume: bool,
-    /// When it was last seen (Unix seconds); now for this installation.
-    pub seen: i64,
 }
 /// The machine `id` of this account, or none when it is unknown, revoked or another account's.
 pub(super) async fn machine_facts(host: &Arc<Host>, id: &str) -> Result<Option<MachineFacts>> {
@@ -737,9 +733,7 @@ pub(super) async fn machine_facts(host: &Arc<Host>, id: &str) -> Result<Option<M
             roots: own_roots,
             inspect: true,
             direct: true,
-            supervise: true,
             resume: true,
-            seen: now(),
         }));
     }
     Ok(data
@@ -753,25 +747,8 @@ pub(super) async fn machine_facts(host: &Arc<Host>, id: &str) -> Result<Option<M
             roots: m.roots.clone(),
             inspect: m.checkout_inspect,
             direct: m.workflow_direct,
-            supervise: m.workflow_supervise,
             resume: m.resume,
-            seen: m.seen,
         }))
-}
-/// The account's other machines whose last poll did not say they run the workflow supervisor
-/// (`workflow_supervise_support`), by name: a version that predates it, which refuses the
-/// account's map once the supervisor's settings are not their defaults.
-pub(in crate::app) async fn machines_before_supervisor(host: &Arc<Host>) -> Result<Vec<String>> {
-    let version = management::version(host)?;
-    let data = host.state.implementation.registry.lock().await;
-    Ok(data
-        .machines
-        .iter()
-        .filter(|m| {
-            !m.revoked && m.id != data.id && m.account_version == version && !m.workflow_supervise
-        })
-        .map(|m| m.name.clone())
-        .collect())
 }
 /// The account's trusted machines whose host runs `until` or an older release, or reports no
 /// version (hosts older than the reports), as `name (version)`.
@@ -1354,23 +1331,6 @@ pub(super) async fn test_creation(host: &Host, plan: &str, record: Value) {
 pub(super) fn test_directories(host: &Host, id: &str) -> Vec<PathBuf> {
     let run = host.state.implementation.db.get(id).unwrap().unwrap();
     run.launch.request.directories
-}
-/// A machine of the account that polled once, saying whether it runs the workflow supervisor
-/// (tests).
-#[cfg(test)]
-pub(in crate::app) async fn test_worker(host: &Arc<Host>, name: &str, supervise: bool) -> String {
-    let worker = uuid::Uuid::new_v4().to_string();
-    let registration = fleet::register(host, &json!({"id":worker,"name":name,"os":"macos"}))
-        .await
-        .unwrap();
-    let token = registration["token"].as_str().unwrap().to_owned();
-    fleet::protocol(
-        host,
-        &json!({"id":worker,"token":token,"action":"poll","workflow_supervise_support":supervise}),
-    )
-    .await
-    .unwrap();
-    worker
 }
 /// End an in-flight run in `state` as its machine would record it (tests).
 #[cfg(all(test, unix))]
@@ -2937,14 +2897,6 @@ mod tests {
             json!({"id":worker,"token":token,"action":"poll","workflow_direct_support":true});
         fleet::protocol(&host, &poll).await.unwrap();
         assert!(machine_facts(&host, &worker).await.unwrap().unwrap().direct);
-        // A worker that runs the director but not the supervisor is never asked for a look.
-        assert!(
-            !machine_facts(&host, &worker)
-                .await
-                .unwrap()
-                .unwrap()
-                .supervise
-        );
         let look = |host: Arc<Host>,
                     director: crate::workflows::director::Director,
                     item: crate::tools::todo::Item| async move {
@@ -3040,13 +2992,6 @@ mod tests {
         let mut supervising = poll.clone();
         supervising["workflow_supervise_support"] = json!(true);
         fleet::protocol(&host, &supervising).await.unwrap();
-        assert!(
-            machine_facts(&host, &worker)
-                .await
-                .unwrap()
-                .unwrap()
-                .supervise
-        );
         let looking = tokio::spawn(look(host.clone(), director.clone(), item.clone()));
         let command = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
