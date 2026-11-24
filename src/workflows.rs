@@ -48,6 +48,8 @@ pub const OLDER_DELIVERY_UNTIL: &str = "0.14.1";
 /// The last release whose hosts cannot read workflow leads, a workflow's lead or its completion
 /// criteria (`deny_unknown_fields`).
 pub const OLDER_LEADS_UNTIL: &str = "0.20.1";
+/// The newest release that refuses what a workflow's lead may do or its shadow (`may`, `shadow`).
+pub const OLDER_LEAD_DECISIONS_UNTIL: &str = "0.20.8";
 /// The newest release whose hosts cannot read a session time limit (a workflow's
 /// `agent.time_limit_minutes`, the settings' `coding_`/`planning_time_limit_minutes`).
 pub const OLDER_TIME_LIMIT_UNTIL: &str = "0.19.1";

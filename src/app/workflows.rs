@@ -304,15 +304,19 @@ async fn older_delivery(host: &Arc<Host>, workflow: &Workflow) -> Option<String>
 }
 
 /// Leads, a workflow's lead or its completion criteria are refused by a host from before them
-/// (0.20.1 or older): the save names the account's machines that report one.
+/// (0.20.1 or older; what a lead may do and its shadow, 0.20.8 or older): the save names the
+/// account's machines that report one.
 async fn older_leads(host: &Arc<Host>, what: &str) -> Option<String> {
-    let older = implementation::machines_until(host, core::OLDER_LEADS_UNTIL)
+    older_than(host, what, core::OLDER_LEADS_UNTIL).await
+}
+async fn older_than(host: &Arc<Host>, what: &str, until: &str) -> Option<String> {
+    let older = implementation::machines_until(host, until)
         .await
         .unwrap_or_default();
     (!older.is_empty()).then(|| {
         format!(
             "{what}, which hosts of release {} or older cannot read: {} {} the account's configuration (keeping {}) until updated.",
-            core::OLDER_LEADS_UNTIL,
+            until,
             older.join(", "),
             if older.len() == 1 { "refuses" } else { "refuse" },
             if older.len() == 1 {
@@ -385,10 +389,19 @@ pub(super) fn describe_workflow(workflow: &Workflow) -> Option<String> {
     }
     let mut text = format!("Save workflow {}?", workflow.id);
     if let Some(lead) = &workflow.lead {
-        text.push_str(&format!(
-            " Its workflow lead {} follows its runs on this coordinator with its own Claude agent and that account's usage, in shadow: it reads them and records what it would decide, and changes nothing.",
-            lead.id
-        ));
+        let may: Vec<&str> = lead.may.iter().map(|m| m.describe()).collect();
+        if lead.shadow || may.is_empty() {
+            text.push_str(&format!(
+                " Its workflow lead {} follows its runs on this coordinator with its own Claude agent and that account's usage, in shadow: it reads them and records what it would decide, and changes nothing.",
+                lead.id
+            ));
+        } else {
+            text.push_str(&format!(
+                " Its workflow lead {} follows its runs on this coordinator with its own Claude agent and that account's usage, and by itself may {}; code checks each decision first, and anything else it decides is only recorded.",
+                lead.id,
+                may.join("; and ")
+            ));
+        }
     }
     if !lifted.is_empty() {
         text.push_str(&format!(
@@ -675,6 +688,10 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             core::validate_workflow(&workflow).map_err(invalid)?;
             workflow.allow.sort();
             workflow.preapprove.sort_by_key(|p| p.action);
+            if let Some(lead) = workflow.lead.as_mut() {
+                lead.may.sort();
+                lead.may.dedup();
+            }
             // A pre-approved post's chat is one of the user's, under the name their chat list
             // gives it, before the confirmation shows it.
             preapproved_chats(state, &workflow).await?;
@@ -725,6 +742,20 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             warnings.extend(older_hosts(host, &saved).await);
             warnings.extend(older_supervisors(host, &saved).await);
             warnings.extend(older_delivery(host, &saved).await);
+            if saved
+                .lead
+                .as_ref()
+                .is_some_and(|l| !l.may.is_empty() || !l.shadow)
+            {
+                warnings.extend(
+                    older_than(
+                        host,
+                        &format!("Workflow {}'s lead may decide by itself", saved.id),
+                        core::OLDER_LEAD_DECISIONS_UNTIL,
+                    )
+                    .await,
+                );
+            }
             if saved.lead.is_some() || !saved.done_when.is_empty() {
                 warnings.extend(
                     older_leads(

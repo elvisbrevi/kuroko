@@ -1961,7 +1961,10 @@ async fn leads_are_named_found_by_name_assigned_with_confirmation_and_kept_while
     assert_eq!(shown.data["lead"]["id"], "pagos");
     // A workflow takes its lead only with the user's confirmation, which names it.
     let mut led = workflow("payments", &own);
-    led.lead = Some(crate::workflows::lead::WorkflowLead { id: "pagos".into() });
+    led.lead = Some(crate::workflows::lead::WorkflowLead {
+        id: "pagos".into(),
+        ..Default::default()
+    });
     led.done_when = "Done once its pull request is open for review.".into();
     let unconfirmed = call(&host, Local, "workflow_save", json!({"workflow":led})).await;
     let message = unconfirmed.message.unwrap();
@@ -1971,7 +1974,10 @@ async fn leads_are_named_found_by_name_assigned_with_confirmation_and_kept_while
     );
     // A lead that does not exist is refused before anything is read.
     let mut unknown = led.clone();
-    unknown.lead = Some(crate::workflows::lead::WorkflowLead { id: "nadie".into() });
+    unknown.lead = Some(crate::workflows::lead::WorkflowLead {
+        id: "nadie".into(),
+        ..Default::default()
+    });
     let refused = call(
         &host,
         Local,

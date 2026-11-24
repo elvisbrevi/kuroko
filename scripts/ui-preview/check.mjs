@@ -2271,6 +2271,16 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   const number = text => Number(/hasta (\d+) de/.exec(text)?.[1]);
   check(`workflows ${label}: the context used follows the instructions as they are typed`, number(contextAfter) - number(contextBefore) === ' Keep every commit small.'.length, `${contextBefore} → ${contextAfter}`);
   await area.fill(instructionsBefore);
+  // What its lead decides by itself: off until a lead is chosen, then each its own box.
+  const leadOf = usageOf.locator('fieldset.workflow-lead');
+  check(`workflows ${label}: what a lead may decide waits for a lead to be chosen`,
+    await leadOf.locator('[data-lead-may="settle"]').isDisabled() && await leadOf.locator('[data-lead="applied"]').isDisabled());
+  await leadOf.locator('[data-lead="choice"]').selectOption('pagos');
+  await leadOf.locator('[data-lead-may="close"]').check();
+  check(`workflows ${label}: a chosen lead offers settling, closing and applying its decisions`,
+    await leadOf.locator('[data-lead-may="settle"]').isEnabled() && await leadOf.locator('[data-lead-may="close"]').isChecked() && /Aplicar sus decisiones/.test(await leadOf.innerText()));
+  await leadOf.locator('[data-lead-may="close"]').uncheck();
+  await leadOf.locator('[data-lead="choice"]').selectOption('');
   check(`workflows ${label}: no free-text directory field`, await page.locator('#workflows input:not([type=checkbox]):not([type=search])').evaluateAll(inputs => inputs.every(i => !/dir|path|checkout/i.test(i.name + i.id + i.placeholder))));
 
   // A new workflow: project, repositories, checkout on the machine, agent; saved and verified.

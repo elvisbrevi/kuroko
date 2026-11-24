@@ -20,7 +20,10 @@ fn lead_to(bench: &Bench) {
         enabled: true,
         updated_at: 0,
     }];
-    map.workflows[0].lead = Some(WorkflowLead { id: "pagos".into() });
+    map.workflows[0].lead = Some(WorkflowLead {
+        id: "pagos".into(),
+        ..Default::default()
+    });
     map.workflows[0].done_when = "Done once its pull request is completed.".into();
     bench.host.state.settings.save_map(&map).unwrap();
 }
@@ -380,4 +383,129 @@ async fn the_person_talks_with_a_lead_live_and_its_turns_wait_meanwhile() {
         super::super::shifts::operation(&bench.host, "workflow_lead_shifts", &json!({})).unwrap();
     assert_eq!(listed["shifts"][0]["talking"], false);
     bench.release();
+}
+
+/// Ask the lead to look now until its journal has `n` decisions `word`.
+async fn look(bench: &Bench, word: &str, n: usize) -> super::super::shifts::Shift {
+    let decided = |s: &super::super::shifts::Shift| {
+        s.journal
+            .iter()
+            .filter(|e| e.decision.as_deref() == Some(word))
+            .count()
+    };
+    for _ in 0..400 {
+        let now = shift(bench);
+        if decided(&now) >= n {
+            return now;
+        }
+        let _ = super::super::shifts::operation(
+            &bench.host,
+            "workflow_lead_wake",
+            &json!({"lead": "pagos"}),
+        );
+        bench.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the lead did not decide {word} {n} times");
+}
+
+#[tokio::test]
+async fn a_lead_out_of_shadow_settles_a_wiki_delivery_and_its_run_ends_without_pull_requests() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflows[0].lead.as_mut().unwrap().may = vec![
+        crate::workflows::lead::May::Settle,
+        crate::workflows::lead::May::Close,
+    ];
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "nobranch");
+    let id = bench.start(TASK).await;
+    bench
+        .catalog
+        .wiki_change("me", "/Procedures/Deploy the portal", bench.now());
+    let stopped = bench.state(&id, Phase::NeedsAttention).await;
+    let child = stopped.children[0].id;
+    let call = |name: &str, arguments: Value| {
+        json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}})
+        .to_string()
+    };
+    // Closing before its child is settled is refused, whatever the lead may do.
+    fs::write(
+        bench.log.join("lead_call"),
+        call("lead_settle_child", json!({"run": id, "child": child, "wiki_pages": ["/Procedures/Deploy the portal"], "reason": "Its procedure page is published."})) + "\n",
+    )
+    .unwrap();
+    // In shadow: recorded, not applied.
+    let shadow = look(&bench, "settle", 1).await;
+    let decided = shadow
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.decision.as_deref() == Some("settle"))
+        .unwrap();
+    assert!(
+        decided.result.as_deref().unwrap().starts_with("recorded"),
+        "{decided:?}"
+    );
+    assert_eq!(bench.run(&id).state, Phase::NeedsAttention);
+    // Out of shadow, from its next decision: applied, and the run ends.
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflows[0].lead.as_mut().unwrap().shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    let applied = look(&bench, "settle", 2).await;
+    let decided = applied
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.decision.as_deref() == Some("settle"))
+        .unwrap();
+    assert_eq!(decided.result.as_deref(), Some("applied"), "{decided:?}");
+    let run = bench.state(&id, Phase::Done).await;
+    assert_eq!(
+        run.children[0].wiki_pages[0].path,
+        "/Procedures/Deploy the portal"
+    );
+    assert!(run.children[0].pull_requests.is_empty());
+    assert!(bench.catalog.only_reads());
+}
+
+#[tokio::test]
+async fn a_lead_closes_a_run_whose_pull_request_is_open_and_its_completion_blocks_are_skipped() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::Close];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    bench.pulls(WEB, "payments-web", "feature/child-1", 21, "active");
+    bench.state(&id, Phase::PullRequests).await;
+    let call = |name: &str, arguments: Value| {
+        json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":arguments}}}})
+        .to_string()
+    };
+    fs::write(
+        bench.log.join("lead_call"),
+        call(
+            "lead_close_run",
+            json!({"run": id, "reason": "Done once its pull request is open for review."}),
+        ) + "\n",
+    )
+    .unwrap();
+    let closed = look(&bench, "close", 1).await;
+    let decided = closed
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.decision.as_deref() == Some("close"))
+        .unwrap();
+    assert_eq!(decided.result.as_deref(), Some("applied"), "{decided:?}");
+    let run = bench.state(&id, Phase::Done).await;
+    assert_eq!(run.children[0].pull_requests[0].status, "active");
+    assert!(bench.catalog.only_reads());
 }
