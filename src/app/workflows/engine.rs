@@ -2385,11 +2385,34 @@ async fn coding(
             }
         });
         let texts = prompt_texts(host);
-        let mut context = coding_context(&subject, &given, note, workflow, &run.blocks, &texts);
-        if let Some(base) = &child.base {
-            context.push_str(&stacked(base, &texts));
+        // A continuation its lead asked for resumes the cut session with its note; anything
+        // else starts a session with the whole context. Never while that session runs again
+        // (a person may have opened it meanwhile).
+        let resume = child.continue_session.clone();
+        let continuing = resume.is_some();
+        if continuing
+            && let Some(previous) = child.previous.last()
+            && implementation::session_life(host, &previous.id)
+                .await
+                .is_some_and(|life| life["session_alive"] == true)
+        {
+            return wait(run, "The session its lead continues is alive again.".into());
         }
-        let context = fitted(context)?;
+        let context = if resume.is_some() {
+            texts.render(
+                "runs.continue",
+                &[(
+                    "message",
+                    child.continue_note.as_deref().unwrap_or_default(),
+                )],
+            )
+        } else {
+            let mut context = coding_context(&subject, &given, note, workflow, &run.blocks, &texts);
+            if let Some(base) = &child.base {
+                context.push_str(&stacked(base, &texts));
+            }
+            fitted(context)?
+        };
         let limit = time_limit(host, workflow, false);
         let launched = implementation::launch_planned(
             host,
@@ -2406,8 +2429,10 @@ async fn coding(
                 planning: false,
                 // As the run's definition holds it: later edits do not change this run.
                 allow: workflow.allow.clone(),
-                round: false,
-                resume: None,
+                // A continuation is one more turn of that session, as a review round's: every
+                // machine that continues sessions knows it so.
+                round: continuing,
+                resume,
                 time_limit_minutes: limit,
             },
         )
@@ -2417,21 +2442,34 @@ async fn coding(
                 // Its coding run counts as open from now on: the reservation ends.
                 run.coding_into = None;
                 let child = &mut run.children[index];
+                child.continue_session = None;
+                child.continue_note = None;
                 if let Some(c) = child.coding.as_mut() {
                     c.started = true;
                     c.time_limit_minutes = recorded_limit(limit);
                 }
                 child.repository = Some(repository);
                 child.directory = Some(directory);
-                child.started_at = Some(now);
+                // A continuation keeps the window of the session it continues.
+                child.started_at = child.started_at.filter(|_| continuing).or(Some(now));
                 run.error = None;
                 Ok(true)
             }
             Err(error) if transient(&error.to_string()) => wait(run, error.to_string()),
-            Err(error) => Err(format!(
-                "The coding run of {} could not be launched: {error}",
-                child.url
-            )),
+            Err(error) => {
+                // A continuation that cannot be launched gives its turn back.
+                if continuing {
+                    let child = &mut run.children[index];
+                    child.coding = child.previous.pop();
+                    child.continuations = child.continuations.saturating_sub(1);
+                    child.continue_session = None;
+                    child.continue_note = None;
+                }
+                Err(format!(
+                    "The coding run of {} could not be launched: {error}",
+                    run.children[index].url
+                ))
+            }
         };
     }
     let observed = match implementation::observe(host, &coding.machine, &coding.id).await {
@@ -2528,10 +2566,11 @@ fn with_reports(child: &Child, observed: &Value) -> String {
 /// the child's own repository, `Branch REPOSITORY: NAME` for another, checked like any line.
 fn reported_lines(child: &Child, observed: &Value) -> String {
     let own = child.repository.as_ref().map(|r| r.name.to_lowercase());
-    observed["reports"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    // What the sessions its lead continued reported counts too.
+    child
+        .previous_reports
+        .iter()
+        .chain(observed["reports"].as_array().into_iter().flatten())
         .filter(|r| r["kind"] == "delivery")
         .filter_map(|r| {
             let (repository, branch) = (r["repository"].as_str()?, r["branch"].as_str()?);

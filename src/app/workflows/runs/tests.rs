@@ -115,6 +115,7 @@ fi
 echo x >> "$LOG/starts"
 n=$(wc -l < "$LOG/starts" | tr -d ' ')
 cp "$prompt" "$LOG/coding.$n"
+printf '%s\n' "$@" > "$LOG/coding_args.$n"
 printf '%s' "$OPENCODE_CONFIG_CONTENT" > "$LOG/config.$n"
 [ "$(cat "$LOG/mode" 2>/dev/null)" = exit ] && exit_at_start
 printf '%s\n' "{\"type\":\"step_start\",\"sessionID\":\"ses_code$n\"}"

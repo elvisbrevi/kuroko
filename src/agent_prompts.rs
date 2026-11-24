@@ -397,6 +397,14 @@ pub const BUILT_IN: &[BuiltIn] = &[
         ["note"]
     ),
     built_in!(
+        "runs.continue",
+        "workflow_runs",
+        "Continue a cut session",
+        "Sent to a coding session that was cut before its final report when its workflow's lead continues it.",
+        prompts::RUN_CONTINUE,
+        ["message"]
+    ),
+    built_in!(
         "reviews.round",
         "workflow_runs",
         "Review round",

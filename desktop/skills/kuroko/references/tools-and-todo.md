@@ -715,6 +715,9 @@ run (any state but `done` and `cancelled`).
   saved: its lead then settles a child with the deliveries code verifies it made (as accepting
   what was found) and closes a run by the completion criteria once every child is settled and no
   session runs, also with pull requests open (their pull-requests-completed blocks are skipped).
+  With `wait` it keeps a run waiting for its pull requests past the account's limit (asked when
+  it passes, up to 60 days) and moves a run ahead in the line; with `continue` it continues a
+  coding session cut before its report, in its own conversation, at most twice per child.
   Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within

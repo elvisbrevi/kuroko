@@ -81,6 +81,9 @@ pub enum May {
     /// Keep waiting for a run's pull requests past the account's limit (up to 60 days from the
     /// wait's start), and move a run ahead in the line.
     Wait,
+    /// Continue a coding session cut before its final report, in its own conversation, at most
+    /// twice per child.
+    Continue,
 }
 impl May {
     /// What allowing it means, for the confirmation of a workflow's save.
@@ -88,6 +91,9 @@ impl May {
         match self {
             May::Settle => {
                 "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::Continue => {
+                "continue a coding session that was cut before its final report, in its own conversation with its note, at most twice per child, never while it runs or under a pause"
             }
             May::Wait => {
                 "keep waiting for a run's pull requests past the account's limit, up to 60 days from the start of the wait (without its decision a day after the limit, the run stops as before), and move a run ahead in the line"
