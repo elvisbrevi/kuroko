@@ -125,6 +125,9 @@ pub(in crate::app) struct Entry {
     /// The run as the engine had it then (`state` and stage), beside a decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// What code did with a decision it may apply: `applied`, or why it refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
     /// A question's ID and the person's answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -973,7 +976,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 14] = [
+const TOOLS: [(&str, &str, Schema); 16] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1021,8 +1024,18 @@ const TOOLS: [(&str, &str, Schema); 14] = [
     ),
     (
         "lead_decide",
-        "Record what should happen with one run of your workflows and why: settle (its child delivered what it should), close (the run is done by its workflow's criteria), wait (keep waiting), continue (its cut agent session should be continued) or ask_person (the person must look). In shadow this is recorded, not applied.",
-        || json!({"type": "object", "properties": {"run": {"type": "string"}, "decision": {"type": "string", "enum": ["settle", "close", "wait", "continue", "ask_person"]}, "reason": {"type": "string"}}, "required": ["run", "decision", "reason"]}),
+        "Record what should happen with one run of your workflows and why: wait (keep waiting), continue (its cut agent session should be continued) or ask_person (the person must look). It is recorded, not applied. To settle a child or close a run use lead_settle_child and lead_close_run.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "decision": {"type": "string", "enum": ["wait", "continue", "ask_person"]}, "reason": {"type": "string"}}, "required": ["run", "decision", "reason"]}),
+    ),
+    (
+        "lead_settle_child",
+        "Settle one child of a run that stopped without naming its delivery, with the branches (repository and branch), pull requests or Wiki pages it delivered: code checks each against what it found the child delivered, and applies it only where your workflow lets you decide; otherwise it is recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}, "branches": {"type": "array", "items": {"type": "object", "properties": {"repository": {"type": "string"}, "branch": {"type": "string"}}, "required": ["repository", "branch"]}}, "pull_requests": {"type": "array", "items": {"type": "integer"}}, "wiki_pages": {"type": "array", "items": {"type": "string"}}, "reason": {"type": "string"}}, "required": ["run", "child", "reason"]}),
+    ),
+    (
+        "lead_close_run",
+        "Close a run as done by your workflow's completion criteria: code requires every child settled, at least one delivered, no agent session alive and the plan reviewed; pull requests still open are left open and their pull-requests-completed blocks skipped. Applied only where your workflow lets you decide; otherwise it is recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "reason": {"type": "string"}}, "required": ["run", "reason"]}),
     ),
     (
         "lead_note",
@@ -1243,11 +1256,11 @@ async fn call(
         "lead_decide" => {
             let run = run("run")?;
             let decision = args["decision"].as_str().unwrap_or_default();
-            if !matches!(
-                decision,
-                "settle" | "close" | "wait" | "continue" | "ask_person"
-            ) {
-                return Err("Decide settle, close, wait, continue or ask_person.".into());
+            if !matches!(decision, "wait" | "continue" | "ask_person") {
+                return Err(
+                    "Decide wait, continue or ask_person; settle and close have their own tools."
+                        .into(),
+                );
             }
             note(Entry {
                 at: now,
@@ -1265,6 +1278,66 @@ async fn call(
                 ..Default::default()
             });
             Ok(json!({"recorded": true, "applied": false}))
+        }
+        "lead_settle_child" | "lead_close_run" => {
+            let run = run("run")?;
+            let (what, word) = if tool == "lead_settle_child" {
+                (crate::workflows::lead::May::Settle, "settle")
+            } else {
+                (crate::workflows::lead::May::Close, "close")
+            };
+            // What the workflow allows now: a change applies from the next decision.
+            // Its own lead, on now, and allowed by the workflow now.
+            let me = shift.lock().unwrap().lead.clone();
+            let allowed = host.state.settings.map().is_ok_and(|map| {
+                map.workflow_leads.iter().any(|l| l.id == me && l.enabled)
+                    && map.workflows.iter().any(|w| {
+                        Some(&w.id) == run.workflow.as_ref()
+                            && w.lead
+                                .as_ref()
+                                .is_some_and(|l| l.id == me && l.applies(what))
+                    })
+            });
+            let engine = format!(
+                "{}{}",
+                run.state.word(),
+                run.stopped_in
+                    .map(|s| format!(" in {}", s.word()))
+                    .unwrap_or_default()
+            );
+            let result = if !allowed {
+                None
+            } else if what == crate::workflows::lead::May::Settle {
+                let mut settle = json!({"run": run.id, "child": args["child"]});
+                for key in ["branches", "pull_requests", "wiki_pages"] {
+                    if args[key].is_array() {
+                        settle[key] = args[key].clone();
+                    }
+                }
+                Some(super::found::accept_for_lead(host, &settle, azure).await)
+            } else {
+                Some(close(host, &run.id, &text("reason", 600)).await)
+            };
+            let outcome = match &result {
+                None => "recorded (in shadow, or not allowed for this workflow)".to_owned(),
+                Some(Ok(_)) => "applied".into(),
+                Some(Err(refused)) => format!("refused: {}", bounded(refused, 600)),
+            };
+            note(Entry {
+                at: now,
+                kind: "decision".into(),
+                run: Some(run.id.clone()),
+                decision: Some(word.into()),
+                text: text("reason", 600),
+                engine: Some(engine),
+                result: Some(outcome.clone()),
+                ..Default::default()
+            });
+            match result {
+                Some(Err(refused)) => Err(format!("Refused, and recorded: {refused}")),
+                Some(Ok(_)) => Ok(json!({"recorded": true, "applied": true})),
+                None => Ok(json!({"recorded": true, "applied": false})),
+            }
         }
         "lead_note" => {
             let about = match args["run"].as_str() {
@@ -1767,4 +1840,96 @@ pub(in crate::app) async fn talk(
             Err(fail(error))
         }
     }
+}
+
+/// A workflow lead's closing of a run as done (`lead_close_run`), above the floor code enforces:
+/// past its plan review, every child settled and at least one delivered, no coding session
+/// running, no creation in flight. Pull requests still open stay open and the blocks of the
+/// pull-requests-completed stage are recorded skipped.
+async fn close(host: &Arc<Host>, id: &str, reason: &str) -> std::result::Result<Value, String> {
+    use super::record::State as Phase;
+    let state = &host.state;
+    let lock = state.workflows.lock(id);
+    let _guard = lock.lock().await;
+    let mut run = state
+        .workflows
+        .db
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no workflow run {id}.")))?;
+    // Coding or waiting for its pull requests, or stopped there for attention: never a failed,
+    // interrupted or finished run.
+    let stage = match run.state {
+        Phase::Coding | Phase::PullRequests => Some(run.state),
+        Phase::NeedsAttention => run.stopped_in,
+        _ => None,
+    };
+    if !matches!(stage, Some(Phase::Coding | Phase::PullRequests)) {
+        return Err(conflict(format!(
+            "Run {} is {}: only a run coding or waiting for its pull requests closes.",
+            run.id,
+            run.state.word()
+        )));
+    }
+    if run.children.is_empty() || run.children.iter().any(|c| c.outcome.is_none()) {
+        return Err(conflict(
+            "Every child must be settled first (lead_settle_child, or its own report).",
+        ));
+    }
+    if !run
+        .children
+        .iter()
+        .any(|c| c.outcome.as_deref() == Some("done") && c.reported())
+    {
+        return Err(conflict(
+            "No child delivered anything: a run closes with at least one delivery.",
+        ));
+    }
+    // No agent session of the run alive now: planning, coding, review rounds, continued ones.
+    let sessions: Vec<String> = run.implementations().map(|i| i.id.clone()).collect();
+    for id in sessions {
+        if super::super::implementation::session_life(host, &id)
+            .await
+            .is_some_and(|life| life["session_alive"] == true)
+        {
+            return Err(conflict("An agent session of this run is still alive."));
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    let completed = run
+        .children
+        .iter()
+        .flat_map(|c| &c.pull_requests)
+        .all(|p| p.status == "completed" || p.accepted);
+    if !completed {
+        let skipped: Vec<_> = run
+            .blocks
+            .iter()
+            .filter(|b| {
+                b.kind != crate::workflows::Kind::Instruction
+                    && b.stage == Some(crate::workflows::Stage::PullRequestsCompleted)
+            })
+            .map(|b| super::record::BlockOutcome {
+                block: b.id.clone(),
+                kind: b.kind,
+                stage: b.stage,
+                outcome: "skipped".into(),
+                at: now,
+                occurrence: "pull_requests_completed".into(),
+                reason: Some("Its lead closed the run with pull requests still open.".into()),
+                exit_code: None,
+                duration_ms: None,
+                message_id: None,
+            })
+            .collect();
+        run.block_outcomes.extend(skipped);
+    }
+    run.advance(
+        Phase::Blocks,
+        now,
+        &format!("closed by its lead: {}", bounded(reason, 300)),
+    );
+    run.error = None;
+    state.workflows.db.save(&run).map_err(fail)?;
+    Ok(json!({"run": run.id, "closed": true}))
 }

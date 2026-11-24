@@ -39,11 +39,58 @@ fn on() -> bool {
 }
 
 /// A workflow's lead.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowLead {
     /// The lead's ID.
     pub id: String,
+    /// What it may do for this workflow's runs by itself, once out of shadow (0.20.9).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub may: Vec<May>,
+    /// Its decisions are only recorded (the default); false applies what `may` lists.
+    #[serde(default = "on", skip_serializing_if = "is_on")]
+    pub shadow: bool,
+}
+impl Default for WorkflowLead {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            may: Vec::new(),
+            shadow: true,
+        }
+    }
+}
+impl WorkflowLead {
+    /// Whether its decision `what` applies to this workflow's runs.
+    pub fn applies(&self, what: May) -> bool {
+        !self.shadow && self.may.contains(&what)
+    }
+}
+fn is_on(value: &bool) -> bool {
+    *value
+}
+
+/// What a workflow's lead may do for its runs without asking.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum May {
+    /// Settle a child with deliveries code verifies (as accepting what was found).
+    Settle,
+    /// Close a run by the workflow's completion criteria, above the floor code enforces.
+    Close,
+}
+impl May {
+    /// What allowing it means, for the confirmation of a workflow's save.
+    pub fn describe(self) -> &'static str {
+        match self {
+            May::Settle => {
+                "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::Close => {
+                "close a run as done by the workflow's completion criteria once every child is settled and no session is alive, also with pull requests still open (their pull-requests-completed blocks are skipped)"
+            }
+        }
+    }
 }
 
 /// A name compared as people read it: without letter case, accents (also typed as separate
@@ -221,6 +268,7 @@ mod tests {
             id: "payments".into(),
             lead: Some(WorkflowLead {
                 id: "missing".into(),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -231,7 +279,10 @@ mod tests {
             )
             .is_err()
         );
-        workflow.lead = Some(WorkflowLead { id: "pagos".into() });
+        workflow.lead = Some(WorkflowLead {
+            id: "pagos".into(),
+            ..Default::default()
+        });
         workflow.done_when = "x".repeat(MAX_DONE_WHEN + 1);
         assert!(
             validate(

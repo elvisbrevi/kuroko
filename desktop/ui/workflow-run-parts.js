@@ -219,6 +219,7 @@ function leadPanel(shifts) {
     badge(e.kind === 'decision' ? t(DECISIONS[e.decision] ?? e.decision) : t(KINDS[e.kind] ?? 'Note'), e.kind === 'decision' ? 'info' : e.kind === 'question' && !e.answer ? 'warn' : 'muted'), ' ',
     el('span', { textContent: e.text }),
     e.answer ? el('small', { textContent: ` · ${t('Your answer: {text}', { text: e.answer })}` }) : null,
+    e.result === 'applied' ? el('small', { textContent: ` · ${t('its decision was applied')}` }) : e.result?.startsWith('refused: ') ? el('small', { textContent: ` · ${t('refused: {reason}', { reason: e.result.slice(9) })}` }) : null,
     el('small', { textContent: ` · ${when(e.at)}${e.engine ? ` · ${t('the run was {state}', { state: engineState(e.engine) })}` : ''}` })));
   return el('details', { class: 'fold', open: true, id: 'run-lead' }, el('summary', { textContent: t('What its lead said (in shadow: nothing is applied)') }), el('ul', { class: 'run-pulls' }, ...rows));
 }

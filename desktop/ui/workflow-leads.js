@@ -9,6 +9,12 @@ import { el } from './dom.js';
 import { busy, done } from './notices.js';
 import { fillAgentChoices } from './settings-models.js';
 
+/** What a workflow's lead may decide by itself (`lead.may`, src/workflows/lead.rs `May`). */
+const MAY = [
+  { id: 'settle', name: 'Settle children', effect: 'With the branches, pull requests or Wiki pages code verifies they delivered; the run then goes on by itself.' },
+  { id: 'close', name: 'Close runs', effect: 'As done by your criteria once every child is settled, also with pull requests still open.' },
+];
+
 /** The longest completion criteria and lead description (src/workflows/lead.rs). */
 const MAX_DONE_WHEN = 4000;
 const MAX_DESCRIPTION = 2000;
@@ -176,21 +182,44 @@ function leadField(draft, changed) {
     choice.value = draft.lead?.id ?? '';
   };
   options();
-  choice.onchange = () => { draft.lead = choice.value ? { id: choice.value } : null; changed(); };
+  choice.onchange = () => { draft.lead = choice.value ? { ...draft.lead, id: choice.value } : null; changed(); };
   const criteria = el('textarea', { rows: 3, maxLength: MAX_DONE_WHEN, value: draft.done_when ?? '', 'data-lead': 'done_when', placeholder: t('For example: done once its pull request is open for review.') });
   criteria.oninput = () => { draft.done_when = criteria.value; changed(); };
+  // What it decides by itself, out of shadow: each its own box, confirmed when the workflow is saved.
+  const may = MAY.map(({ id, name, effect }) => {
+    const box = el('input', { type: 'checkbox', 'data-lead-may': id, checked: (draft.lead?.may ?? []).includes(id), disabled: !draft.lead?.id });
+    box.onchange = () => { const chosen = new Set(draft.lead?.may ?? []); if (box.checked) chosen.add(id); else chosen.delete(id); draft.lead = { ...draft.lead, may: MAY.map(m => m.id).filter(m => chosen.has(m)) }; changed(); };
+    return el('label', { class: 'check' }, box, el('span', {}, t(name), ' ', el('small', { textContent: t(effect) })));
+  });
+  const applied = el('input', { type: 'checkbox', 'data-lead': 'applied', checked: draft.lead?.shadow === false, disabled: !draft.lead?.id });
+  applied.onchange = () => { draft.lead = { ...draft.lead, shadow: !applied.checked }; changed(); };
+  choice.addEventListener('change', () => { for (const box of [applied, ...may.map(l => l.querySelector('input'))]) box.disabled = !choice.value; });
   if (!read) readLeads().then(options).catch(() => {});
   return el('fieldset', { class: 'workflow-lead' }, el('legend', { textContent: t('Workflow lead') }),
-    el('label', {}, t('Its lead'), ' ', el('small', { textContent: t('Follows its runs with their context; for now it reads and records and changes nothing.') }), choice),
-    el('label', {}, t('When a run is done'), ' ', el('small', { textContent: t('In your words; its lead reads it.') }), criteria));
+    el('label', {}, t('Its lead'), ' ', el('small', { textContent: t('Follows its runs with their context; in shadow it reads and records and changes nothing.') }), choice),
+    el('label', {}, t('When a run is done'), ' ', el('small', { textContent: t('In your words; its lead reads it.') }), criteria),
+    el('p', { class: 'hint' }, t('What it decides by itself once its decisions apply; code checks each one first.')), ...may,
+    el('label', { class: 'check' }, applied, el('span', { textContent: t('Apply its decisions (out of shadow)') })));
+}
+
+/** What a person confirms about a workflow's lead: shadow, or what it decides by itself. */
+function leadLines(lead) {
+  const may = MAY.filter(m => (lead.may ?? []).includes(m.id));
+  if (lead.shadow !== false || !may.length) return [el('p', { textContent: t('Its lead follows its runs on this coordinator with its own Claude agent and your Claude usage; in shadow it reads them and records what it would decide, and changes nothing.') })];
+  return [el('p', { textContent: t('Its lead follows its runs on this coordinator with its own Claude agent and your Claude usage and, by itself, code checking each decision first:') }),
+    el('ul', {}, ...may.map(m => el('li', {}, el('strong', { textContent: t(m.name) }), ` · ${t(m.effect)}`)))];
 }
 
 /** The lead and completion criteria as the host saves them. */
 function leadSent(draft) {
   const sent = {};
-  if (draft.lead?.id) sent.lead = { id: draft.lead.id };
+  if (draft.lead?.id) {
+    sent.lead = { id: draft.lead.id };
+    if (draft.lead.may?.length) sent.lead.may = draft.lead.may;
+    if (draft.lead.shadow === false) sent.lead.shadow = false;
+  }
   if (draft.done_when?.trim()) sent.done_when = draft.done_when.trim();
   return sent;
 }
 
-export { leadField, leadSent, renderLeads };
+export { leadField, leadLines, leadSent, renderLeads };

@@ -210,7 +210,7 @@ The model-backed agent on the coordinator that looks after the account's workflo
 _Avoid_: orchestrator, monitor, watchdog
 
 **Workflow run**:
-One execution of a workflow for one work item, kept on the coordinator, advancing through stages (planning, the plan-review gate, child creation, coding, pull requests, blocks, done) by the existing implementation operations, never past the user's review of the plan. An item has at most one active run; a run that stops (needs attention, interrupted, failed) waits for the user to resume it, and a resume never repeats a write or a started coding run. A restart ends a run and starts a new one of the same workflow for the same item, which records the run it continues; a pause holds every run, or one project's, so nothing new starts until it ends.
+One execution of a workflow for one work item, kept on the coordinator, advancing through stages (planning, the plan-review gate, child creation, coding, pull requests, blocks, done) by the existing implementation operations, never past the user's review of the plan. An item has at most one active run; a run that stops (needs attention, interrupted, failed) waits for the user to resume it, and a resume never repeats a write or a started coding run. Its workflow's lead, when the workflow lets it decide, may settle a child with deliveries code verifies and close the run by the workflow's completion criteria, never below the floor code keeps (every child settled, one delivered, no session running). A restart ends a run and starts a new one of the same workflow for the same item, which records the run it continues; a pause holds every run, or one project's, so nothing new starts until it ends.
 _Avoid_: implementation run (one of its parts), job
 
 **Finding**:

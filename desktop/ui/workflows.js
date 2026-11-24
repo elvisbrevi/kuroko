@@ -15,7 +15,7 @@ import { blockSummary, KIND_NAMES, loadLaunchers, renderBlocks, STAGE_NAMES } fr
 import { ALLOWS, allowNames } from './run-states.js';
 import { preapproveField, preapproveLines, preapproveSent } from './workflow-supervisor.js';
 import { deliveryField, deliverySent } from './workflow-delivery.js';
-import { leadField, leadSent } from './workflow-leads.js';
+import { leadField, leadLines, leadSent } from './workflow-leads.js';
 
 /**
  * The host's limits (src/workflows.rs), checked here before anything is sent. `context` is the
@@ -484,7 +484,7 @@ function workflowEditor(draft, saved, renderFacts) {
         ...(workflow.allow.length ? [el('p', { textContent: t('In every coding run of this workflow, also those that start by themselves, the agent will be able to, as you and without asking:') }),
           el('ul', {}, ...ALLOWS.filter(a => workflow.allow.includes(a.id)).map(a => el('li', {}, el('strong', { textContent: a.name() }), ` · ${a.effect()}`)))] : []),
         ...(workflow.preapprove.length ? [el('p', { textContent: t('For this workflow\'s runs, without asking you first:') }), el('ul', {}, ...preapproveLines(workflow.preapprove))] : []),
-        ...(workflow.lead ? [el('p', { textContent: t('Its lead follows its runs on this coordinator with its own Claude agent and your Claude usage; for now it reads them and records what it would decide, and changes nothing.') })] : []));
+        ...(workflow.lead ? leadLines(workflow.lead) : []));
       confirmation.hidden = false;
       save.textContent = t('Confirm and save');
       return;

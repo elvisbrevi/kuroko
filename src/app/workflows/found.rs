@@ -422,6 +422,18 @@ struct AcceptArgs {
     confirmed: bool,
 }
 
+/// A workflow lead's settling of a child with what code verifies it delivered: accepting what
+/// was found, with the same checks, by the lead its workflow allows to (`May::Settle`).
+pub(in crate::app) async fn accept_for_lead(
+    host: &Arc<Host>,
+    args: &Value,
+    azure: &Azure,
+) -> Result<Value, String> {
+    let mut args: AcceptArgs = parse(args)?;
+    args.confirmed = true;
+    accept(host, args, azure).await
+}
+
 pub(in crate::app) async fn operation(
     host: &Arc<Host>,
     method: &str,

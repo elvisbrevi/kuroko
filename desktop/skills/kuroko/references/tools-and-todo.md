@@ -711,6 +711,11 @@ run (any state but `done` and `cancelled`).
   When a shift ends its record lists each transcript (the lead's and every runner's) with its
   machine, the copy that computer kept compressed for 90 days under its private
   `implementation/archive/<shift>/`, its size and SHA-256.
+  A workflow's `lead` may take `may` (`settle`, `close`) and `shadow: false`, confirmed when it is
+  saved: its lead then settles a child with the deliveries code verifies it made (as accepting
+  what was found) and closes a run by the completion criteria once every child is settled and no
+  session runs, also with pull requests open (their pull-requests-completed blocks are skipped).
+  Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may
