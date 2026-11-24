@@ -147,7 +147,7 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
     let attention = super::super::shifts::attention(&bench.host.state).unwrap();
     assert_eq!(attention[0]["kind"], "question");
     assert_eq!(attention[0]["text"], "Is the legacy rounding kept?");
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     // Nothing new and within the interval: no other turn.
     bench.tick().await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -432,11 +432,11 @@ async fn a_lead_out_of_shadow_settles_a_wiki_delivery_and_its_run_ends_without_p
         .to_string()
     };
     // Closing before its child is settled is refused, whatever the lead may do.
-    fs::write(
-        bench.log.join("lead_call"),
-        call("lead_settle_child", json!({"run": id, "child": child, "wiki_pages": ["/Procedures/Deploy the portal"], "reason": "Its procedure page is published."})) + "\n",
-    )
-    .unwrap();
+    let settle = call(
+        "lead_settle_child",
+        json!({"run": id, "child": child, "wiki_pages": ["/Procedures/Deploy the portal"], "reason": "Its procedure page is published."}),
+    ) + "\n";
+    fs::write(bench.log.join("lead_call"), &settle).unwrap();
     // In shadow: recorded, not applied.
     let shadow = look(&bench, "settle", 1).await;
     let decided = shadow
@@ -454,6 +454,7 @@ async fn a_lead_out_of_shadow_settles_a_wiki_delivery_and_its_run_ends_without_p
     let mut map = bench.host.state.settings.map().unwrap();
     map.workflows[0].lead.as_mut().unwrap().shadow = false;
     bench.host.state.settings.save_map(&map).unwrap();
+    fs::write(bench.log.join("lead_call"), &settle).unwrap();
     let applied = look(&bench, "settle", 2).await;
     let decided = applied
         .journal
@@ -543,7 +544,7 @@ async fn a_lead_keeps_a_run_waiting_past_the_limit_but_never_past_sixty_days() {
         .find(|e| e.decision.as_deref() == Some("keep_waiting"))
         .unwrap();
     assert_eq!(decided.result.as_deref(), Some("applied"), "{decided:?}");
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     // Waiting well past the limit and the day it had to decide.
     bench.offset.store(10 * 86_400, Ordering::SeqCst);
     for _ in 0..3 {
@@ -586,7 +587,7 @@ async fn a_lead_continues_a_cut_runner_twice_at_most() {
         bench.state(&id, Phase::NeedsAttention).await;
         fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
         third = look(&bench, "continue", n).await;
-        fs::remove_file(bench.log.join("lead_call")).unwrap();
+        let _ = fs::remove_file(bench.log.join("lead_call"));
     }
     let seen = results(&third);
     assert_eq!(seen[0], "applied", "{seen:?}");
@@ -641,7 +642,7 @@ async fn a_continued_runner_that_finishes_delivers_its_branch() {
         "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_continue_runner","arguments":{"run": id, "child": child, "message": "Finish it.", "reason": "Cut before its report."}}}}});
     fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
     look(&bench, "continue", 1).await;
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     let run = bench.state(&id, Phase::PullRequests).await;
     assert_eq!(run.children[0].branch.as_deref(), Some("feature/child-2"));
     assert_eq!(run.children[0].continuations, 1);
@@ -701,7 +702,7 @@ async fn a_lead_out_of_shadow_keeps_the_backlog_and_moves_its_items_state_once()
     ];
     fs::write(bench.log.join("lead_call"), lines.join("\n") + "\n").unwrap();
     let decided = look(&bench, "set_item_state", 6).await;
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     let results: Vec<String> = decided
         .journal
         .iter()
@@ -814,7 +815,7 @@ async fn a_finding_s_work_item_is_created_once_by_the_person_or_its_lead_within_
     ];
     fs::write(bench.log.join("lead_call"), lines.join("\n") + "\n").unwrap();
     let decided = look(&bench, "create_work_item", 3).await;
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     let results: Vec<String> = decided
         .journal
         .iter()
@@ -955,7 +956,7 @@ async fn an_unapproved_pull_request_gets_its_support_task_once_and_missing_setti
     )
     .unwrap();
     let decided = look(&bench, "create_process_item", 2).await;
-    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let _ = fs::remove_file(bench.log.join("lead_call"));
     let results: Vec<String> = decided
         .journal
         .iter()
@@ -1008,4 +1009,63 @@ fn a_pull_request_is_approved_by_a_vote_of_five_or_ten_from_someone_else() {
     assert!(!crate::app::workflows::engine::approved(&pull));
     pull.reviewers.push(vote("reviewer", 5));
     assert!(crate::app::workflows::engine::approved(&pull));
+}
+
+#[tokio::test]
+async fn what_a_coding_agent_writes_to_a_backlog_its_lead_keeps_is_a_finding_once() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::ItemStates];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    // While its agent codes, the source's user creates an item and moves the run's own; the
+    // run's item itself is Kuroko's.
+    let later = chrono::Utc::now().timestamp() + 3600;
+    let written = |id: u64, what: &str, state: &str| crate::ado::workflow::Written {
+        id,
+        url: format!("https://dev.azure.com/example/Payments/_workitems/edit/{id}"),
+        title: format!("Item {id}"),
+        what: what.into(),
+        state: state.into(),
+        from: String::new(),
+        at: later,
+    };
+    *bench.catalog.written.lock().unwrap() = vec![
+        written(777, "created", "To Do"),
+        written(TASK, "created", "To Do"),
+        written(TASK, "state", "Done"),
+    ];
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    let run = bench.until(&id, |r| r.runner_writes.len() == 2).await;
+    let keys: Vec<&str> = run
+        .runner_writes
+        .iter()
+        .filter_map(|w| w["key"].as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        ["777:created".to_owned(), format!("{TASK}:state:{later}")]
+    );
+    let findings = bench
+        .host
+        .state
+        .workflows
+        .findings
+        .open_with_prefix("runner-write:", 20)
+        .unwrap();
+    assert_eq!(findings.len(), 2);
+    assert!(findings.iter().all(|f| f.run == id && f.source == "code"));
+    // The person sees each in the leads' attention.
+    let attention = crate::app::workflows::shifts::attention(&bench.host.state).unwrap();
+    assert_eq!(
+        attention
+            .iter()
+            .filter(|a| a["kind"] == "runner_write" && a["run"] == id.as_str())
+            .count(),
+        2
+    );
+    bench.release();
 }

@@ -84,6 +84,12 @@ impl Findings {
         )?;
         Ok(())
     }
+    /// Keep a finding unless one with its key is kept already; whether it was kept.
+    pub(in crate::app) fn insert_new(&self, finding: &Finding) -> Result<bool> {
+        let before = self.0.lock().unwrap().total_changes();
+        self.insert(finding)?;
+        Ok(self.0.lock().unwrap().total_changes() > before)
+    }
     /// The highest report number kept for `implementation_run` (a lead's findings after a cut
     /// turn whose shift was not saved).
     pub(in crate::app) fn last_seq(&self, implementation_run: &str) -> Result<u32> {
@@ -118,6 +124,22 @@ impl Findings {
             }
         }
         Ok(found)
+    }
+    /// The open findings whose key starts with `prefix` (what code detected of one kind),
+    /// newest first.
+    pub(in crate::app) fn open_with_prefix(
+        &self,
+        prefix: &str,
+        limit: i64,
+    ) -> Result<Vec<Finding>> {
+        let db = self.0.lock().unwrap();
+        let mut query = db.prepare(
+            "SELECT payload FROM workflow_findings WHERE state='open' AND substr(key, 1, length(?1))=?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        let rows = query.query_map(params![prefix, limit], |r| r.get::<_, String>(0))?;
+        Ok(rows
+            .filter_map(|row| serde_json::from_str(&row.ok()?).ok())
+            .collect())
     }
     pub(in crate::app) fn get(&self, id: &str) -> Result<Option<Finding>> {
         let db = self.0.lock().unwrap();

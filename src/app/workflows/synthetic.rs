@@ -47,6 +47,8 @@ pub(in crate::app) struct Catalog {
     /// The task-category types whose work item guide lists them with the bugs (a development
     /// bug): the To-Do list without a kind holds them, its `task` kind does not.
     pub listed_with_bugs: Mutex<BTreeSet<String>>,
+    /// What the source's user wrote in the project (work items created, state changes).
+    pub written: Mutex<Vec<crate::ado::workflow::Written>>,
 }
 
 #[cfg(unix)]
@@ -506,6 +508,25 @@ impl Catalog {
                 .filter(|r| r.starts_with("POST workitems"))
                 .count() as u64;
         serde_json::json!({"id": id, "url": format!("{}/Payments/_workitems/edit/{id}", ORGANIZATION), "state": "created"})
+    }
+    /// What the source's user wrote since `since`: every item it created, and the state changes
+    /// of `items`.
+    pub(in crate::app) fn written_since(
+        &self,
+        items: &[u64],
+        since: i64,
+    ) -> Vec<crate::ado::workflow::Written> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(format!("GET written since {since}"));
+        self.written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|w| w.at >= since && (w.what == "created" || items.contains(&w.id)))
+            .cloned()
+            .collect()
     }
     /// The states every work item type allows here.
     pub(in crate::app) fn type_states(&self, _kind: &str) -> Vec<String> {

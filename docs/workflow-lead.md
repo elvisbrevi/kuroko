@@ -188,6 +188,8 @@ AGENTS.md, «Invariants that must not be broken», the implementation flow sente
 
 > The implementation flow may create children only from a new implementation plan the user explicitly reviewed and confirmed, and other work items only from a draft the user reviewed and confirmed, or by a workflow lead within what its workflow allows (the work items the organization's norms require of a delivery, and a blocking finding's, at most one per run and three a day, never from a run whose item came from a finding), using the enabled Azure source's personal access token for Azure writes. Coding runs never create work items or change their states.
 
+Until every workflow's lead keeps the backlog, the last sentence reads «The coding runs of a workflow whose lead keeps the backlog never create work items or change their states; the work items they create and the states they change anyway are detected after each of their sessions and shown to the person.»; it becomes the sentence above once every workflow has migrated.
+
 «Model decisions grant no permissions» stays: a lead's powers are its workflow's, confirmed when saved, and every decision is checked in code.
 
 CONTEXT: the new entries (§3); **Workflow**: its lead, its completion criteria, and `allow`'s `work_items` no longer reaching runners of a workflow with a lead; **Workflow run**: a run with a lead closes by its workflow's criteria; **Workflow supervisor**: retired.

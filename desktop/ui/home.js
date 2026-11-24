@@ -161,7 +161,8 @@ function workflowTiles(s) {
 
 /**
  * The runs that wait on the user, one row each with the item's verified link (Workflows opens
- * them), then what the workflow leads need: a question to answer, or a lead that is not answering.
+ * them), then what the workflow leads need: a question to answer, a lead that is not answering, or
+ * a backlog write a coding agent made that they should look at.
  */
 function renderWorkflowAttention(s) {
   const runs = s.workflow_attention ?? [];
@@ -173,11 +174,21 @@ function renderWorkflowAttention(s) {
       el('strong', { textContent: run.item.title }),
       ...(run.attention ? [el('small', { textContent: tx(run.attention).slice(0, 240) })] : [])),
     link(`#${run.item.id}`, run.item.url), el('button', { type: 'button', class: 'secondary small run-open', textContent: t('Open run'), onclick: () => openWorkflowRun(run.id) }))),
-  ...leads.map(item => el('div', { class: 'status-row warn', 'data-lead-attention': item.question ?? item.lead },
+  ...leads.map(leadAttentionRow));
+}
+
+/** One thing a workflow lead needs: its question, its failing turns, or a backlog write a coding agent made. */
+function leadAttentionRow(item) {
+  const written = item.kind === 'runner_write';
+  const label = item.kind === 'question' ? t('Question from {name}', { name: item.name })
+    : written ? t('A coding agent wrote to the backlog') : t('{name} is not answering', { name: item.name });
+  const action = written ? el('button', { type: 'button', class: 'secondary small run-open', textContent: t('Open run'), onclick: () => openWorkflowRun(item.run) })
+    : el('button', { type: 'button', class: 'secondary small', textContent: item.kind === 'question' ? t('Answer') : t('Open leads'), onclick: () => showTab('settings', 'panel-workflow-leads') });
+  return el('div', { class: 'status-row warn', 'data-lead-attention': item.finding ?? item.question ?? item.lead },
     el('span', { class: 'status-icon', 'aria-hidden': 'true' }, icon('flow')),
-    el('span', { class: 'status-value' }, el('span', { class: 'status-label', textContent: item.kind === 'question' ? t('Question from {name}', { name: item.name }) : t('{name} is not answering', { name: item.name }) }),
-      el('strong', { textContent: item.text.slice(0, 240) })),
-    el('button', { type: 'button', class: 'secondary small', textContent: item.kind === 'question' ? t('Answer') : t('Open leads'), onclick: () => showTab('settings', 'panel-workflow-leads') }))));
+    el('span', { class: 'status-value' }, el('span', { class: 'status-label', textContent: label }),
+      el('strong', { textContent: tx(item.text).slice(0, 240) })),
+    action);
 }
 
 function renderTiles(s) {

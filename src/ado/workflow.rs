@@ -4,8 +4,10 @@
 //! whether a reported branch still exists (`_apis/git/repositories/{id}/refs?filter=heads/…`),
 //! whether a work item is assigned to the source's user, and what a coding run delivered
 //! without reporting it: the branches the user pushed (`…/pushes`), a pull request by its ID,
-//! and the pages the user changed in the project's Wiki (its repository's commits). Nothing here
-//! writes, merges, completes or changes a pull request, a Wiki page or a work item.
+//! and the pages the user changed in the project's Wiki (its repository's commits), and what the
+//! user wrote to work items during a coding run. Nothing here merges, completes or changes a pull
+//! request or a Wiki page; the one write is `update_item`, a workflow lead's change of a work
+//! item's state and fields with the source's personal access token.
 use super::{Catalog, Source, project_url, request, same_user};
 use crate::tools::todo::Detail;
 use anyhow::{Context, Result, ensure};
@@ -919,6 +921,126 @@ pub(crate) async fn wiki_page(
     ))
 }
 
+/// A write of the source's user in a project: a work item it created, or a state change of one
+/// of the items it was asked about.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Written {
+    pub id: u64,
+    pub url: String,
+    pub title: String,
+    /// `created` or `state`.
+    pub what: String,
+    /// The state it was created in, or moved to.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// The state it moved from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub from: String,
+    pub at: i64,
+}
+
+/// At most this many created work items, and each item's latest updates, are read at once.
+const WRITTEN_TOP: usize = 50;
+
+/// The work items the source's user created in the project since `since`, and the state changes
+/// it made to `items` since then (a coding run's window), read now with the read credential.
+pub(crate) async fn written_since(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    (organization, project): (&str, &str),
+    items: &[u64],
+    since: i64,
+) -> Result<Vec<Written>> {
+    let source = source(catalog, organization)?;
+    let from = chrono::DateTime::from_timestamp(since, 0)
+        .context("invalid time")?
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let query = format!(
+        "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.CreatedBy] = @Me AND [System.CreatedDate] >= '{from}' ORDER BY [System.CreatedDate] DESC"
+    );
+    let created: std::collections::BTreeSet<u64> =
+        super::wiql(client, key, &source, project, &query)
+            .await?
+            .into_iter()
+            .take(WRITTEN_TOP)
+            .collect();
+    let mut wanted = created.clone();
+    wanted.extend(items.iter().copied());
+    let time = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp())
+    };
+    let mut written = Vec::new();
+    for item in super::work_items(client, key, &source, project, &wanted).await? {
+        let Some(id) = item["id"].as_u64() else {
+            continue;
+        };
+        let mut url = project_url(
+            &source,
+            project,
+            "dev.azure.com",
+            &["_workitems", "edit", &id.to_string()],
+        )?;
+        url.set_query(None);
+        let title = text(&item["fields"]["System.Title"], 300);
+        if created.contains(&id) {
+            written.push(Written {
+                id,
+                url: url.to_string(),
+                title: title.clone(),
+                what: "created".into(),
+                state: text(&item["fields"]["System.State"], 120),
+                from: String::new(),
+                at: time(&item["fields"]["System.CreatedDate"]).unwrap_or(since),
+            });
+        }
+        if !items.contains(&id) {
+            continue;
+        }
+        // Its latest updates, by who made them.
+        let rev = item["rev"].as_u64().unwrap_or(0);
+        let mut updates = project_url(
+            &source,
+            project,
+            "dev.azure.com",
+            &["_apis", "wit", "workItems", &id.to_string(), "updates"],
+        )?;
+        updates
+            .query_pairs_mut()
+            .append_pair("$top", &WRITTEN_TOP.to_string())
+            .append_pair("$skip", &rev.saturating_sub(WRITTEN_TOP as u64).to_string());
+        let read = request(client, key, Method::GET, updates, None).await?;
+        for update in read["value"].as_array().into_iter().flatten() {
+            // A move, not the item's creation (no state before it).
+            let state = &update["fields"]["System.State"];
+            let (Some(to), Some(_)) = (state["newValue"].as_str(), state["oldValue"].as_str())
+            else {
+                continue;
+            };
+            let Some(at) = time(&update["fields"]["System.ChangedDate"]["newValue"]) else {
+                continue;
+            };
+            if at < since || !same_user(&update["revisedBy"], &source.author_email) {
+                continue;
+            }
+            written.push(Written {
+                id,
+                url: url.to_string(),
+                title: title.clone(),
+                what: "state".into(),
+                state: text(&serde_json::json!(to), 120),
+                from: text(&state["oldValue"], 120),
+                at,
+            });
+        }
+    }
+    Ok(written)
+}
+
 /// The states a work item type of the project allows, read now.
 pub(crate) async fn type_states(
     client: &Client,
@@ -1196,6 +1318,89 @@ mod tests {
         let requests = server.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
+        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
+    }
+
+    #[tokio::test]
+    async fn what_the_user_wrote_since_a_time_is_the_items_it_created_and_its_state_changes() {
+        let server = MockServer::start().await;
+        super::super::TEST_SERVER
+            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
+        let since = chrono::DateTime::parse_from_rfc3339("2026-11-24T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        Mock::given(method("POST"))
+            .and(path("/example/Payments/_apis/wit/wiql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"workItems": [{"id": 501}]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/example/Payments/_apis/wit/workitems"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [
+                {"id": 501, "rev": 1, "fields": {"System.TeamProject": "Payments", "System.Title": "Found a bug",
+                 "System.State": "To Do", "System.CreatedDate": "2026-11-24T10:30:00Z"}},
+                {"id": 200, "rev": 3, "fields": {"System.TeamProject": "Payments", "System.Title": "Pay"}}
+            ]})))
+            .mount(&server)
+            .await;
+        let me = json!({"uniqueName": "Me@Example.Test"});
+        Mock::given(method("GET"))
+            .and(path("/example/Payments/_apis/wit/workItems/200/updates"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": [
+                {"revisedBy": me, "fields": {"System.State": {"oldValue": "New", "newValue": "To Do"},
+                 "System.ChangedDate": {"newValue": "2026-11-24T09:00:00Z"}}},
+                {"revisedBy": {"uniqueName": "someone@example.test"}, "fields": {"System.State": {"oldValue": "To Do", "newValue": "In Progress"},
+                 "System.ChangedDate": {"newValue": "2026-11-24T10:10:00Z"}}},
+                {"revisedBy": me, "fields": {"System.State": {"newValue": "New"},
+                 "System.ChangedDate": {"newValue": "2026-11-24T10:15:00Z"}}},
+                {"revisedBy": me, "fields": {"System.Title": {"newValue": "Pay"},
+                 "System.ChangedDate": {"newValue": "2026-11-24T10:20:00Z"}}},
+                {"revisedBy": me, "fields": {"System.State": {"oldValue": "In Progress", "newValue": "Done"},
+                 "System.ChangedDate": {"newValue": "2026-11-24T10:40:00Z"}}}
+            ]})))
+            .mount(&server)
+            .await;
+        let written = written_since(
+            &Client::new(),
+            "key",
+            CATALOG,
+            ("https://dev.azure.com/example", "Payments"),
+            &[200],
+            since,
+        )
+        .await
+        .unwrap();
+        assert_eq!(written.len(), 2, "{written:?}");
+        assert_eq!(
+            (
+                written[0].id,
+                written[0].what.as_str(),
+                written[0].state.as_str()
+            ),
+            (501, "created", "To Do")
+        );
+        assert_eq!(
+            written[0].url,
+            "https://dev.azure.com/example/Payments/_workitems/edit/501"
+        );
+        // Only its own state change in the window.
+        assert_eq!(
+            (
+                written[1].id,
+                written[1].what.as_str(),
+                written[1].from.as_str(),
+                written[1].state.as_str()
+            ),
+            (200, "state", "In Progress", "Done")
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.method.as_str() == "GET" || r.url.path().ends_with("/wiql"))
+        );
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }
 

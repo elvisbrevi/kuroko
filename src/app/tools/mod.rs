@@ -1162,7 +1162,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "status",
         title: "Assistant status",
-        description: "Whether the host and the assistant run, the mode (observe or active), the Microsoft account, Teams subscriptions and the version, and the workflow runs waiting on the user (workflow_attention: a plan to review, a workflow to assign, a run that needs attention or a resume) and what the workflow leads need from them (lead_attention: an open question to answer with workflow_lead_answer, or a lead whose turns are failing).",
+        description: "Whether the host and the assistant run, the mode (observe or active), the Microsoft account, Teams subscriptions and the version, and the workflow runs waiting on the user (workflow_attention: a plan to review, a workflow to assign, a run that needs attention or a resume) and what the workflow leads need from them (lead_attention: an open question to answer with workflow_lead_answer, a lead whose turns are failing, or runner_write: a work item a coding agent wrote to a backlog its lead keeps, whose finding is settled with workflow_finding_resolve or workflow_finding_dismiss).",
         effect: Effect::Read,
         schema: none,
     },

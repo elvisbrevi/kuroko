@@ -526,6 +526,15 @@ fn uuid(text: &str) -> Result<()> {
     Ok(())
 }
 impl State {
+    /// The work items the implementation flow created (every plan's children it recorded).
+    pub(in crate::app) async fn created_ids(&self) -> std::collections::BTreeSet<u64> {
+        let data = self.registry.lock().await;
+        data.creations
+            .values()
+            .flat_map(|record| record["created"].as_array().cloned().unwrap_or_default())
+            .filter_map(|item| item["id"].as_u64())
+            .collect()
+    }
     /// Another machine takes the Teams selection (tests of what this one may then do).
     #[cfg(test)]
     pub(in crate::app) async fn select_teams_machine(&self, id: &str) {

@@ -34,8 +34,9 @@ impl Shell for TestShell {
 /// (`block`), then reports `Review: WORD` (`review_word`, `resubmitted` by default).
 const CLI: &str = r#"#!/bin/sh
 LOG='{log}'
-# A workflow lead's turn (Claude, stream-JSON, no tools of its own): it calls the tool in
-# `lead_call` when there is one, and ends its turn.
+# A workflow lead's turn (Claude, stream-JSON, no tools of its own): it calls the tools in
+# `lead_call` when there is one (taken whole, so a later turn never repeats them), and ends its
+# turn.
 if printf '%s\n' "$@" | grep -qx -- '--strict-mcp-config'; then
   printf '%s\n' "$@" > "$LOG/lead_args.$(wc -l < "$LOG/leads" 2>/dev/null | tr -d ' ')"
   echo x >> "$LOG/leads"
@@ -52,8 +53,9 @@ if printf '%s\n' "$@" | grep -qx -- '--strict-mcp-config'; then
   printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"lead-initialize","response":{}}}'
   read -r user; printf '%s\n' "$user" >> "$LOG/lead_prompts"
   printf '%s\n' '{"type":"system","subtype":"init","session_id":"ses_lead"}'
-  if [ -f "$LOG/lead_call" ]; then
-    while IFS= read -r call <&3; do printf '%s\n' "$call"; read -r reply; printf '%s\n' "$reply" >> "$LOG/lead_replies"; done 3< "$LOG/lead_call"
+  if mv "$LOG/lead_call" "$LOG/lead_call.$$" 2>/dev/null; then
+    while IFS= read -r call <&3; do printf '%s\n' "$call"; read -r reply; printf '%s\n' "$reply" >> "$LOG/lead_replies"; done 3< "$LOG/lead_call.$$"
+    rm -f "$LOG/lead_call.$$"
   fi
   printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"Looked.","session_id":"ses_lead","usage":{"input_tokens":5}}'
   exit 0
@@ -1573,6 +1575,7 @@ async fn cancelling_a_run_stops_a_kept_session_on_a_worker_machine() {
             state: Some("done".into()),
             failure: None,
             time_limit_minutes: None,
+            lead_backlog: false,
         }),
         outcome: Some("done".into()),
         ..Default::default()
@@ -2219,6 +2222,7 @@ async fn cancel_warns_when_a_recorded_run_may_be_running_on_an_unreachable_machi
         state: None,
         failure: None,
         time_limit_minutes: None,
+        lead_backlog: false,
     });
     bench.save(&run);
     let cancelled = bench
@@ -2539,6 +2543,7 @@ async fn a_worker_reports_why_its_sessions_did_not_end_with_their_answer() {
                 state: Some("running".into()),
                 failure: None,
                 time_limit_minutes: None,
+                lead_backlog: false,
             }),
             ..Default::default()
         }];
@@ -2640,6 +2645,7 @@ fn a_run_needing_checkouts_another_runs_agent_holds_is_out_of_the_line() {
                 state: started.then(|| "running".into()),
                 failure: None,
                 time_limit_minutes: None,
+                lead_backlog: false,
             }),
             ..Default::default()
         }];

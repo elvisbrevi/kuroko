@@ -101,6 +101,7 @@ fn record(host: &Arc<Host>, machine: &str) -> Run {
                 state: Some("done".into()),
                 failure: None,
                 time_limit_minutes: None,
+                lead_backlog: false,
             }),
             branch: Some("feature/web-form".into()),
             pull_requests: vec![PullRequest {

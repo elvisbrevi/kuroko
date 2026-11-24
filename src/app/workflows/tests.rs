@@ -2021,3 +2021,59 @@ async fn leads_are_named_found_by_name_assigned_with_confirmation_and_kept_while
     assert!(removed.ok, "{:?}", removed.message);
     assert!(host.state.settings.map().unwrap().workflow_leads.is_empty());
 }
+
+#[test]
+fn a_save_names_the_blocks_that_ask_coding_agents_to_write_a_backlog_its_lead_keeps() {
+    use crate::workflows::lead::{Lead, May, WorkflowLead};
+    let leads = [Lead {
+        id: "lead".into(),
+        name: "Lead".into(),
+        enabled: true,
+        ..Default::default()
+    }];
+    let block = |id: &str, text: &str| crate::workflows::Block {
+        id: id.into(),
+        name: id.into(),
+        text: text.into(),
+        ..Default::default()
+    };
+    let blocks = [
+        block(
+            "move-to-review",
+            "Move it with `az boards work-item show|update` to its review state.",
+        ),
+        block(
+            "create-finding",
+            "Create one with az boards work-item create --type Task.",
+        ),
+        block("read-only", "Read it with `az boards work-item show`."),
+    ];
+    let mut workflow = crate::workflows::Workflow {
+        id: "payments".into(),
+        blocks: blocks.iter().map(|b| b.id.clone()).collect(),
+        lead: Some(WorkflowLead {
+            id: "lead".into(),
+            may: vec![May::ItemStates],
+            shadow: true,
+        }),
+        ..Default::default()
+    };
+    // In shadow its agents still write: nothing to warn about.
+    assert_eq!(backlog_writers(&workflow, &blocks, &leads), None);
+    workflow.lead.as_mut().unwrap().shadow = false;
+    // Nor while its lead is off.
+    let off = [Lead {
+        enabled: false,
+        ..leads[0].clone()
+    }];
+    assert_eq!(backlog_writers(&workflow, &blocks, &off), None);
+    let warning = backlog_writers(&workflow, &blocks, &leads).unwrap();
+    assert!(
+        warning.contains("move-to-review, create-finding."),
+        "{warning}"
+    );
+    assert!(!warning.contains("read-only"), "{warning}");
+    // A lead that only settles keeps no backlog.
+    workflow.lead.as_mut().unwrap().may = vec![May::Settle];
+    assert_eq!(backlog_writers(&workflow, &blocks, &leads), None);
+}

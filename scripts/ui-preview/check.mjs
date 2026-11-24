@@ -2605,8 +2605,10 @@ for (const [label, viewport] of [['desktop', { width: 1280, height: 900 }], ['ph
   const { context, page, errors } = await open({ axe: true, context: { viewport } });
   await page.evaluate(axeSource);
   await page.waitForSelector('#workflow-attention .status-row');
-  check(`automatic starts ${label}: Home lists the runs waiting for you once and a lead's question`, await page.locator('#workflow-attention .status-row').count() === 3
+  check(`automatic starts ${label}: Home lists the runs waiting for you once, a lead's question and a coding agent's backlog write`, await page.locator('#workflow-attention .status-row').count() === 4
     && /Pregunta de Pagos/.test(await page.locator('#workflow-attention [data-lead-attention="q1"]').innerText())
+    && /Un agente de código escribió en el backlog/.test(await page.locator('#workflow-attention [data-lead-attention="f-runner-1"]').innerText())
+    && await page.locator('#workflow-attention [data-lead-attention="f-runner-1"] button', { hasText: 'Abrir ejecución' }).count() === 1
     && await page.locator('#workflow-attention .ref', { hasText: '#5003' }).count() === 1 && await page.locator('#tiles .status-row', { hasText: '5003' }).count() === 0
     && /Plan por revisar/.test(await page.locator('#workflow-attention').innerText()) && /Necesita un workflow/.test(await page.locator('#workflow-attention').innerText()));
   check(`automatic starts ${label}: Home does not scroll sideways`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

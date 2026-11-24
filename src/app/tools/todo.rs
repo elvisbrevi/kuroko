@@ -560,6 +560,35 @@ pub(in crate::app) async fn type_states(
     .await
 }
 
+/// What the source's user wrote in a project during a coding run's window (`written_since`).
+pub(in crate::app) async fn written_since(
+    state: &DesktopState,
+    source: Option<&str>,
+    (organization, project): (&str, &str),
+    items: &[u64],
+    since: i64,
+) -> Result<Vec<crate::ado::workflow::Written>, String> {
+    project_read(
+        state,
+        source,
+        "reading what a coding run wrote",
+        "work item changes",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::written_since(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                (organization, project),
+                items,
+                since,
+            )
+            .await
+        },
+    )
+    .await
+}
+
 /// Set a work item's state and fields with the enabled Azure source's personal access token
 /// (a workflow lead's decision its workflow allows), once: `Err("uncertain")` when no answer
 /// came.
