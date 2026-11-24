@@ -727,6 +727,9 @@ run (any state but `done` and `cancelled`).
   creates it once, as a child of its run's item (`item_created` with its link, or `uncertain`,
   never sent again); with `create_blocking` it creates a blocking finding's item by itself, at most
   one per run and three a day.
+  While it keeps the backlog, a pull request without auto-complete or source-branch deletion is a
+  finding; with `process_items` it creates a pull request's review support task, once, when the
+  pull request was not approved by itself within 15 minutes (`support_due` in the run).
   Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within

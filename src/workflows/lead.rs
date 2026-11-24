@@ -88,6 +88,9 @@ pub enum May {
     ItemStates,
     /// Create a blocking finding's work item by itself, within the caps (0.20.13).
     CreateBlocking,
+    /// Create the work items the organization's norms require of a delivery: a pull request's
+    /// review support task when it was not approved by itself (0.20.14).
+    ProcessItems,
 }
 impl May {
     /// The newest release that cannot read it in a workflow's lead.
@@ -98,6 +101,7 @@ impl May {
             May::Continue => "0.20.10",
             May::ItemStates => "0.20.11",
             May::CreateBlocking => "0.20.12",
+            May::ProcessItems => "0.20.13",
         }
     }
     /// What allowing it means, for the confirmation of a workflow's save.
@@ -105,6 +109,9 @@ impl May {
         match self {
             May::Settle => {
                 "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::ProcessItems => {
+                "create a pull request's review support task as the organization's norms and the type's guide say, once per pull request, only when it was not approved by itself within 15 minutes"
             }
             May::CreateBlocking => {
                 "create the work item of a blocking finding from its draft by itself, at most one per run and three a day for this workflow, never for a run whose item came from a finding; any other finding's work item waits for your approval"

@@ -572,6 +572,13 @@ pub(in crate::app) struct Run {
     /// `uncertain`, or why it was refused), never retried (0.20.12).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lead_writes: Vec<Value>,
+    /// Its pull requests still unapproved past the wait, whose review support task its lead
+    /// creates by the organization's norms, and those it created (each once: pull request,
+    /// outcome, item), 0.20.14.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub support_due: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_items: Vec<Value>,
     /// When its pull requests were last read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<i64>,
@@ -674,6 +681,8 @@ impl Run {
             wait_asked: None,
             wait_until: None,
             lead_writes: Vec::new(),
+            support_due: Vec::new(),
+            process_items: Vec::new(),
             checked_at: None,
             continues: None,
             restarted_as: None,

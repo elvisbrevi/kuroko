@@ -1491,8 +1491,8 @@ pub(in crate::app) fn runner_workflow(
     runner
 }
 
-/// Whether the run's workflow's lead keeps its backlog now: out of shadow with `item_states`,
-/// the lead on.
+/// Whether the run's workflow's lead keeps its backlog now: out of shadow and allowed to write
+/// it (`item_states`, `process_items` or `create_blocking`), the lead on.
 pub(in crate::app) fn lead_keeps_backlog(host: &Host, run: &Run) -> bool {
     let Ok(map) = host.state.settings.map() else {
         return false;
@@ -1502,12 +1502,174 @@ pub(in crate::app) fn lead_keeps_backlog(host: &Host, run: &Run) -> bool {
         .find(|w| Some(&w.id) == run.workflow.as_ref())
         .and_then(|w| w.lead.as_ref())
         .is_some_and(|lead| {
-            lead.applies(crate::workflows::lead::May::ItemStates)
+            use crate::workflows::lead::May;
+            [May::ItemStates, May::ProcessItems, May::CreateBlocking]
+                .iter()
+                .any(|what| lead.applies(*what))
                 && map
                     .workflow_leads
                     .iter()
                     .any(|l| l.id == lead.id && l.enabled)
         })
+}
+
+/// How long an open pull request may wait for an approval that comes by itself (a rule or a
+/// reviewer at hand) before its review support task is due.
+pub(in crate::app) const AUTO_APPROVAL_MINUTES: i64 = 15;
+
+/// A pull request's review support task that may or may not exist, shown to the person as a
+/// finding (once per pull request): it is never sent again.
+pub(in crate::app) fn unconfirmed_support(host: &Host, run: &Run, url: &str, now: i64) {
+    let (item, item_url) = run
+        .children
+        .iter()
+        .find(|c| c.pull_requests.iter().any(|p| p.url == url))
+        .map_or((run.item.id, run.item.url.clone()), |c| {
+            (c.id, c.url.clone())
+        });
+    let finding = super::findings::Finding {
+        id: uuid::Uuid::new_v4().to_string(),
+        workflow: run.workflow.clone().unwrap_or_default(),
+        run: run.id.clone(),
+        item,
+        item_url,
+        implementation_run: format!("support-task:{}:{url}", run.id),
+        seq: 0,
+        title: "Review support task not confirmed".into(),
+        detail: format!(
+            "The review support task of {url} may or may not have been created in Azure DevOps; it is never sent again: look for it and create it by hand if it is missing."
+        ),
+        severity: "important".into(),
+        evidence: url.to_owned(),
+        source: "code".into(),
+        state: "open".into(),
+        note: None,
+        created_at: now,
+        updated_at: now,
+        draft: None,
+        created: None,
+    };
+    let _ = host.state.workflows.findings.insert(&finding);
+}
+
+/// Whether a reviewer other than its author approved the pull request (10, or 5 with
+/// suggestions).
+pub(in crate::app) fn approved(pull: &crate::ado::workflow::PullRequest) -> bool {
+    pull.reviewers
+        .iter()
+        .any(|r| r.vote >= 5 && Some(&r.id) != pull.created_by.as_ref())
+}
+
+/// What a lead that keeps the backlog is told about the run's open pull requests: one without
+/// auto-complete or source-branch deletion is a finding (once), and one still unapproved past
+/// `AUTO_APPROVAL_MINUTES` is due its review support task when the lead creates the norms'
+/// work items. A support task left `sending` (read under the run's lock, so its sender
+/// stopped) may or may not exist: it is `uncertain`. Returns whether the run changed.
+fn lead_pull_checks(host: &Host, run: &mut Run, now: i64) -> bool {
+    let processes = host.state.settings.map().is_ok_and(|map| {
+        map.workflows
+            .iter()
+            .find(|w| Some(&w.id) == run.workflow.as_ref())
+            .and_then(|w| w.lead.as_ref())
+            .is_some_and(|l| l.applies(crate::workflows::lead::May::ProcessItems))
+    });
+    let mut changed = false;
+    let mut stopped = Vec::new();
+    for item in &mut run.process_items {
+        if item["state"] == "sending" {
+            item["state"] = serde_json::json!("uncertain");
+            stopped.push(item["pull_request"].as_str().unwrap_or_default().to_owned());
+            changed = true;
+        }
+    }
+    for url in stopped {
+        unconfirmed_support(host, run, &url, now);
+    }
+    let pulls: Vec<(u64, String, crate::ado::workflow::PullRequest)> = run
+        .children
+        .iter()
+        .flat_map(|c| {
+            c.pull_requests
+                .iter()
+                .map(move |p| (c.id, c.url.clone(), p.clone()))
+        })
+        .filter(|(_, _, p)| p.status == "active")
+        .collect();
+    for (item, item_url, pull) in pulls {
+        let missing: Vec<&str> = [
+            (pull.auto_complete == Some(false), "auto-complete"),
+            (
+                pull.delete_source_branch == Some(false),
+                "source branch deletion",
+            ),
+        ]
+        .iter()
+        .filter(|(miss, _)| *miss)
+        .map(|(_, what)| *what)
+        .collect();
+        if !missing.is_empty() {
+            let finding = super::findings::Finding {
+                id: uuid::Uuid::new_v4().to_string(),
+                workflow: run.workflow.clone().unwrap_or_default(),
+                run: run.id.clone(),
+                item,
+                item_url,
+                implementation_run: format!("pull-request-settings:{}:{}", run.id, pull.url),
+                seq: 0,
+                title: format!("Pull request {} without {}", pull.id, missing.join(" or ")),
+                detail: format!(
+                    "The organization's norms ask every pull request to complete itself once approved and delete its source branch; {} has no {}.",
+                    pull.url,
+                    missing.join(" and no ")
+                ),
+                severity: "important".into(),
+                evidence: pull.url.clone(),
+                source: "code".into(),
+                state: "open".into(),
+                note: None,
+                created_at: now,
+                updated_at: now,
+                draft: None,
+                created: None,
+            };
+            let _ = host.state.workflows.findings.insert(&finding);
+        }
+        let approved = approved(&pull);
+        let opened = pull
+            .created_at
+            .as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.timestamp());
+        let due = processes
+            && !approved
+            && opened.is_some_and(|at| now - at >= AUTO_APPROVAL_MINUTES * 60)
+            && !run.support_due.contains(&pull.url)
+            && !run
+                .process_items
+                .iter()
+                .any(|p| p["pull_request"] == pull.url.as_str());
+        if due {
+            run.support_due.push(pull.url.clone());
+            changed = true;
+        }
+    }
+    // Due only while its pull request is open, unapproved and has no support task.
+    let before = run.support_due.len();
+    let open: Vec<String> = run
+        .children
+        .iter()
+        .flat_map(|c| &c.pull_requests)
+        .filter(|p| p.status == "active" && !approved(p))
+        .map(|p| p.url.clone())
+        .collect();
+    let tried: Vec<String> = run
+        .process_items
+        .iter()
+        .filter_map(|p| p["pull_request"].as_str().map(str::to_owned))
+        .collect();
+    run.support_due
+        .retain(|url| open.contains(url) && !tried.contains(url));
+    changed || run.support_due.len() != before
 }
 
 /// Whether the run's workflow lets its lead keep waiting now: out of shadow with `wait`, the
@@ -2041,6 +2203,7 @@ async fn waiting(
     if let Some(started) = super::review::detect(host, azure, run, now).await {
         return Ok(started);
     }
+    let checked = lead_keeps_backlog(host, run) && lead_pull_checks(host, run, now);
     if run.dependencies_met != Some(wait.subject) {
         let judged = match judge_dependencies(host, azure, run, wait.subject).await {
             Ok(judged) => judged,
@@ -2061,7 +2224,7 @@ async fn waiting(
     if !planning
         && let Some(changed) = limit(host, azure, run, wait.subject, wait.continue_to, now).await?
     {
-        return Ok(changed);
+        return Ok(changed || checked);
     }
     run.wait = None;
     let outcome = if wait.reason == "open_pull_requests" {
@@ -2844,6 +3007,9 @@ async fn pull_requests(
         if let Some(started) = super::review::detect(host, azure, run, now).await {
             return Ok(started);
         }
+    }
+    if lead_keeps_backlog(host, run) {
+        changed |= lead_pull_checks(host, run, now);
     }
     let coded: Vec<&Child> = run
         .children

@@ -266,10 +266,13 @@ fn facts(run: &Run) -> Value {
             "id": c.id, "title": c.title, "url": c.url, "outcome": c.outcome,
             "coding": c.coding.as_ref().map(|i| json!({"state": i.state, "failure": i.failure.map(|f| f.cause)})),
             "branch": c.branch, "branches": c.branches.iter().map(|b| json!({"repository": b.repository.name, "branch": b.branch})).collect::<Vec<_>>(),
-            "pull_requests": c.pull_requests.iter().map(|p| json!({"id": p.id, "status": p.status, "url": p.url})).collect::<Vec<_>>(),
+            "pull_requests": c.pull_requests.iter().map(|p| json!({"id": p.id, "status": p.status, "url": p.url,
+                "auto_complete": p.auto_complete, "delete_source_branch": p.delete_source_branch})).collect::<Vec<_>>(),
             "wiki_pages": c.wiki_pages.iter().map(|p| &p.path).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "wait": (run.wait_asked.is_some()).then(|| json!({"since": run.waiting_since, "asked": run.wait_asked, "until": run.wait_until})),
+        "support_due": run.support_due,
+        "process_items": run.process_items,
         "updated_at": run.updated_at,
     })
 }
@@ -981,7 +984,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 22] = [
+const TOOLS: [(&str, &str, Schema); 23] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1066,6 +1069,11 @@ const TOOLS: [(&str, &str, Schema); 22] = [
         "lead_create_work_item",
         "Create the drafted work item of a blocking finding now, where your workflow lets you: at most one per run and three a day for the workflow, never for a run whose item came from a finding; sent once, never retried.",
         || json!({"type": "object", "properties": {"finding": {"type": "string"}, "reason": {"type": "string"}}, "required": ["finding", "reason"]}),
+    ),
+    (
+        "lead_create_process_item",
+        "Create the review support task of a pull request listed in its run's support_due (still unapproved past the wait), as the organization's norms and the type's work item guide say: type, title, description and fields. Code checks the pull request is the run's, open and unapproved, the type has a guide and none was created for it; created once, never retried. Only where your workflow lets you create the norms' work items.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "pull_request": {"type": "string", "description": "Its link, as support_due lists it."}, "type": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object", "properties": {"reference": {"type": "string"}, "value": {"type": "string"}}, "required": ["reference", "value"]}}, "reason": {"type": "string"}}, "required": ["run", "pull_request", "type", "title", "description", "reason"]}),
     ),
     (
         "lead_move_ahead",
@@ -1394,7 +1402,8 @@ async fn call(
         | "lead_move_ahead"
         | "lead_continue_runner"
         | "lead_set_item_state"
-        | "lead_create_work_item" => {
+        | "lead_create_work_item"
+        | "lead_create_process_item" => {
             use crate::workflows::lead::May;
             // A finding's work item: its run is the finding's.
             let run = if tool == "lead_create_work_item" {
@@ -1424,6 +1433,7 @@ async fn call(
                 "lead_continue_runner" => (May::Continue, "continue"),
                 "lead_set_item_state" => (May::ItemStates, "set_item_state"),
                 "lead_create_work_item" => (May::CreateBlocking, "create_work_item"),
+                "lead_create_process_item" => (May::ProcessItems, "create_process_item"),
                 _ => (May::Wait, "move_ahead"),
             };
             // What the workflow allows now: a change applies from the next decision.
@@ -1447,6 +1457,8 @@ async fn call(
             );
             let result = if !allowed {
                 None
+            } else if word == "create_process_item" {
+                Some(create_process_item(host, azure, &run.id, args).await)
             } else if word == "create_work_item" {
                 Some(
                     create_blocking(host, azure, args["finding"].as_str().unwrap_or_default())
@@ -2389,4 +2401,114 @@ async fn create_blocking(
     id: &str,
 ) -> std::result::Result<Value, String> {
     super::findings::create(host, azure, id, "lead", None).await
+}
+
+/// A pull request's review support task, created by its workflow's lead by the organization's
+/// norms (`lead_create_process_item`): the run's open, unapproved pull request listed due, a
+/// task-category type (`check_child`) with a work item guide, and none created for that pull
+/// request yet; recorded before it
+/// is sent (`Run::process_items`), created once with the source's personal access token, never
+/// retried.
+// shortcut: a support task made by hand for that pull request is not searched for. Look for it
+// by its title's prefix in the run's project if people create them themselves.
+async fn create_process_item(
+    host: &Arc<Host>,
+    azure: &engine::Azure,
+    id: &str,
+    args: &Value,
+) -> std::result::Result<Value, String> {
+    let state = &host.state;
+    let lock = state.workflows.lock(id);
+    let _guard = lock.lock().await;
+    let mut run = state
+        .workflows
+        .db
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no workflow run {id}.")))?;
+    let url = args["pull_request"].as_str().unwrap_or_default().to_owned();
+    let pull = run
+        .children
+        .iter()
+        .flat_map(|c| &c.pull_requests)
+        .find(|p| p.url == url)
+        .cloned()
+        .ok_or_else(|| invalid(format!("{url} is not a pull request of run {id}.")))?;
+    if !run.support_due.contains(&url) {
+        return Err(conflict(
+            "Its support task is not due: the pull request is approved, too recent, or has one.",
+        ));
+    }
+    if pull.status != "active" || engine::approved(&pull) {
+        return Err(conflict(
+            "The pull request is no longer open and unapproved.",
+        ));
+    }
+    if run
+        .process_items
+        .iter()
+        .any(|p| p["pull_request"] == url.as_str())
+    {
+        return Err(conflict(
+            "Its support task was created, or tried, already: it is never sent twice.",
+        ));
+    }
+    let kind = args["type"].as_str().unwrap_or_default().trim().to_owned();
+    let organization = crate::store::organization::OrganizationStore::organization(
+        &crate::store::organization::LocalOrganization::new(&state.settings),
+    )
+    .map_err(fail)?;
+    if crate::work_items::for_item(&organization.guides, "azure", &kind, &run.item.project)
+        .is_none()
+    {
+        return Err(invalid(format!(
+            "{kind} has no work item guide: the norms' work items follow one."
+        )));
+    }
+    let draft = json!({"type": kind, "title": bounded(args["title"].as_str().unwrap_or_default(), 200),
+        "description": bounded(args["description"].as_str().unwrap_or_default(), 16_000),
+        "fields": args["fields"].as_array().cloned().unwrap_or_default()});
+    let parent = azure
+        .item(
+            state,
+            run.item.source.as_deref(),
+            Some(&run.item.project),
+            run.item.id,
+        )
+        .await?;
+    azure.check_child(state, &run, &parent, &draft).await?;
+    azure.ready_to_create(state, &run).await?;
+    let now = chrono::Utc::now().timestamp();
+    run.process_items
+        .push(json!({"pull_request": url, "state": "sending", "at": now, "title": draft["title"]}));
+    state.workflows.db.save(&run).map_err(fail)?;
+    let sent = {
+        let (host, azure, run, draft) = (host.clone(), azure.clone(), run.clone(), draft.clone());
+        tokio::spawn(async move { azure.create_child(&host.state, &run, &parent, &draft).await })
+            .await
+            .unwrap_or_else(|_| Err("uncertain".into()))
+    };
+    let unsent = sent.as_ref().is_err_and(|e| e.contains("unsent: "));
+    if unsent {
+        run.process_items.pop();
+    } else if let Some(last) = run.process_items.last_mut() {
+        match &sent {
+            Ok(item) => {
+                last["state"] = json!("created");
+                last["id"] = item["id"].clone();
+                last["url"] = item["url"].clone();
+            }
+            Err(_) => {
+                last["state"] = json!("uncertain");
+                engine::unconfirmed_support(host, &run, &url, now);
+            }
+        }
+        run.support_due.retain(|u| *u != url);
+    }
+    state.workflows.db.save(&run).map_err(fail)?;
+    match sent {
+        Ok(item) => Ok(json!({"pull_request": url, "created": item})),
+        Err(reason) if unsent => Err(format!("Not sent: {reason}")),
+        Err(_) => Err("The support task was not confirmed: it is never sent again; the person looks in Azure DevOps.".into()),
+    }
 }

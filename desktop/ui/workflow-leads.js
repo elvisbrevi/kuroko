@@ -13,6 +13,7 @@ import { fillAgentChoices } from './settings-models.js';
 const MAY = [
   { id: 'settle', name: 'Settle children', effect: 'With the branches, pull requests or Wiki pages code verifies they delivered; the run then goes on by itself.' },
   { id: 'close', name: 'Close runs', effect: 'As done by your criteria once every child is settled, also with pull requests still open.' },
+  { id: 'process_items', name: "Create the norms' work items", effect: 'A pull request\'s review support task, once, when it was not approved by itself within 15 minutes.' },
   { id: 'create_blocking', name: "Create blocking findings' items", effect: "By itself, at most one per run and three a day; any other finding's item waits for your approval." },
   { id: 'item_states', name: 'Move item states', effect: "Of the run's item and its children, to states their type allows, with the fields their guide lists." },
   { id: 'continue', name: 'Continue cut runners', effect: 'Continue a coding session cut before its report, in its own conversation, at most twice per child.' },
