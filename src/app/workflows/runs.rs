@@ -10,7 +10,7 @@ use super::engine::{self, Azure};
 use super::record::{self, Item, Run, State as Phase};
 use super::*;
 
-pub(in crate::app) const METHODS: [&str; 16] = [
+pub(in crate::app) const METHODS: [&str; 17] = [
     "workflow_run_start",
     "workflow_runs",
     "workflow_run_status",
@@ -27,6 +27,7 @@ pub(in crate::app) const METHODS: [&str; 16] = [
     "workflow_findings",
     "workflow_finding_resolve",
     "workflow_finding_dismiss",
+    "workflow_finding_approve",
 ];
 
 #[derive(Deserialize)]
@@ -287,6 +288,43 @@ pub(super) async fn operation(
         }
         "workflow_findings" | "workflow_finding_resolve" | "workflow_finding_dismiss" => {
             super::findings::operation(&host.state, method, args)
+        }
+        "workflow_finding_approve" => {
+            require_engine(&host.state)?;
+            let finding = args["finding"]
+                .as_str()
+                .ok_or_else(|| invalid("Give the finding's ID."))?;
+            // The draft the person saw, by the finding's `updated_at`, and only that one.
+            let seen = args["seen"].as_i64().ok_or_else(|| {
+                invalid("Give seen: the finding's updated_at as you showed its draft.")
+            })?;
+            if args["confirmed"] != true {
+                let draft = host
+                    .state
+                    .workflows
+                    .findings
+                    .get(finding)
+                    .map_err(fail)?
+                    .and_then(|f| f.draft)
+                    .unwrap_or_default();
+                return Err(invalid(format!(
+                    "Confirm with the user, then approve with confirmed: true. Create in Azure DevOps, once, as a child of its run's item and with the Azure source's personal access token, the {} «{}» drafted for finding {finding}: {}{}",
+                    draft["type"].as_str().unwrap_or("work item"),
+                    draft["title"].as_str().unwrap_or_default(),
+                    draft["description"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .chars()
+                        .take(600)
+                        .collect::<String>(),
+                    if draft["fields"].as_array().is_some_and(|f| !f.is_empty()) {
+                        format!(" (fields: {})", draft["fields"])
+                    } else {
+                        String::new()
+                    }
+                )));
+            }
+            super::findings::create(host, azure, finding, "person", Some(seen)).await
         }
         _ => Err(invalid("Unknown workflow operation.")),
     }

@@ -262,6 +262,57 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.default_branches()),
         }
     }
+    /// Check a work item drafted as a child of the run's item against the live type.
+    pub(in crate::app) async fn check_child(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        parent: &Detail,
+        child: &Value,
+    ) -> Result<(), String> {
+        match self {
+            Self::Live => {
+                tools::todo::check_child(state, "azure", run.item.source.as_deref(), parent, child)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            #[cfg(test)]
+            Self::Synthetic(_) => Ok(()),
+        }
+    }
+    /// Whether the source's personal access token is there to create a work item with.
+    pub(in crate::app) async fn ready_to_create(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+    ) -> Result<(), String> {
+        match self {
+            Self::Live => crate::app::azure_pat::require(state, run.item.source.as_deref())
+                .await
+                .map_err(|e| e.to_string()),
+            #[cfg(test)]
+            Self::Synthetic(_) => Ok(()),
+        }
+    }
+    /// Create a work item drafted as a child of the run's item, once, with the source's personal
+    /// access token.
+    pub(in crate::app) async fn create_child(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        parent: &Detail,
+        child: &Value,
+    ) -> Result<Value, String> {
+        match self {
+            Self::Live => {
+                tools::todo::create_child(state, "azure", run.item.source.as_deref(), parent, child)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.create_child(child)),
+        }
+    }
     /// The states a work item type of the run's project allows.
     pub(in crate::app) async fn type_states(
         &self,

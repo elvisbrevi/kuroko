@@ -537,7 +537,10 @@ pub(crate) async fn create_child(
     parent: &Detail,
     child: &Value,
 ) -> Result<Value> {
-    let (source, kind, body) = child_body(client, key, catalog, guides, parent, child).await?;
+    // Nothing is sent when the body cannot be built: a caller may decide it again.
+    let (source, kind, body) = child_body(client, key, catalog, guides, parent, child)
+        .await
+        .map_err(|e| anyhow::anyhow!("unsent: {e}"))?;
     let url = project_url(
         &source,
         &parent.item.project,

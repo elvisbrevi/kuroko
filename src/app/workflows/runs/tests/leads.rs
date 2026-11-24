@@ -734,3 +734,156 @@ async fn a_lead_out_of_shadow_keeps_the_backlog_and_moves_its_items_state_once()
     assert_eq!(run.lead_writes[0]["outcome"], "written");
     bench.release();
 }
+
+#[tokio::test]
+async fn a_finding_s_work_item_is_created_once_by_the_person_or_its_lead_within_the_caps() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::CreateBlocking];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "block");
+    let id = bench.start(TASK).await;
+    let running = bench
+        .until(&id, |r| {
+            r.children[0]
+                .coding
+                .as_ref()
+                .is_some_and(|c| c.started && c.state.as_deref() == Some("running"))
+        })
+        .await;
+    let coding = running.children[0].coding.clone().unwrap().id;
+    for (title, severity) in [
+        ("Rounding loses cents", "blocking"),
+        ("Ledger export also rounds", "blocking"),
+        ("Old helper unused", "important"),
+    ] {
+        crate::app::implementation::report(
+            &bench.host.state.implementation.db,
+            &coding,
+            "finding_report",
+            &json!({"title": title, "detail": "Seen while coding.", "severity": severity, "evidence": "Rounding.cs:42"}),
+        )
+        .unwrap();
+    }
+    bench.release();
+    bench.state(&id, Phase::PullRequests).await;
+    let findings = |state: &str| -> Vec<super::super::findings::Finding> {
+        bench
+            .host
+            .state
+            .workflows
+            .findings
+            .list(None, Some(&id), Some(state), -1)
+            .unwrap()
+    };
+    let open = findings("open");
+    assert_eq!(open.len(), 3);
+    let by = |title: &str| open.iter().find(|f| f.title == title).unwrap().id.clone();
+    let (first, second, other) = (
+        by("Rounding loses cents"),
+        by("Ledger export also rounds"),
+        by("Old helper unused"),
+    );
+    let call = |n: u32, name: &str, arguments: Value| {
+        json!({"type":"control_request","request_id":format!("m{n}"),"request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":n,"method":"tools/call","params":{"name":name,"arguments":arguments}}}}).to_string()
+    };
+    let draft = |finding: &str| json!({"finding": finding, "type": "Bug", "title": "Round half up in the ledger", "description": "Same fix as the run's."});
+    let lines = [
+        call(1, "lead_propose_work_item", draft(&first)),
+        call(2, "lead_propose_work_item", draft(&second)),
+        call(3, "lead_propose_work_item", draft(&other)),
+        call(
+            4,
+            "lead_create_work_item",
+            json!({"finding": first, "reason": "It blocks the release."}),
+        ),
+        call(
+            5,
+            "lead_create_work_item",
+            json!({"finding": second, "reason": "It blocks too."}),
+        ),
+        call(
+            6,
+            "lead_create_work_item",
+            json!({"finding": other, "reason": "Not blocking."}),
+        ),
+    ];
+    fs::write(bench.log.join("lead_call"), lines.join("\n") + "\n").unwrap();
+    let decided = look(&bench, "create_work_item", 3).await;
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let results: Vec<String> = decided
+        .journal
+        .iter()
+        .filter(|e| e.decision.as_deref() == Some("create_work_item"))
+        .filter_map(|e| e.result.clone())
+        .take(3)
+        .collect();
+    assert_eq!(results[0], "applied", "{results:?}");
+    assert!(
+        results[1].contains("has its blocking finding's work item already"),
+        "{results:?}"
+    );
+    assert!(
+        results[2].contains("Only a blocking finding"),
+        "{results:?}"
+    );
+    let created = bench
+        .host
+        .state
+        .workflows
+        .findings
+        .get(&first)
+        .unwrap()
+        .unwrap();
+    assert_eq!(created.state, "item_created");
+    assert_eq!(created.created.as_ref().unwrap()["by"], "lead");
+    // The person approves the important one, once.
+    let seen = bench
+        .host
+        .state
+        .workflows
+        .findings
+        .get(&other)
+        .unwrap()
+        .unwrap()
+        .updated_at;
+    // A draft changed since it was shown is refused.
+    let stale = bench
+        .op(
+            "workflow_finding_approve",
+            json!({"finding": other, "seen": seen - 1, "confirmed": true}),
+        )
+        .await
+        .unwrap_err();
+    assert!(stale.contains("changed since you saw it"), "{stale}");
+    let approved = bench
+        .op(
+            "workflow_finding_approve",
+            json!({"finding": other, "seen": seen, "confirmed": true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved["finding"]["state"], "item_created");
+    let again = bench
+        .op(
+            "workflow_finding_approve",
+            json!({"finding": other, "seen": seen, "confirmed": true}),
+        )
+        .await
+        .unwrap_err();
+    assert!(again.contains("only a proposed draft"), "{again}");
+    // Two items created in all, each once.
+    let posts = bench
+        .catalog
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.starts_with("POST workitems"))
+        .count();
+    assert_eq!(posts, 2);
+}

@@ -1505,7 +1505,7 @@ dependencies = [
 
 [[package]]
 name = "kuroko"
-version = "0.20.12"
+version = "0.20.13"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",

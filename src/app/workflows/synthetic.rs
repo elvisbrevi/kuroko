@@ -496,6 +496,17 @@ impl Catalog {
             ..Default::default()
         })
     }
+    /// A created work item: recorded as a request, with the next ID and its link.
+    pub(in crate::app) fn create_child(&self, child: &serde_json::Value) -> serde_json::Value {
+        let mut requests = self.requests.lock().unwrap();
+        requests.push(format!("POST workitems {}", child["title"]));
+        let id = 9000
+            + requests
+                .iter()
+                .filter(|r| r.starts_with("POST workitems"))
+                .count() as u64;
+        serde_json::json!({"id": id, "url": format!("{}/Payments/_workitems/edit/{id}", ORGANIZATION), "state": "created"})
+    }
     /// The states every work item type allows here.
     pub(in crate::app) fn type_states(&self, _kind: &str) -> Vec<String> {
         ["To Do", "In Progress", "En revisión", "Done"]

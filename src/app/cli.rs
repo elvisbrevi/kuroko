@@ -552,6 +552,10 @@ Knowledge
   workflows findings [--workflow WORKFLOW] [--run RUN] [--state open|resolved|dismissed]
                            What the runs' coding sessions found that someone must know or decide,
                            newest first, each as its session reported it (finding_report).
+  workflows approve-finding ID --seen UPDATED_AT --confirmed
+                           Creates, once, the work item a workflow lead drafted for a finding (a child of
+                           its run's item, with the Azure source's token); --seen is the finding's
+                           updated_at from findings, so a draft changed since is refused.
   workflows resolve-finding ID [--note TEXT] | dismiss-finding ID [--note TEXT]
                            Marks a finding resolved, or sets it aside; only its record changes.
   workflows find RUN [--child ID]
@@ -785,6 +789,7 @@ fn words(args: &[String]) -> Vec<&str> {
                 | "--pull-request"
                 | "--wiki-page"
                 | "--dependency"
+                | "--seen"
         ) {
             skip = 1;
         } else if !arg.starts_with("--") {
@@ -1583,6 +1588,10 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
             }
             ("workflow_findings", body)
         }
+        (Some("approve-finding"), _) => (
+            "workflow_finding_approve",
+            json!({"finding": id(2)?, "seen": option(args, "--seen").and_then(|s| s.parse::<i64>().ok()), "confirmed": args.iter().any(|a| a == "--confirmed")}),
+        ),
         (Some(action @ ("resolve-finding" | "dismiss-finding")), _) => {
             let mut body = json!({"finding": id(2)?});
             if let Some(note) = option(args, "--note") {
@@ -2647,7 +2656,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                     "invalid timeout"
                 );
             }
-            "--dependency" | "--child" | "--pull-request" => {
+            "--dependency" | "--child" | "--pull-request" | "--seen" => {
                 i += 1;
                 ensure!(
                     args.get(i)
@@ -2933,7 +2942,8 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                     | "find"
                     | "accept-found"
                     | "resolve-finding"
-                    | "dismiss-finding",
+                    | "dismiss-finding"
+                    | "approve-finding",
                 _
             ]
             | ["workflows", "findings"]
@@ -3297,6 +3307,10 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
         (
             "--dependency",
             matches!(p.as_slice(), ["workflows", "skip-wait", _]),
+        ),
+        (
+            "--seen",
+            matches!(p.as_slice(), ["workflows", "approve-finding", _]),
         ),
         (
             "--child",
