@@ -262,6 +262,53 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.default_branches()),
         }
     }
+    /// The states a work item type of the run's project allows.
+    pub(in crate::app) async fn type_states(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        kind: &str,
+    ) -> Result<Vec<String>, String> {
+        match self {
+            Self::Live => {
+                tools::todo::type_states(
+                    state,
+                    run.item.source.as_deref(),
+                    (&run.item.organization, &run.item.project),
+                    kind,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.type_states(kind)),
+        }
+    }
+    /// Write a work item's state and fields (a workflow lead's decision), once.
+    pub(in crate::app) async fn update_item(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        id: u64,
+        fields: &[(String, Value)],
+    ) -> Result<(), String> {
+        match self {
+            Self::Live => {
+                tools::todo::update_item(
+                    state,
+                    run.item.source.as_deref(),
+                    (&run.item.organization, &run.item.project),
+                    id,
+                    fields,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => {
+                catalog.update_item(id, fields);
+                Ok(())
+            }
+        }
+    }
     /// A workflow lead's read of its workflow's project: a Wiki page, a file or a folder.
     pub(in crate::app) async fn lead_read(
         &self,
@@ -1377,6 +1424,41 @@ pub(in crate::app) fn dependency_links(texts: &Texts) -> String {
 /// The longest a run's lead may keep waiting for its pull requests, from the wait's start.
 pub(in crate::app) const LEAD_WAIT_DAYS: i64 = 60;
 
+/// The workflow as the run's coding and review agents get it: without `allow`'s `work_items`
+/// while its lead keeps the backlog.
+pub(in crate::app) fn runner_workflow(
+    host: &Host,
+    run: &Run,
+    workflow: &crate::workflows::Workflow,
+) -> crate::workflows::Workflow {
+    let mut runner = workflow.clone();
+    if lead_keeps_backlog(host, run) {
+        runner
+            .allow
+            .retain(|a| *a != crate::workflows::Allow::WorkItems);
+    }
+    runner
+}
+
+/// Whether the run's workflow's lead keeps its backlog now: out of shadow with `item_states`,
+/// the lead on.
+pub(in crate::app) fn lead_keeps_backlog(host: &Host, run: &Run) -> bool {
+    let Ok(map) = host.state.settings.map() else {
+        return false;
+    };
+    map.workflows
+        .iter()
+        .find(|w| Some(&w.id) == run.workflow.as_ref())
+        .and_then(|w| w.lead.as_ref())
+        .is_some_and(|lead| {
+            lead.applies(crate::workflows::lead::May::ItemStates)
+                && map
+                    .workflow_leads
+                    .iter()
+                    .any(|l| l.id == lead.id && l.enabled)
+        })
+}
+
 /// Whether the run's workflow lets its lead keep waiting now: out of shadow with `wait`, the
 /// lead on, and its turns not failing.
 fn lead_waits(host: &Arc<Host>, run: &Run) -> bool {
@@ -2385,6 +2467,11 @@ async fn coding(
             }
         });
         let texts = prompt_texts(host);
+        // A workflow whose lead keeps the backlog: its coding agents report, never write work
+        // items (`allow`'s `work_items` does not reach them).
+        let lead_writes = lead_keeps_backlog(host, run);
+        let runner = runner_workflow(host, run, workflow);
+        let allow = runner.allow.clone();
         // A continuation its lead asked for resumes the cut session with its note; anything
         // else starts a session with the whole context. Never while that session runs again
         // (a person may have opened it meanwhile).
@@ -2407,9 +2494,12 @@ async fn coding(
                 )],
             )
         } else {
-            let mut context = coding_context(&subject, &given, note, workflow, &run.blocks, &texts);
+            let mut context = coding_context(&subject, &given, note, &runner, &run.blocks, &texts);
             if let Some(base) = &child.base {
                 context.push_str(&stacked(base, &texts));
+            }
+            if lead_writes {
+                context.push_str(&format!("\n{}\n", texts.get("runs.lead_writes")));
             }
             fitted(context)?
         };
@@ -2428,7 +2518,7 @@ async fn coding(
                 detail,
                 planning: false,
                 // As the run's definition holds it: later edits do not change this run.
-                allow: workflow.allow.clone(),
+                allow,
                 // A continuation is one more turn of that session, as a review round's: every
                 // machine that continues sessions knows it so.
                 round: continuing,

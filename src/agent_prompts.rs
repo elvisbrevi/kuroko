@@ -397,6 +397,14 @@ pub const BUILT_IN: &[BuiltIn] = &[
         ["note"]
     ),
     built_in!(
+        "runs.lead_writes",
+        "workflow_runs",
+        "The lead keeps the backlog",
+        "Added to a coding session of a workflow whose lead decides: it reports instead of writing work items.",
+        prompts::RUN_LEAD_WRITES,
+        []
+    ),
+    built_in!(
         "runs.continue",
         "workflow_runs",
         "Continue a cut session",

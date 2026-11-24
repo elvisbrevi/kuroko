@@ -981,7 +981,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 19] = [
+const TOOLS: [(&str, &str, Schema); 20] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1051,6 +1051,11 @@ const TOOLS: [(&str, &str, Schema); 19] = [
         "lead_continue_runner",
         "Continue a child's coding session that was cut before its final report (a time limit, a usage limit, a lost connection), in its own conversation with your note: at most twice per child, never while it runs, under a pause or for a session that cannot continue. Applied only where your workflow lets you decide; otherwise recorded.",
         || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}, "message": {"type": "string"}, "reason": {"type": "string"}}, "required": ["run", "child", "message", "reason"]}),
+    ),
+    (
+        "lead_set_item_state",
+        "Move the run's work item, or one of its children, to a state its type allows, with the closing fields its work item guide lists (reference names, from the runner's delivery report and evidence). Written once with the Azure source's token and recorded; never retried. Applied only where your workflow lets you decide; otherwise recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}, "state": {"type": "string"}, "fields": {"type": "object", "additionalProperties": {"type": "string"}}, "reason": {"type": "string"}}, "required": ["run", "state", "reason"]}),
     ),
     (
         "lead_move_ahead",
@@ -1303,7 +1308,8 @@ async fn call(
         | "lead_close_run"
         | "lead_keep_waiting"
         | "lead_move_ahead"
-        | "lead_continue_runner" => {
+        | "lead_continue_runner"
+        | "lead_set_item_state" => {
             use crate::workflows::lead::May;
             let run = run("run")?;
             let (what, word) = match tool {
@@ -1311,6 +1317,7 @@ async fn call(
                 "lead_close_run" => (May::Close, "close"),
                 "lead_keep_waiting" => (May::Wait, "keep_waiting"),
                 "lead_continue_runner" => (May::Continue, "continue"),
+                "lead_set_item_state" => (May::ItemStates, "set_item_state"),
                 _ => (May::Wait, "move_ahead"),
             };
             // What the workflow allows now: a change applies from the next decision.
@@ -1334,6 +1341,8 @@ async fn call(
             );
             let result = if !allowed {
                 None
+            } else if word == "set_item_state" {
+                Some(set_item_state(host, azure, &run.id, args).await)
             } else if word == "continue" {
                 Some(
                     continue_runner(
@@ -2148,4 +2157,113 @@ async fn continue_runner(
     run.error = None;
     state.workflows.db.save(&run).map_err(fail)?;
     Ok(json!({"run": run.id, "continued": item}))
+}
+
+/// A workflow lead's change of a work item's state and closing fields (`lead_set_item_state`):
+/// the run's item or one of its children, to a state its type allows, with fields its work
+/// item guide lists, each change written once and recorded (`Run::lead_writes`), never retried.
+async fn set_item_state(
+    host: &Arc<Host>,
+    azure: &engine::Azure,
+    id: &str,
+    args: &Value,
+) -> std::result::Result<Value, String> {
+    let state = &host.state;
+    let lock = state.workflows.lock(id);
+    let _guard = lock.lock().await;
+    let mut run = state
+        .workflows
+        .db
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no workflow run {id}.")))?;
+    // The item: the run's own, or one of its children.
+    if !args["child"].is_null() && args["child"].as_u64().is_none() {
+        return Err(invalid("Give the child as its work item number."));
+    }
+    let (item, kind) = match args["child"].as_u64() {
+        None => (run.item.id, run.item.kind.clone()),
+        Some(child) => run
+            .children
+            .iter()
+            .find(|c| c.id == child)
+            .map(|c| (c.id, c.kind.clone()))
+            .ok_or_else(|| invalid(format!("#{child} is not a child of run {id}.")))?,
+    };
+    let wanted = args["state"].as_str().unwrap_or_default().trim().to_owned();
+    let states = azure.type_states(state, &run, &kind).await?;
+    if !states.contains(&wanted) {
+        return Err(invalid(format!(
+            "{kind} has no state «{wanted}»: it allows {}.",
+            states.join(", ")
+        )));
+    }
+    // Each field one the type's guide lists, with one of its values when it lists them.
+    let organization = crate::store::organization::OrganizationStore::organization(
+        &crate::store::organization::LocalOrganization::new(&state.settings),
+    )
+    .map_err(fail)?;
+    let guide =
+        crate::work_items::for_item(&organization.guides, "azure", &kind, &run.item.project);
+    let mut fields: Vec<(String, Value)> = vec![("System.State".into(), json!(wanted))];
+    for (reference, value) in args["fields"].as_object().into_iter().flatten() {
+        // The fields the provider keeps (state, assignment, area, title…) are never the lead's.
+        if crate::work_items::reserved(reference) {
+            return Err(invalid(format!(
+                "{reference} is not a field the lead sets."
+            )));
+        }
+        let value = value
+            .as_str()
+            .filter(|v| !v.chars().any(|c| c.is_control() && c != '\n' && c != '\t'))
+            .ok_or_else(|| invalid(format!("Give {reference} as plain text.")))?;
+        let listed = guide
+            .and_then(|g| g.fields.iter().find(|f| f.reference == *reference))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "{reference} is not a field the {kind} guide lists."
+                ))
+            })?;
+        if !listed.values.is_empty() && !listed.values.iter().any(|v| v == value) {
+            return Err(invalid(format!(
+                "{reference} takes one of {}.",
+                listed.values.join(", ")
+            )));
+        }
+        fields.push((reference.clone(), json!(bounded(value, 4000))));
+    }
+    // Once: the same change of the same item is never written again, and nothing more is written
+    // to an item whose last change may or may not have been applied.
+    let change = json!({"item": item, "fields": fields.iter().map(|(r, v)| json!([r, v])).collect::<Vec<_>>()});
+    if run.lead_writes.iter().any(|w| {
+        w["item"] == change["item"]
+            && (w["fields"] == change["fields"]
+                || matches!(w["outcome"].as_str(), Some("attempting" | "uncertain")))
+    }) {
+        return Err(conflict(
+            "This change was made already, or a change of this item may or may not have been applied: it is never sent twice; the person looks at it.",
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mut entry = change.clone();
+    entry["at"] = json!(now);
+    entry["outcome"] = json!("attempting");
+    run.lead_writes.push(entry);
+    state.workflows.db.save(&run).map_err(fail)?;
+    let written = azure.update_item(state, &run, item, &fields).await;
+    let outcome = match &written {
+        Ok(()) => "written".to_owned(),
+        Err(reason) if reason == "uncertain" => "uncertain".to_owned(),
+        Err(reason) => format!("refused: {}", bounded(reason, 300)),
+    };
+    // Nothing was sent: the change is not recorded, and may be decided again.
+    if written.as_ref().is_err_and(|r| r.starts_with("unsent: ")) {
+        run.lead_writes.pop();
+    } else if let Some(last) = run.lead_writes.last_mut() {
+        last["outcome"] = json!(outcome);
+    }
+    state.workflows.db.save(&run).map_err(fail)?;
+    written.map(|()| json!({"item": item, "state": wanted, "written": true})).map_err(|_| {
+        format!("The change was not confirmed ({outcome}): it is not retried; the person looks at #{item}.")
+    })
 }

@@ -647,3 +647,90 @@ async fn a_continued_runner_that_finishes_delivers_its_branch() {
     assert_eq!(run.children[0].continuations, 1);
     assert!(run.children[0].continue_session.is_none());
 }
+
+#[tokio::test]
+async fn a_lead_out_of_shadow_keeps_the_backlog_and_moves_its_items_state_once() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflows[0].allow = vec![crate::workflows::Allow::WorkItems];
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::ItemStates];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    bench.pulls(WEB, "payments-web", "feature/child-1", 21, "active");
+    bench.state(&id, Phase::PullRequests).await;
+    // Its coding agent reports instead of writing work items, whatever `allow` says.
+    let coding = fs::read_to_string(bench.log.join("coding.1")).unwrap();
+    assert!(
+        coding.contains("This workflow's lead keeps the backlog"),
+        "{coding}"
+    );
+    assert!(
+        coding.contains("create or change Azure DevOps or GitHub work items"),
+        "{coding}"
+    );
+    let call = |n: u32, arguments: Value| {
+        json!({"type":"control_request","request_id":format!("m{n}"),"request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":n,"method":"tools/call","params":{"name":"lead_set_item_state","arguments":arguments}}}}).to_string()
+    };
+    let lines = [
+        call(1, json!({"run": id, "state": "Nowhere", "reason": "x"})),
+        call(
+            2,
+            json!({"run": id, "state": "En revisión", "fields": {"Custom.Unlisted": "x"}, "reason": "x"}),
+        ),
+        call(
+            3,
+            json!({"run": id, "state": "En revisión", "fields": {"System.State": "Done"}, "reason": "x"}),
+        ),
+        call(
+            4,
+            json!({"run": id, "child": "200", "state": "En revisión", "reason": "x"}),
+        ),
+        call(
+            5,
+            json!({"run": id, "state": "En revisión", "reason": "Its pull request is open for review."}),
+        ),
+        call(
+            6,
+            json!({"run": id, "state": "En revisión", "reason": "Again."}),
+        ),
+    ];
+    fs::write(bench.log.join("lead_call"), lines.join("\n") + "\n").unwrap();
+    let decided = look(&bench, "set_item_state", 6).await;
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let results: Vec<String> = decided
+        .journal
+        .iter()
+        .filter(|e| e.decision.as_deref() == Some("set_item_state"))
+        .filter_map(|e| e.result.clone())
+        .take(6)
+        .collect();
+    assert!(results[0].contains("has no state"), "{results:?}");
+    assert!(results[1].contains("not a field"), "{results:?}");
+    assert!(
+        results[2].contains("not a field the lead sets"),
+        "{results:?}"
+    );
+    assert!(results[3].contains("work item number"), "{results:?}");
+    assert_eq!(results[4], "applied", "{results:?}");
+    assert!(results[5].contains("never sent twice"), "{results:?}");
+    // Written once, recorded on the run.
+    let writes: Vec<String> = bench
+        .catalog
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.starts_with("PATCH "))
+        .cloned()
+        .collect();
+    assert_eq!(writes.len(), 1, "{writes:?}");
+    let run = bench.run(&id);
+    assert_eq!(run.lead_writes.len(), 1);
+    assert_eq!(run.lead_writes[0]["outcome"], "written");
+    bench.release();
+}

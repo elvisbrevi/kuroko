@@ -909,6 +909,81 @@ pub(crate) async fn wiki_page(
     ))
 }
 
+/// The states a work item type of the project allows, read now.
+pub(crate) async fn type_states(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    (organization, project): (&str, &str),
+    kind: &str,
+) -> Result<Vec<String>> {
+    ensure!(
+        !kind.is_empty() && kind.len() <= 120 && !kind.chars().any(char::is_control),
+        "invalid work item type"
+    );
+    let source = source(catalog, organization)?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "wit", "workitemtypes", kind],
+    )?;
+    let value = request(client, key, Method::GET, url, None).await?;
+    Ok(value["states"]
+        .as_array()
+        .context("invalid work item type states")?
+        .iter()
+        .filter_map(|s| s["name"].as_str().map(str::to_owned))
+        .collect())
+}
+
+/// Set a work item's state and fields (a workflow lead's decision), once, with the source's
+/// personal access token: a refusal is an error, an answer that never came is `uncertain`.
+pub(crate) async fn update_item(
+    client: &Client,
+    key: &str,
+    catalog: &str,
+    (organization, project): (&str, &str),
+    id: u64,
+    fields: &[(String, serde_json::Value)],
+) -> std::result::Result<(), String> {
+    // Nothing was sent when these fail.
+    let source = source(catalog, organization).map_err(|e| format!("unsent: {e}"))?;
+    let url = project_url(
+        &source,
+        project,
+        "dev.azure.com",
+        &["_apis", "wit", "workitems", &id.to_string()],
+    )
+    .map_err(|e| format!("unsent: {e}"))?;
+    #[cfg(test)]
+    let url = super::test_url(url);
+    let ops: Vec<serde_json::Value> = fields
+        .iter()
+        .map(|(reference, value)| serde_json::json!({"op": "add", "path": format!("/fields/{reference}"), "value": value}))
+        .collect();
+    let response = client
+        .patch(url)
+        .basic_auth("", Some(key))
+        .header("Content-Type", "application/json-patch+json")
+        .json(&ops)
+        .send()
+        .await
+        .map_err(|_| "uncertain".to_owned())?;
+    let status = response.status();
+    if status.is_success() {
+        Ok(())
+    } else if status.is_server_error() || status.as_u16() == 408 {
+        // A gateway's answer may come after the change was applied.
+        Err("uncertain".to_owned())
+    } else {
+        Err(format!(
+            "Azure DevOps refused it (HTTP {})",
+            status.as_u16()
+        ))
+    }
+}
+
 /// The items API of one repository at `path`, on `branch` or its default branch.
 fn items_url(
     source: &Source,

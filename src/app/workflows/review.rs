@@ -476,7 +476,7 @@ pub(super) async fn step(
                 detail,
                 planning: false,
                 // The same permissions the run was created with.
-                allow: workflow.allow.clone(),
+                allow: engine::runner_workflow(host, run, workflow).allow,
                 round: true,
                 resume,
                 time_limit_minutes: limit,

@@ -747,11 +747,18 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
                 .as_ref()
                 .is_some_and(|l| !l.may.is_empty() || !l.shadow)
             {
+                // The newest release any of what it may do is unknown to.
+                let until = saved
+                    .lead
+                    .iter()
+                    .flat_map(|l| l.may.iter().map(|m| m.older_until()))
+                    .max_by_key(|v| crate::maintenance::Version::parse(v))
+                    .unwrap_or(core::OLDER_LEAD_DECISIONS_UNTIL);
                 warnings.extend(
                     older_than(
                         host,
                         &format!("Workflow {}'s lead may decide by itself", saved.id),
-                        core::OLDER_LEAD_DECISIONS_UNTIL,
+                        until,
                     )
                     .await,
                 );
