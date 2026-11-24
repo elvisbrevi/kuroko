@@ -571,8 +571,8 @@ async fn a_lead_continues_a_cut_runner_twice_at_most() {
     let child = cut.children[0].id;
     let call = json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
         "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_continue_runner","arguments":{"run": id, "child": child, "message": "Finish the rounding fix.", "reason": "It was cut before its report."}}}}});
-    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
     // Continued in its own conversation; cut again, continued again; then the person decides.
+    // One decision each time the run stops.
     let results = |shift: &super::super::shifts::Shift| -> Vec<String> {
         shift
             .journal
@@ -581,7 +581,13 @@ async fn a_lead_continues_a_cut_runner_twice_at_most() {
             .filter_map(|e| e.result.clone())
             .collect()
     };
-    let third = look(&bench, "continue", 3).await;
+    let mut third = shift(&bench);
+    for n in 1..=3 {
+        bench.state(&id, Phase::NeedsAttention).await;
+        fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+        third = look(&bench, "continue", n).await;
+        fs::remove_file(bench.log.join("lead_call")).unwrap();
+    }
     let seen = results(&third);
     assert_eq!(seen[0], "applied", "{seen:?}");
     assert_eq!(seen[1], "applied", "{seen:?}");
