@@ -533,6 +533,58 @@ pub(in crate::app) async fn wiki_pages(
     .await
 }
 
+/// The states a work item type of a project allows (a workflow lead's state change), read now.
+pub(in crate::app) async fn type_states(
+    state: &DesktopState,
+    source: Option<&str>,
+    (organization, project): (&str, &str),
+    kind: &str,
+) -> Result<Vec<String>, String> {
+    project_read(
+        state,
+        source,
+        "reading a work item type",
+        "work item states",
+        60,
+        |azure, _cache| async move {
+            crate::ado::workflow::type_states(
+                &azure.client,
+                &azure.read_key,
+                &azure.catalog,
+                (organization, project),
+                kind,
+            )
+            .await
+        },
+    )
+    .await
+}
+
+/// Set a work item's state and fields with the enabled Azure source's personal access token
+/// (a workflow lead's decision its workflow allows), once: `Err("uncertain")` when no answer
+/// came.
+pub(in crate::app) async fn update_item(
+    state: &DesktopState,
+    source: Option<&str>,
+    (organization, project): (&str, &str),
+    id: u64,
+    fields: &[(String, Value)],
+) -> Result<(), String> {
+    let azure = azure(state, source).map_err(|_| {
+        "unsent: [not_ready] Enable one Azure DevOps source with its personal access token first."
+            .to_owned()
+    })?;
+    crate::ado::workflow::update_item(
+        &azure.client,
+        &azure.read_key,
+        &azure.catalog,
+        (organization, project),
+        id,
+        fields,
+    )
+    .await
+}
+
 /// What a workflow lead reads of a project: a page of its Wiki, a file of one of its
 /// repositories (catalog ID), or a folder's entries, on a branch or the default one.
 pub(in crate::app) enum LeadRead<'a> {

@@ -718,6 +718,10 @@ run (any state but `done` and `cancelled`).
   With `wait` it keeps a run waiting for its pull requests past the account's limit (asked when
   it passes, up to 60 days) and moves a run ahead in the line; with `continue` it continues a
   coding session cut before its report, in its own conversation, at most twice per child.
+  With `item_states` it moves the state and closing fields of the run's item and its children
+  (states the type allows, fields its work item guide lists), each change written once with the
+  Azure source's token and recorded on the run; out of shadow its coding agents report instead of
+  writing work items, whatever `allow` says.
   Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within

@@ -84,13 +84,27 @@ pub enum May {
     /// Continue a coding session cut before its final report, in its own conversation, at most
     /// twice per child.
     Continue,
+    /// Move the state and closing fields of the run's item and its children (0.20.12).
+    ItemStates,
 }
 impl May {
+    /// The newest release that cannot read it in a workflow's lead.
+    pub fn older_until(self) -> &'static str {
+        match self {
+            May::Settle | May::Close => "0.20.8",
+            May::Wait => "0.20.9",
+            May::Continue => "0.20.10",
+            May::ItemStates => "0.20.11",
+        }
+    }
     /// What allowing it means, for the confirmation of a workflow's save.
     pub fn describe(self) -> &'static str {
         match self {
             May::Settle => {
                 "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::ItemStates => {
+                "move the state of the run's work item and its children to a state their type allows, with the fields their work item guide lists, written with the Azure source's personal access token; its coding agents then report instead of writing work items"
             }
             May::Continue => {
                 "continue a coding session that was cut before its final report, in its own conversation with its note, at most twice per child, never while it runs or under a pause"

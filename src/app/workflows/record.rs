@@ -568,6 +568,10 @@ pub(in crate::app) struct Run {
     pub wait_asked: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_until: Option<i64>,
+    /// What its lead wrote to its work items: each change once, with its outcome (`written`,
+    /// `uncertain`, or why it was refused), never retried (0.20.12).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lead_writes: Vec<Value>,
     /// When its pull requests were last read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<i64>,
@@ -669,6 +673,7 @@ impl Run {
             waiting_since: None,
             wait_asked: None,
             wait_until: None,
+            lead_writes: Vec::new(),
             checked_at: None,
             continues: None,
             restarted_as: None,

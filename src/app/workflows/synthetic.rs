@@ -496,6 +496,24 @@ impl Catalog {
             ..Default::default()
         })
     }
+    /// The states every work item type allows here.
+    pub(in crate::app) fn type_states(&self, _kind: &str) -> Vec<String> {
+        ["To Do", "In Progress", "En revisión", "Done"]
+            .map(String::from)
+            .into()
+    }
+    /// A lead's write of an item's fields: recorded as a request, its state applied.
+    pub(in crate::app) fn update_item(&self, id: u64, fields: &[(String, serde_json::Value)]) {
+        self.requests.lock().unwrap().push(format!(
+            "PATCH workitems/{id} {}",
+            serde_json::json!(fields)
+        ));
+        if let Some((_, state)) = fields.iter().find(|(r, _)| r == "System.State")
+            && let Some(state) = state.as_str()
+        {
+            self.set_state(id, state);
+        }
+    }
     /// A Wiki page (`page:PATH`) or a repository file (`REPOSITORY:PATH`) a lead may read.
     #[cfg(unix)]
     pub(in crate::app) fn set_text(&self, key: &str, text: &str) {
