@@ -10,6 +10,8 @@
 //! to a provider is counted: the children only through the user's confirmation, one post per
 //! notification and one per send. A second test drives the same operations through the tool layer
 //! that `kuroko tools call` and `kuroko mcp` share, with the confirmations the catalog declares.
+//! A third rehearses a workflow lead's whole shift out of shadow: it moves the item, creates the
+//! pull request's support task, closes the run and writes its record, each write counted once.
 use super::record::{Run, State as Phase};
 use super::runs::tests::{Bench, HU, TASK};
 use super::*;
@@ -551,4 +553,206 @@ async fn the_cli_and_mcp_tool_layer_drive_the_runs_with_the_confirmations_the_ca
         validate_args(&args).unwrap_or_else(|e| panic!("{args:?}: {e:?}"));
     }
     assert!(bench.catalog.only_reads());
+}
+
+/// One call of a lead's tool, as the fake provider CLI sends it in its turn.
+fn lead_call(n: usize, name: &str, arguments: Value) -> String {
+    json!({"type":"control_request","request_id":format!("m{n}"),"request":{"subtype":"mcp_message","server_name":"kuroko",
+        "message":{"jsonrpc":"2.0","id":n,"method":"tools/call","params":{"name":name,"arguments":arguments}}}})
+    .to_string()
+}
+
+/// The lead's shift now.
+fn lead_shift(bench: &Bench) -> super::shifts::Shift {
+    bench
+        .host
+        .state
+        .workflows
+        .shifts
+        .list(Some("pagos"), 1)
+        .unwrap()
+        .remove(0)
+}
+
+/// Give the lead `calls` for its next turn, ask it to look, and step until `done` holds.
+async fn lead_turn(bench: &Bench, calls: &[String], done: impl Fn(&Bench) -> bool) {
+    fs::write(bench.log.join("lead_call"), calls.join("\n") + "\n").unwrap();
+    for _ in 0..400 {
+        let _ =
+            super::shifts::operation(&bench.host, "workflow_lead_wake", &json!({"lead": "pagos"}));
+        bench.tick().await;
+        if done(bench) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!(
+        "the lead's turn did not get there: {:?}",
+        lead_shift(bench).wakes
+    );
+}
+
+/// A workflow lead's whole shift out of shadow, with synthetic providers only: a task is coded
+/// and its pull request opened; the lead moves the item to review, creates the pull request's
+/// review support task (a second try is refused), closes the run by the workflow's completion
+/// criteria, and ends its shift with its record. Every write to a provider is counted: one
+/// change of the item's state and one work item, each once, nothing else.
+#[tokio::test]
+async fn a_leads_whole_shift_writes_only_what_its_workflow_allows_and_each_once() {
+    use crate::workflows::lead::{Lead, May, WorkflowLead};
+    let bench = Bench::new().await;
+    let mut map = bench.host.state.settings.map().unwrap();
+    map.workflow_leads = vec![Lead {
+        id: "pagos".into(),
+        name: "Pagos".into(),
+        agent: crate::workflows::Agent {
+            provider: "claude".into(),
+            model: "model".into(),
+            effort: "high".into(),
+            time_limit_minutes: None,
+        },
+        enabled: true,
+        ..Default::default()
+    }];
+    map.workflows[0].lead = Some(WorkflowLead {
+        id: "pagos".into(),
+        may: vec![May::ItemStates, May::ProcessItems, May::Close],
+        shadow: false,
+    });
+    map.workflows[0].done_when =
+        "Done once its pull request is open for review with its support task.".into();
+    bench.host.state.settings.save_map(&map).unwrap();
+    crate::store::organization::OrganizationStore::save_guide(
+        &crate::store::organization::LocalOrganization::new(&bench.host.state.settings),
+        &crate::work_items::Guide {
+            id: "support".into(),
+            provider: "azure".into(),
+            kind: "Task".into(),
+            name: "Revisión PR".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    let url = "https://dev.azure.com/example/Payments/_git/payments-web/pullrequest/21";
+    bench.catalog.set_pulls(
+        WEB,
+        "feature/child-1",
+        vec![crate::ado::workflow::PullRequest {
+            id: 21,
+            repository: WEB.into(),
+            title: "PR 21".into(),
+            status: "active".into(),
+            url: url.into(),
+            created_at: Some((chrono::Utc::now() - chrono::Duration::minutes(20)).to_rfc3339()),
+            auto_complete: Some(true),
+            delete_source_branch: Some(true),
+            ..Default::default()
+        }],
+    );
+    bench.until(&id, |r| !r.support_due.is_empty()).await;
+
+    // One turn: the item to review, its support task, and the same support task again.
+    let support = json!({"run": id, "pull_request": url, "type": "Task", "title": "Revisión PR 21",
+        "description": "Review pull request 21.", "reason": "Not approved by itself."});
+    lead_turn(
+        &bench,
+        &[
+            lead_call(
+                1,
+                "lead_set_item_state",
+                json!({"run": id, "state": "En revisión", "reason": "Its pull request is open."}),
+            ),
+            lead_call(2, "lead_create_process_item", support.clone()),
+            lead_call(3, "lead_create_process_item", support),
+        ],
+        |b| {
+            let run = b.run(&id);
+            !run.lead_writes.is_empty() && !run.process_items.is_empty()
+        },
+    )
+    .await;
+    let run = bench.run(&id);
+    assert_eq!(run.lead_writes[0]["outcome"], "written");
+    assert_eq!(run.process_items.len(), 1);
+    assert_eq!(run.process_items[0]["state"], "created");
+
+    // The next: the run is done by its criteria, its pull request still open.
+    lead_turn(
+        &bench,
+        &[lead_call(
+            4,
+            "lead_close_run",
+            json!({"run": id, "reason": "Open for review with its support task."}),
+        )],
+        |b| b.run(&id).state == Phase::Done,
+    )
+    .await;
+
+    // The closing turn writes its record, and the shift ends.
+    bench.offset.store(600, std::sync::atomic::Ordering::SeqCst);
+    lead_turn(
+        &bench,
+        &[lead_call(
+            5,
+            "lead_finish",
+            json!({"summary": "Coded, moved to review, its support task created and closed."}),
+        )],
+        |b| lead_shift(b).state == "ended",
+    )
+    .await;
+    let ended = lead_shift(&bench);
+    assert_eq!(
+        ended.record.as_ref().unwrap()["summary"],
+        "Coded, moved to review, its support task created and closed."
+    );
+    let decisions: Vec<(String, String)> = ended
+        .journal
+        .iter()
+        .filter(|e| e.kind == "decision")
+        .map(|e| {
+            (
+                e.decision.clone().unwrap_or_default(),
+                e.result.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        decisions[0],
+        ("set_item_state".into(), "applied".into()),
+        "{decisions:?}"
+    );
+    assert_eq!(
+        decisions[1],
+        ("create_process_item".into(), "applied".into()),
+        "{decisions:?}"
+    );
+    assert!(
+        decisions[2].1.contains("not due") || decisions[2].1.contains("never sent twice"),
+        "{decisions:?}"
+    );
+    assert_eq!(
+        decisions[3],
+        ("close".into(), "applied".into()),
+        "{decisions:?}"
+    );
+
+    // Every write to a provider: the item's state once, one work item once.
+    let writes: Vec<String> = bench
+        .catalog
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| !r.starts_with("GET "))
+        .cloned()
+        .collect();
+    assert_eq!(writes.len(), 2, "{writes:?}");
+    assert!(
+        writes[0].starts_with(&format!("PATCH workitems/{TASK} ")),
+        "{writes:?}"
+    );
+    assert!(writes[1].starts_with("POST workitems "), "{writes:?}");
+    bench.release();
 }
