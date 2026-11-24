@@ -509,3 +509,48 @@ async fn a_lead_closes_a_run_whose_pull_request_is_open_and_its_completion_block
     assert_eq!(run.children[0].pull_requests[0].status, "active");
     assert!(bench.catalog.only_reads());
 }
+
+#[tokio::test]
+async fn a_lead_keeps_a_run_waiting_past_the_limit_but_never_past_sixty_days() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::Wait];
+    lead.shadow = false;
+    map.workflow_settings.pull_request_wait_days = 1;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    bench.pulls(WEB, "payments-web", "feature/child-1", 21, "active");
+    bench.state(&id, Phase::PullRequests).await;
+    // Past the limit its lead is asked instead of the run stopping.
+    bench.offset.store(2 * 86_400, Ordering::SeqCst);
+    for _ in 0..3 {
+        bench.tick().await;
+    }
+    let asked = bench.run(&id);
+    assert_eq!(asked.state, Phase::PullRequests);
+    assert!(asked.wait_asked.is_some());
+    let call = json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+        "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_keep_waiting","arguments":{"run": id, "days": 30, "reason": "The reviewer is away this week."}}}}});
+    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+    let waited = look(&bench, "keep_waiting", 1).await;
+    let decided = waited
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.decision.as_deref() == Some("keep_waiting"))
+        .unwrap();
+    assert_eq!(decided.result.as_deref(), Some("applied"), "{decided:?}");
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    // Waiting well past the limit and the day it had to decide.
+    bench.offset.store(10 * 86_400, Ordering::SeqCst);
+    for _ in 0..3 {
+        bench.tick().await;
+    }
+    assert_eq!(bench.run(&id).state, Phase::PullRequests);
+    // Its days end: the run stops as before.
+    bench.offset.store(40 * 86_400, Ordering::SeqCst);
+    bench.state(&id, Phase::NeedsAttention).await;
+}

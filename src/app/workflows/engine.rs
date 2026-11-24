@@ -1374,6 +1374,35 @@ pub(in crate::app) fn dependency_links(texts: &Texts) -> String {
     format!("\n{}\n", texts.get("runs.dependency_links"))
 }
 
+/// The longest a run's lead may keep waiting for its pull requests, from the wait's start.
+pub(in crate::app) const LEAD_WAIT_DAYS: i64 = 60;
+
+/// Whether the run's workflow lets its lead keep waiting now: out of shadow with `wait`, the
+/// lead on, and its turns not failing.
+fn lead_waits(host: &Arc<Host>, run: &Run) -> bool {
+    let Ok(map) = host.state.settings.map() else {
+        return false;
+    };
+    let Some(lead) = map
+        .workflows
+        .iter()
+        .find(|w| Some(&w.id) == run.workflow.as_ref())
+        .and_then(|w| w.lead.clone())
+        .filter(|l| l.applies(crate::workflows::lead::May::Wait))
+    else {
+        return false;
+    };
+    map.workflow_leads
+        .iter()
+        .any(|l| l.id == lead.id && l.enabled)
+        && host
+            .state
+            .workflows
+            .shifts
+            .current_state(&lead.id)
+            .is_some_and(|state| state != "failing")
+}
+
 /// The longest item text a context is measured with: an item's kind, ID, title (a run keeps at
 /// most 500 characters of it) and links.
 const ITEM_KIND: usize = 100;
@@ -2696,7 +2725,25 @@ async fn pull_requests(
         .workflow_settings
         .pull_request_wait_days;
     let since = run.waiting_since.unwrap_or(now);
-    if now - since >= i64::from(days) * 86_400 {
+    let mut limit = since + i64::from(days) * 86_400;
+    // A lead that may keep waiting is asked once the limit passes and decides until when (up to
+    // `LEAD_WAIT_DAYS` from the wait's start); without its decision a day later, or with its
+    // turns failing, the run stops as before. A wait it already granted is kept.
+    let cap = since + LEAD_WAIT_DAYS * 86_400;
+    let asked = run.wait_asked.filter(|at| *at >= since);
+    if let (Some(asked), Some(until)) = (asked, run.wait_until) {
+        limit = until.max(asked + 86_400).min(cap);
+    } else if now >= limit && lead_waits(host, run) {
+        match asked {
+            None => {
+                run.wait_asked = Some(now);
+                run.wait_until = None;
+                return Ok(true);
+            }
+            Some(asked) => limit = (asked + 86_400).min(cap).max(limit),
+        }
+    }
+    if now >= limit {
         let missing: Vec<String> = coded
             .iter()
             .filter_map(|c| {

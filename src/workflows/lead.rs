@@ -78,6 +78,9 @@ pub enum May {
     Settle,
     /// Close a run by the workflow's completion criteria, above the floor code enforces.
     Close,
+    /// Keep waiting for a run's pull requests past the account's limit (up to 60 days from the
+    /// wait's start), and move a run ahead in the line.
+    Wait,
 }
 impl May {
     /// What allowing it means, for the confirmation of a workflow's save.
@@ -85,6 +88,9 @@ impl May {
         match self {
             May::Settle => {
                 "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::Wait => {
+                "keep waiting for a run's pull requests past the account's limit, up to 60 days from the start of the wait (without its decision a day after the limit, the run stops as before), and move a run ahead in the line"
             }
             May::Close => {
                 "close a run as done by the workflow's completion criteria once every child is settled and no session is alive, also with pull requests still open (their pull-requests-completed blocks are skipped)"

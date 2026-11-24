@@ -3096,6 +3096,8 @@ const UI_CATALOG = { es: {
   "Its lead follows its runs on this coordinator with its own Claude agent and your Claude usage; in shadow it reads them and records what it would decide, and changes nothing.": "Su encargado sigue sus ejecuciones en este coordinador con su propio agente de Claude y tu uso de Claude; en sombra las lee, registra lo que decidiría y no cambia nada.",
   "Its lead follows its runs on this coordinator with its own Claude agent and your Claude usage and, by itself, code checking each decision first:": "Su encargado sigue sus ejecuciones en este coordinador con su propio agente de Claude y tu uso de Claude y, por sí mismo, con el código revisando cada decisión antes:",
   "Close runs": "Cerrar ejecuciones",
+  "Wait longer": "Esperar más",
+  "For pull requests past your limit, up to 60 days, and move a run ahead in the line.": "Por pull requests pasado tu límite, hasta 60 días, y adelantar una ejecución en la fila.",
   "As done by your criteria once every child is settled, also with pull requests still open.": "Como terminadas según tu criterio cuando todos los hijos están liquidados, también con pull requests aún abiertos.",
   "What it decides by itself once its decisions apply; code checks each one first.": "Lo que decide por sí mismo cuando sus decisiones se aplican; el código revisa cada una antes.",
   "Apply its decisions (out of shadow)": "Aplicar sus decisiones (fuera de la sombra)",

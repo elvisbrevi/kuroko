@@ -188,6 +188,10 @@ impl Shifts {
         )?;
         Ok(())
     }
+    /// The state of the lead's shift that has not ended, if any.
+    pub(in crate::app) fn current_state(&self, lead: &str) -> Option<String> {
+        self.current(lead).ok().flatten().map(|s| s.state)
+    }
     /// One shift, by its ID.
     pub(in crate::app) fn get(&self, id: &str) -> Result<Option<Shift>> {
         let db = self.db.lock().unwrap();
@@ -265,6 +269,7 @@ fn facts(run: &Run) -> Value {
             "pull_requests": c.pull_requests.iter().map(|p| json!({"id": p.id, "status": p.status, "url": p.url})).collect::<Vec<_>>(),
             "wiki_pages": c.wiki_pages.iter().map(|p| &p.path).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
+        "wait": (run.wait_asked.is_some()).then(|| json!({"since": run.waiting_since, "asked": run.wait_asked, "until": run.wait_until})),
         "updated_at": run.updated_at,
     })
 }
@@ -976,7 +981,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 16] = [
+const TOOLS: [(&str, &str, Schema); 18] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1035,6 +1040,16 @@ const TOOLS: [(&str, &str, Schema); 16] = [
     (
         "lead_close_run",
         "Close a run as done by your workflow's completion criteria: code requires every child settled, at least one delivered, no agent session alive and the plan reviewed; pull requests still open are left open and their pull-requests-completed blocks skipped. Applied only where your workflow lets you decide; otherwise it is recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "reason": {"type": "string"}}, "required": ["run", "reason"]}),
+    ),
+    (
+        "lead_keep_waiting",
+        "Keep waiting for a run's pull requests this many more days, past the account's limit (asked in its facts' wait): at most 60 days from the start of the wait. Applied only where your workflow lets you decide; otherwise recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "days": {"type": "integer", "minimum": 1, "maximum": 60}, "reason": {"type": "string"}}, "required": ["run", "days", "reason"]}),
+    ),
+    (
+        "lead_move_ahead",
+        "Move a run that waits for a slot ahead in the line. Applied only where your workflow lets you decide; otherwise recorded.",
         || json!({"type": "object", "properties": {"run": {"type": "string"}, "reason": {"type": "string"}}, "required": ["run", "reason"]}),
     ),
     (
@@ -1279,12 +1294,14 @@ async fn call(
             });
             Ok(json!({"recorded": true, "applied": false}))
         }
-        "lead_settle_child" | "lead_close_run" => {
+        "lead_settle_child" | "lead_close_run" | "lead_keep_waiting" | "lead_move_ahead" => {
+            use crate::workflows::lead::May;
             let run = run("run")?;
-            let (what, word) = if tool == "lead_settle_child" {
-                (crate::workflows::lead::May::Settle, "settle")
-            } else {
-                (crate::workflows::lead::May::Close, "close")
+            let (what, word) = match tool {
+                "lead_settle_child" => (May::Settle, "settle"),
+                "lead_close_run" => (May::Close, "close"),
+                "lead_keep_waiting" => (May::Wait, "keep_waiting"),
+                _ => (May::Wait, "move_ahead"),
             };
             // What the workflow allows now: a change applies from the next decision.
             // Its own lead, on now, and allowed by the workflow now.
@@ -1307,7 +1324,9 @@ async fn call(
             );
             let result = if !allowed {
                 None
-            } else if what == crate::workflows::lead::May::Settle {
+            } else if word == "keep_waiting" || word == "move_ahead" {
+                Some(wait(host, &run.id, word, args["days"].as_i64()).await)
+            } else if what == May::Settle {
                 let mut settle = json!({"run": run.id, "child": args["child"]});
                 for key in ["branches", "pull_requests", "wiki_pages"] {
                     if args[key].is_array() {
@@ -1932,4 +1951,46 @@ async fn close(host: &Arc<Host>, id: &str, reason: &str) -> std::result::Result<
     run.error = None;
     state.workflows.db.save(&run).map_err(fail)?;
     Ok(json!({"run": run.id, "closed": true}))
+}
+
+/// A workflow lead's waiting decisions: `keep_waiting` for its pull requests `days` more (from
+/// now, at most `LEAD_WAIT_DAYS` from the wait's start, once the limit passed and it was
+/// asked), or `move_ahead` in the line for a slot.
+async fn wait(
+    host: &Arc<Host>,
+    id: &str,
+    word: &str,
+    days: Option<i64>,
+) -> std::result::Result<Value, String> {
+    use super::record::State as Phase;
+    let state = &host.state;
+    let lock = state.workflows.lock(id);
+    let _guard = lock.lock().await;
+    let mut run = state
+        .workflows
+        .db
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no workflow run {id}.")))?;
+    let now = chrono::Utc::now().timestamp();
+    if word == "move_ahead" {
+        if !(run.waits_for_slot() || run.state == Phase::Classifying) {
+            return Err(conflict("The run does not wait in the line for a slot."));
+        }
+        run.ahead_since.get_or_insert(now);
+    } else {
+        let since = run.waiting_since.unwrap_or(now);
+        if run.state != Phase::PullRequests || run.wait_asked.is_none_or(|at| at < since) {
+            return Err(conflict(
+                "Only a run asked to keep waiting for its pull requests (its facts' wait) waits longer.",
+            ));
+        }
+        let days = days
+            .filter(|d| (1..=60).contains(d))
+            .ok_or_else(|| invalid("Give 1 to 60 days."))?;
+        let cap = since + super::engine::LEAD_WAIT_DAYS * 86_400;
+        run.wait_until = Some((now + days * 86_400).min(cap));
+    }
+    state.workflows.db.save(&run).map_err(fail)?;
+    Ok(json!({"run": run.id, "applied": word}))
 }
