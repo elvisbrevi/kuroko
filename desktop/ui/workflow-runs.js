@@ -374,6 +374,8 @@ function runActions(run, sessionButton, area, refresh) {
   const summary = el('button', { type: 'button', class: 'secondary', textContent: t('Summary'), id: 'run-summary' });
   summary.onclick = () => busy(summary, async () => {
     const reply = await invoke('workflow_summary', { run: run.id });
+    // A run its lead follows: the lead writes it at its next turn.
+    if (reply.requested) { done(t('{name} writes the summary at its next turn; it appears here.', { name: reply.requested.name })); return; }
     runsData.chosenSummary = reply.summary?.id ?? null;
     done(t('Summary written.'));
     await refresh();
@@ -489,18 +491,18 @@ function showAssign(run, area, refresh) {
 
 function summaries(run) {
   const all = run.summaries ?? [];
-  if (!all.length) return el('p', { class: 'hint', id: 'run-no-summary', textContent: t('No progress summary yet. Summary asks the director for one, written from this run\'s record.') });
+  if (!all.length) return el('p', { class: 'hint', id: 'run-no-summary', textContent: t('No progress summary yet. Summary asks the run\'s lead, when its workflow has one, or the director for one, written from this run\'s record.') });
+  // The one the person chose, else the newest (a summary its lead writes later shows when it comes).
   const chosen = all.find(s => s.id === runsData.chosenSummary) ?? all[all.length - 1];
-  runsData.chosenSummary = chosen.id;
   const latest = el('article', { class: 'panel run-summary', id: 'run-summary-text' },
-    el('div', { class: 'panel-head' }, el('h3', { textContent: t('Progress summary') }), el('span', { class: 'hint', textContent: `${when(chosen.created_at)} · ${chosen.model ?? ''}` })),
+    el('div', { class: 'panel-head' }, el('h3', { textContent: t('Progress summary') }), el('span', { class: 'hint', textContent: `${when(chosen.created_at)} · ${chosen.by === 'lead' ? t('written by its lead') : chosen.model ?? ''}` })),
     markdown(chosen.text));
   const older = all.filter(s => s.id !== chosen.id).reverse();
   const history = older.length ? el('details', { class: 'fold' }, el('summary', { textContent: tn(older.length, '1 earlier summary', '{n} earlier summaries') }),
     el('div', { class: 'list' }, ...older.map(s => {
       const use = el('button', { type: 'button', class: 'link-button', textContent: t('Show this one') });
       use.onclick = () => { runsData.chosenSummary = s.id; renderRunDetail(runsData.record ?? run, runsData.sessions); };
-      return el('div', { class: 'resource' }, el('p', { class: 'resource-facts' }, el('small', { textContent: `${when(s.created_at)} · ${s.model ?? ''}` })), el('p', { textContent: s.text.slice(0, 240) }), use);
+      return el('div', { class: 'resource' }, el('p', { class: 'resource-facts' }, el('small', { textContent: `${when(s.created_at)} · ${s.by === 'lead' ? t('written by its lead') : s.model ?? ''}` })), el('p', { textContent: s.text.slice(0, 240) }), use);
     }))) : null;
   const sends = (run.summary_sends ?? []).slice().reverse();
   const sent = sends.length ? el('details', { class: 'fold', id: 'run-sends' }, el('summary', { textContent: tn(sends.length, '1 send', '{n} sends') }),

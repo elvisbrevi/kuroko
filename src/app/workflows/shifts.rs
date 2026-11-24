@@ -71,6 +71,10 @@ pub(in crate::app) struct Shift {
     /// A person asked for a look now.
     #[serde(default)]
     pub requested: bool,
+    /// The runs whose progress summary the person asked for and the lead has not written yet:
+    /// it writes one per request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summaries_asked: Vec<String>,
     /// Every run of its workflows has ended: its next turn is the closing one.
     #[serde(default)]
     pub closing: bool,
@@ -146,6 +150,11 @@ pub(in crate::app) struct Shifts {
     // shortcut: kept in memory until the next tick (30 s); one given right before a restart is
     // lost and the question stays open. Persist them if that happens.
     answers: Shared<Vec<(String, String, String)>>,
+    /// The runs whose progress summary the person asked their lead for (lead, run), taken the
+    /// same way.
+    // shortcut: kept in memory like the answers; one asked right before a restart is lost and
+    // the person asks again.
+    summaries: Shared<Vec<(String, String)>>,
     /// The leads the person talks with now, live through Remote Control (also in `waking`).
     talking: Shared<HashSet<String>>,
     /// One connect or disconnect at a time.
@@ -169,6 +178,7 @@ impl Shifts {
             waking: Shared::new(HashSet::new()),
             requests: Shared::new(HashSet::new()),
             answers: Shared::new(Vec::new()),
+            summaries: Shared::new(Vec::new()),
             talking: Shared::new(HashSet::new()),
             talks: tokio::sync::Mutex::new(()),
             turn: tokio::sync::Mutex::new(()),
@@ -285,6 +295,40 @@ fn fingerprint(run: &Run) -> String {
     crate::hash::sha256_hex(facts.to_string())
 }
 
+/// Ask a run's lead for its progress summary (`workflow_summary` of a run whose workflow has an
+/// enabled lead with a shift now that is neither failing nor closing): taken at the lead's next
+/// step, with a turn at once; one asked already and not written yet is not asked again. None
+/// when the run has no such lead, so the director writes it.
+pub(in crate::app) fn ask_summary(state: &DesktopState, run: &Run) -> Option<Value> {
+    let map = state.settings.map().ok()?;
+    let lead = map
+        .workflows
+        .iter()
+        .find(|w| Some(&w.id) == run.workflow.as_ref())
+        .and_then(|w| w.lead.as_ref())
+        .and_then(|l| {
+            map.workflow_leads
+                .iter()
+                .find(|lead| lead.id == l.id && lead.enabled)
+        })?;
+    let shift = state
+        .workflows
+        .shifts
+        .current(&lead.id)
+        .ok()
+        .flatten()
+        .filter(|s| s.state == "active" && !s.closing)?;
+    let mut asked = state.workflows.shifts.summaries.lock().unwrap();
+    if !shift.summaries_asked.contains(&run.id)
+        && !asked.iter().any(|(l, r)| *l == lead.id && *r == run.id)
+    {
+        asked.push((lead.id.clone(), run.id.clone()));
+    }
+    Some(
+        json!({"workflow_run": run.id, "requested": {"lead": lead.id, "name": lead.name, "shift": shift.id}}),
+    )
+}
+
 /// The active runs of `workflows`, all of them.
 fn active(host: &Host, workflows: &[String]) -> Result<Vec<Run>> {
     let unfinished: Vec<super::record::State> = super::record::State::ALL
@@ -305,6 +349,8 @@ fn active(host: &Host, workflows: &[String]) -> Result<Vec<Run>> {
 
 /// How an answer's event starts: the turn reads these before any other event.
 const ANSWERED: &str = "The person answered, in Kuroko, your question";
+/// How a request for a run's progress summary starts; read first too.
+const SUMMARY_ASKED: &str = "The person asks you for a progress summary of run";
 
 /// The event of a closing turn.
 const CLOSING: &str = "Every run of your workflows has ended: write your record with lead_finish.";
@@ -410,6 +456,27 @@ fn step(
         *all = rest;
         mine
     };
+    let summaries: Vec<(String, String)> = {
+        let mut all = shifts.summaries.lock().unwrap();
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *all)
+            .into_iter()
+            .partition(|(l, _)| *l == lead.id);
+        *all = rest;
+        mine
+    };
+    for (_, run) in &summaries {
+        if shift.summaries_asked.contains(run) {
+            continue;
+        }
+        shift.summaries_asked.push(run.clone());
+        shift.requested = true;
+        queue(
+            &mut shift,
+            None,
+            format!("{SUMMARY_ASKED} {run}: write it with lead_write_summary."),
+        );
+        changed = true;
+    }
     if requested {
         shift.requested = true;
         queue(&mut shift, None, "The person asked you to look now.".into());
@@ -536,6 +603,7 @@ fn step(
     if changed && let Err(error) = shifts.save(&shift) {
         // Taken again at the next step.
         shifts.answers.lock().unwrap().extend(answers);
+        shifts.summaries.lock().unwrap().extend(summaries);
         return Err(error);
     }
     if due {
@@ -578,6 +646,28 @@ pub(in crate::app) struct Parts {
     organization: String,
 }
 
+/// What a workflow lets its lead do by itself, as its opening says it.
+fn may(workflow: &crate::workflows::Workflow) -> String {
+    match &workflow.lead {
+        Some(lead) if !lead.shadow && lead.may.is_empty() => {
+            "nothing: this workflow lets you decide nothing by yourself, and every decision is only recorded."
+                .into()
+        }
+        Some(lead) if !lead.shadow => format!(
+            "{}; anything else you decide is only recorded.",
+            lead.may
+                .iter()
+                .map(|m| m.describe())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        _ => {
+            "nothing yet: you are in shadow for this workflow, and every decision is only recorded."
+                .into()
+        }
+    }
+}
+
 /// The parts of the opening of a lead of `workflows`, from the map and the organization now.
 pub(in crate::app) fn parts(
     host: &Host,
@@ -595,13 +685,14 @@ pub(in crate::app) fn parts(
         .iter()
         .map(|w| {
             (w.id.clone(), format!(
-                "\n\n### {} ({}), project {}\n\nRepositories: {}.\n\nDescription: {}\n\nWhen a run is done: {}\n\nInstructions and blocks, as its runs get them:\n{}",
+                "\n\n### {} ({}), project {}\n\nRepositories: {}.\n\nDescription: {}\n\nWhen a run is done: {}\n\nWhat you may do by yourself: {}\n\nInstructions and blocks, as its runs get them:\n{}",
                 w.name,
                 w.id,
                 w.project,
                 w.repositories.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", "),
                 w.description,
                 if w.done_when.is_empty() { "as its description and instructions say" } else { &w.done_when },
+                may(w),
                 engine::instructions(w, &listed(w), texts)
             ))
         })
@@ -798,8 +889,9 @@ async fn wake(
     }
     prompt.push_str("## What happened\n");
     // The person's answers first, whatever else happened.
-    let (answers, others): (Vec<&String>, Vec<&String>) =
-        events.iter().partition(|e| e.starts_with(ANSWERED));
+    let (answers, others): (Vec<&String>, Vec<&String>) = events
+        .iter()
+        .partition(|e| e.starts_with(ANSWERED) || e.starts_with(SUMMARY_ASKED));
     for event in answers.iter().chain(others.iter().take(INLINE)) {
         prompt.push_str(&format!("\n- {event}"));
     }
@@ -985,7 +1077,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 23] = [
+const TOOLS: [(&str, &str, Schema); 24] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1095,6 +1187,11 @@ const TOOLS: [(&str, &str, Schema); 23] = [
         "lead_ask_person",
         "Ask the person one question you cannot answer from the facts, about one run or in general. It is shown to them in Kuroko and their answer reaches you at a later turn. Never ask for an approval: approvals are given in Kuroko, not in answers.",
         || json!({"type": "object", "properties": {"question": {"type": "string"}, "run": {"type": "string"}}, "required": ["question"]}),
+    ),
+    (
+        "lead_write_summary",
+        "Write the progress summary the person asked for of one run of your workflows (only when asked, once per request): what was done, what is left and what it waits for, from the facts you read, plainly and briefly in the person's language (at most 4000 characters). Code adds the verified links of its item, children and pull requests. It is stored on the run for the person, who decides whether to send it; nothing is posted.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "text": {"type": "string"}}, "required": ["run", "text"]}),
     ),
     (
         "lead_finish",
@@ -1510,6 +1607,42 @@ async fn call(
                 Some(Ok(_)) => Ok(json!({"recorded": true, "applied": true})),
                 None => Ok(json!({"recorded": true, "applied": false})),
             }
+        }
+        "lead_write_summary" => {
+            let found = run("run")?;
+            let (me, asked) = {
+                let shift = shift.lock().unwrap();
+                (
+                    shift.lead.clone(),
+                    shift.summaries_asked.contains(&found.id),
+                )
+            };
+            if !asked {
+                return Err(format!(
+                    "The person did not ask for a summary of run {}: write what you notice with lead_note.",
+                    found.id
+                ));
+            }
+            let stored = super::summary::store_lead(
+                host,
+                &found.id,
+                &me,
+                args["text"].as_str().unwrap_or_default(),
+            )
+            .await?;
+            shift
+                .lock()
+                .unwrap()
+                .summaries_asked
+                .retain(|r| *r != found.id);
+            note(Entry {
+                at: now,
+                kind: "summary".into(),
+                run: Some(found.id.clone()),
+                text: bounded(stored["text"].as_str().unwrap_or_default(), 300),
+                ..Default::default()
+            });
+            Ok(json!({"stored": true, "summary": stored["id"]}))
         }
         "lead_note" => {
             let about = match args["run"].as_str() {

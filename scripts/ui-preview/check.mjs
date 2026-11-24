@@ -2858,6 +2858,12 @@ if (flag !== '--axe-only') for (const [label, viewport] of [['desktop', { width:
   await page.click('#run-summary');
   await page.waitForFunction(() => /1 resumen anterior/.test(document.querySelector('#run-detail-content')?.textContent || ''));
   check(`runs ${label}: Summary asks the director and shows the new text with the earlier one folded`, (await calls()).some(c => c.method === 'workflow_summary') && /va en «coding»/.test(await page.locator('#run-summary-text').innerText()));
+  // A run its lead follows: the lead writes it at its next turn, and the person is told so.
+  await page.evaluate(() => { window.__ptaSummaryByLead = true; });
+  await page.click('#run-summary');
+  await page.waitForFunction(() => /Pagos escribe el resumen/.test(document.querySelector('#notice-text')?.textContent || ''));
+  check(`runs ${label}: Summary of a run its lead follows says its lead writes it`, /aparecerá aquí/.test(await page.textContent('#notice-text')));
+  await page.evaluate(() => { window.__ptaSummaryByLead = false; });
   await page.click('#run-send');
   await page.waitForSelector('dialog.destination-picker');
   await page.locator('dialog.destination-picker .directory-picker-row', { hasText: 'Payments team' }).locator('input').check();

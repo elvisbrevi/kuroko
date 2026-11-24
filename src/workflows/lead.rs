@@ -114,7 +114,7 @@ impl May {
                 "create a pull request's review support task as the organization's norms and the type's guide say, once per pull request, only when it was not approved by itself within 15 minutes"
             }
             May::CreateBlocking => {
-                "create the work item of a blocking finding from its draft by itself, at most one per run and three a day for this workflow, never for a run whose item came from a finding; any other finding's work item waits for your approval"
+                "create the work item of a blocking finding from its draft by itself, at most one per run and three a day for this workflow, never for a run whose item came from a finding; any other finding's work item waits for the person's approval"
             }
             May::ItemStates => {
                 "move the state of the run's work item and its children to a state their type allows, with the fields their work item guide lists, written with the Azure source's personal access token; its coding agents then report instead of writing work items"

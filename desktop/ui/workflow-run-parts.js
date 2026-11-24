@@ -223,7 +223,7 @@ function engineState(engine) {
 }
 
 /** What a journal entry is, as a badge's text. */
-const KINDS = { finding: 'Finding', question: 'Question', note: 'Note' };
+const KINDS = { finding: 'Finding', question: 'Question', note: 'Note', summary: 'Summary' };
 
 /**
  * What the run's workflow lead recorded about it (`workflow_lead_shifts` with `run`): its

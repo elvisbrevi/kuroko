@@ -529,7 +529,8 @@ How a workflow takes an item from its ready state to its release, and where the 
    (with `{reviewers}`, `{round}` and `mention_reviewers`) can tell Teams.
 8. **Blocks act at their stage**: a launcher (an approved program of the coordinator, by digest)
    when the pull requests are completed, notifications with mentions when the run is done or fails.
-9. **Report on request**: `workflow_summary` asks the director for a summary of the record, and
+9. **Report on request**: `workflow_summary` asks the run's lead (when its workflow has one
+   following it now) or else the director for a summary of the record, and
    `workflow_summary_send` posts it, after the person confirms the exact text, to each chat chosen
    (a summary too long for one Teams card is refused with a shorter version to approve as `text`).
 10. **When something stops it** (`needs_attention`, `interrupted`, `failed`, `unassigned`), the run
@@ -837,7 +838,10 @@ run (any state but `done` and `cancelled`).
   reached, the reply's `warning` names the run and the machine: relay it, and cancel that run
   there with `implementation_cancel` once the machine is reachable.
 
-- **Summarize:** `kuroko workflows summary RUN` (MCP `workflow_summary`, which **runs a model** and needs no confirmation, like `workflow_classify`:
+- **Summarize:** for a run whose workflow's lead follows it now, `kuroko workflows summary RUN`
+  (MCP `workflow_summary`) returns `requested` with the lead's name at once, and the lead writes
+  the summary at its next turn; it appears in `summaries` with `by: "lead"` (read it again with
+  `workflows status RUN`). Otherwise `kuroko workflows summary RUN` (MCP `workflow_summary`, which **runs a model** and needs no confirmation, like `workflow_classify`:
   it takes up to about a minute and uses the director's agent quota) has the workflow director
   write a progress summary of the run (Markdown in `llm.language`, at most 4000 characters) from
   the run record only: the item, stages with times and outcomes, children, coding run states, pull
