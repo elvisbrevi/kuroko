@@ -3491,7 +3491,6 @@ mod tests {
             ("workflow_lead_shifts", "read"),
             ("workflow_lead_wake", "local"),
             ("workflow_lead_answer", "local"),
-            ("workflow_lead_connect", "needs confirmation"),
             ("workflow_lead_disconnect", "local"),
             ("workflow_finding_resolve", "local"),
             ("workflow_finding_dismiss", "local"),
@@ -3499,6 +3498,13 @@ mod tests {
             assert_eq!(effect(name), (json!(expected), json!("offered")), "{name}");
             assert!(super::super::workflows::handles(name), "{name}");
         }
+        // A talk with a lead is a person's: its link opens in the Claude app.
+        assert_eq!(
+            effect("workflow_lead_connect").0,
+            json!("needs confirmation")
+        );
+        assert_ne!(effect("workflow_lead_connect").1, json!("offered"));
+        assert!(super::super::workflows::handles("workflow_lead_connect"));
         // The confirmation shows what an acting block does.
         let question = confirmation(
             "workflow_block_save",
