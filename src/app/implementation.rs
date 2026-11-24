@@ -87,6 +87,9 @@ struct Machine {
     /// Whether its last poll said it summarizes its agent sessions (`agent_sessions_local`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     agent_sessions: bool,
+    /// Whether its last poll said it archives a lead shift's transcripts (`transcripts_archive`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(in crate::app) transcript_archive: bool,
     /// Whether its last poll said it applies a source's project filter to its agent sessions
     /// (`agent_session_filters_support`); an older one is never asked with a filter.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1432,6 +1435,7 @@ async fn local(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value> {
     match method {
         "machine_browse" => browse_machine(host, args),
         "agent_sessions_local" => sessions::local(host, args).await,
+        "transcripts_archive" => super::workflows::archive::local(host, args).await,
         "checkout_inspect" => {
             let allowed = roots(host).await?;
             checkout::inspect_all(&args["paths"], &allowed)
@@ -2080,6 +2084,46 @@ pub(super) async fn mark_session(value: &mut Value, own: &str) {
 /// agent sessions source, whether or not that source is enabled, so a `#private` session is
 /// never read and an offline machine is not asked. The flag says some session was not found
 /// while a machine could not be read.
+/// This machine's ID, and the machine and native session each of `runs` recorded (a lead's
+/// archive).
+pub(in crate::app) async fn sessions_of(
+    host: &Arc<Host>,
+    runs: &[String],
+) -> (String, Vec<(String, String, String)>) {
+    let state = &host.state.implementation;
+    let own = state.registry.lock().await.id.clone();
+    let found = runs
+        .iter()
+        .filter_map(|run| {
+            let summary = state.db.summary(run).ok()??;
+            Some((
+                summary["machine"].as_str()?.to_owned(),
+                summary["session_id"].as_str()?.to_owned(),
+                run.clone(),
+            ))
+        })
+        .collect();
+    (own, found)
+}
+/// A machine's name and whether it archives a lead's transcripts now (online, new enough).
+pub(in crate::app) async fn archive_reach(host: &Arc<Host>, machine: &str) -> (String, bool) {
+    let data = host.state.implementation.registry.lock().await;
+    let known = data.machines.iter().find(|m| m.id == machine);
+    (
+        known.map_or(machine.to_owned(), |m| m.name.clone()),
+        machine == data.id || known.is_some_and(|m| m.online() && m.transcript_archive),
+    )
+}
+/// One call of an operation on another machine of the account, waiting at most `bound`.
+pub(in crate::app) async fn call_machine(
+    host: &Arc<Host>,
+    machine: &str,
+    method: &str,
+    args: Value,
+    bound: Duration,
+) -> Result<Value> {
+    fleet::call_within(host, machine, method, args, bound).await
+}
 pub(in crate::app) async fn run_session_summaries(
     host: &Arc<Host>,
     runs: Vec<String>,

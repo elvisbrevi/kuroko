@@ -62,6 +62,9 @@ pub(in crate::app) struct Shift {
     /// Every run it followed, for its record.
     #[serde(default)]
     pub followed: BTreeSet<String>,
+    /// Every conversation it had (a rotation starts another), for its record's transcripts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversations: Vec<String>,
     /// What happened since its last turn.
     #[serde(default)]
     pub pending: Vec<String>,
@@ -181,6 +184,18 @@ impl Shifts {
             ],
         )?;
         Ok(())
+    }
+    /// One shift, by its ID.
+    pub(in crate::app) fn get(&self, id: &str) -> Result<Option<Shift>> {
+        let db = self.db.lock().unwrap();
+        let payload: Option<String> = db
+            .query_row(
+                "SELECT payload FROM lead_shifts WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .ok();
+        Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
     }
     /// The lead's shift that has not ended, if any.
     fn current(&self, lead: &str) -> Result<Option<Shift>> {
@@ -314,7 +329,7 @@ pub(in crate::app) async fn tick(host: &Arc<Host>, azure: &engine::Azure, now: i
 }
 
 /// End without a turn the shifts of leads turned off or removed.
-fn unled(host: &Host, map: &KnowledgeMap, now: i64) -> Result<()> {
+fn unled(host: &Arc<Host>, map: &KnowledgeMap, now: i64) -> Result<()> {
     let shifts = &host.state.workflows.shifts;
     let on = |lead: &str| map.workflow_leads.iter().any(|l| l.id == lead && l.enabled);
     shifts.requests.lock().unwrap().retain(|lead| on(lead));
@@ -342,6 +357,7 @@ fn unled(host: &Host, map: &KnowledgeMap, now: i64) -> Result<()> {
         });
         finish(host, &mut shift, now);
         shifts.save(&shift)?;
+        tokio::spawn(super::archive::shift(host.clone(), shift.id.clone()));
     }
     Ok(())
 }
@@ -851,6 +867,11 @@ async fn wake(
             if shift.session_id.is_none() || shift.session_id != turn.session_id {
                 shift.session_started = Some(now);
                 shift.opening = Some(opening_hash);
+                if let Some(session) = &turn.session_id
+                    && !shift.conversations.contains(session)
+                {
+                    shift.conversations.push(session.clone());
+                }
             }
             shift.session_id = turn.session_id;
             shift.context_tokens = turn.context_tokens;
@@ -896,6 +917,8 @@ async fn wake(
     }
     if let Err(error) = shifts.save(&shift) {
         tracing::warn!(event = "lead_shift_unsaved", lead = %lead.id, error = %error);
+    } else if shift.state == "ended" {
+        tokio::spawn(super::archive::shift(host.clone(), shift.id.clone()));
     }
 }
 

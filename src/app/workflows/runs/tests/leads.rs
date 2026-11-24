@@ -211,6 +211,27 @@ async fn a_lead_follows_its_workflows_runs_in_shadow_and_ends_its_shift_with_a_r
         }
     }
     assert_eq!(ended.state, "ended", "{:?}", ended.wakes);
+    // Its transcripts are listed in its record, each computer's, with where they were kept.
+    for _ in 0..200 {
+        if shift(&bench)
+            .record
+            .is_some_and(|r| r["transcripts"].is_array())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let ended = shift(&bench);
+    let transcripts = ended.record.as_ref().unwrap()["transcripts"].clone();
+    assert!(
+        transcripts
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["who"] == "lead" && t["session_id"] == "ses_lead"),
+        "{transcripts}"
+    );
+    assert_eq!(ended.record.as_ref().unwrap()["archive_days"], 90);
     let record = ended.record.unwrap();
     assert_eq!(record["summary"], "The lead wrote no summary.");
     assert_eq!(record["runs"][0]["state"], "done");
