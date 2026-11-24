@@ -534,6 +534,16 @@ impl Vault {
     }
 }
 
+fn uuid_pattern() -> &'static Regex {
+    static UUID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    UUID.get_or_init(|| {
+        Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .expect("the UUID pattern")
+    })
+}
+
 pub struct Redactor {
     /// Each pattern, and whether it is a run of digits read as a personal identifier (a RUT
     /// or a phone number) rather than a credential or an address.
@@ -575,9 +585,33 @@ impl Redactor {
             }
         }
         for (p, identifier) in &self.patterns {
-            if identifiers || !identifier {
-                out = p.replace_all(&out, "[REDACTED]").into_owned();
+            if *identifier && !identifiers {
+                continue;
             }
+            // A personal identifier's digits inside a UUID (a run's, a session's:
+            // `…-4375-4575-8896-…`) are not a phone number; every other pattern sees the text
+            // whole.
+            let uuids: Vec<(usize, usize)> = if *identifier {
+                uuid_pattern()
+                    .find_iter(&out)
+                    .map(|m| (m.start(), m.end()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            out = p
+                .replace_all(&out, |caps: &regex::Captures| {
+                    let found = caps.get(0).expect("the whole match");
+                    if uuids
+                        .iter()
+                        .any(|(start, end)| found.start() < *end && *start < found.end())
+                    {
+                        found.as_str().to_owned()
+                    } else {
+                        "[REDACTED]".to_owned()
+                    }
+                })
+                .into_owned();
         }
         out
     }
@@ -594,6 +628,27 @@ impl Redactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_uuid_whose_digits_look_like_a_phone_number_is_kept() {
+        let redactor = Redactor::new(&[], Vec::new()).unwrap();
+        let id = "796ff4d5-4375-4575-8896-de3e6532befa";
+        let text = format!("run {id} and {id}; call +56 9 1234 5678 or 1234-5678-9012");
+        let out = redactor.redact(&text);
+        assert_eq!(out.matches(id).count(), 2, "{out}");
+        assert!(
+            !out.contains("1234 5678") && !out.contains("1234-5678-9012"),
+            "{out}"
+        );
+        // A credential shaped like a UUID is still one.
+        for secret in [
+            format!("Bearer {id}"),
+            format!("token={id}"),
+            format!("secret://{id}"),
+            format!("{id}@tenant.onmicrosoft.com"),
+        ] {
+            assert!(!redactor.redact(&secret).contains(id), "{secret}");
+        }
+    }
     #[test]
     fn a_started_program_keeps_its_name_and_arguments() {
         let mut command = program("git");

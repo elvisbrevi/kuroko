@@ -548,6 +548,12 @@ pub(in crate::app) struct Run {
     /// When the wait for its pull requests began (or began again on a resume).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_since: Option<i64>,
+    /// Its lead was asked whether to keep waiting past the account's limit, and until when it
+    /// said to (0.20.10).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_asked: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_until: Option<i64>,
     /// When its pull requests were last read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<i64>,
@@ -647,6 +653,8 @@ impl Run {
             admitted: false,
             acting_since: Some(now),
             waiting_since: None,
+            wait_asked: None,
+            wait_until: None,
             checked_at: None,
             continues: None,
             restarted_as: None,
