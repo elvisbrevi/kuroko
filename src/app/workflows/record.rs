@@ -197,6 +197,10 @@ pub(in crate::app) struct Implementation {
     /// or in a record from before the limit was configurable (two hours).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_limit_minutes: Option<u32>,
+    /// It was launched while its workflow's lead kept the backlog, so it got no work item
+    /// writes and what it wrote anyway is detected (0.20.15).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lead_backlog: bool,
 }
 
 /// A child the run codes (for a task-category item, the item itself).
@@ -579,6 +583,10 @@ pub(in crate::app) struct Run {
     pub support_due: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub process_items: Vec<Value>,
+    /// What the source's user wrote while its coding runs ran, that neither its lead nor Kuroko
+    /// made (each once: key, item, link, `created` or `state`, state, time, child), 0.20.15.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runner_writes: Vec<Value>,
     /// When its pull requests were last read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<i64>,
@@ -683,6 +691,7 @@ impl Run {
             lead_writes: Vec::new(),
             support_due: Vec::new(),
             process_items: Vec::new(),
+            runner_writes: Vec::new(),
             checked_at: None,
             continues: None,
             restarted_as: None,

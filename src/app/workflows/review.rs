@@ -398,6 +398,7 @@ pub(super) async fn step(
             state: None,
             failure: None,
             time_limit_minutes: None,
+            lead_backlog: false,
         });
         set_round(run, index, round);
         return Ok(true);
@@ -526,6 +527,10 @@ pub(super) async fn step(
     let state = observed["state"].as_str().unwrap_or_default().to_owned();
     if let Some(c) = round.coding.as_mut() {
         c.state = Some(state.clone());
+    }
+    if state != "running" {
+        // The round's agent holds the token too.
+        engine::runner_writes(host, azure, run, index, round.started_at, now).await;
     }
     match state.as_str() {
         "running" => {

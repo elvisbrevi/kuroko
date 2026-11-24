@@ -350,6 +350,7 @@
   // What the workflow leads need (src/app/workflows/shifts.rs `attention`): one open question.
   snapshot.lead_attention = scenario === 'full' ? [
     { kind: 'question', lead: 'pagos', name: 'Pagos', question: 'q1', text: 'Is the legacy rounding kept for settlements?', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', at: secs(NOW - 300_000) },
+    { kind: 'runner_write', lead: 'pagos', name: 'Pagos', finding: 'f-runner-1', text: '#5090 created while #5003 was coded', run: '3c5f1c9a-0d2e-4b7a-8f10-5a6b7c8d9e03', at: secs(NOW - 200_000) },
   ] : [];
   // Workflow runs as src/app/workflows/record.rs keeps them (`Run::view`, `Run::summary`): one in each state a
   // person acts on, and finished ones. The plan-review run's planning run is on the first machine with its plan.

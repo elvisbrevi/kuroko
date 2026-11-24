@@ -273,6 +273,7 @@ fn facts(run: &Run) -> Value {
         "wait": (run.wait_asked.is_some()).then(|| json!({"since": run.waiting_since, "asked": run.wait_asked, "until": run.wait_until})),
         "support_due": run.support_due,
         "process_items": run.process_items,
+        "runner_writes": run.runner_writes,
         "updated_at": run.updated_at,
     })
 }
@@ -1645,10 +1646,20 @@ fn brief(shift: &Shift, talking: bool) -> Value {
         "questions": if shift.state == "ended" { vec![] } else { questions(shift).collect::<Vec<_>>() }})
 }
 
-/// What the leads' open shifts need from the person (the status's `lead_attention`): each open
-/// question, and a shift whose turns are failing with why.
+/// What the leads need from the person (the status's `lead_attention`): each open question, a
+/// shift whose turns are failing with why, and what a coding agent wrote to a backlog its lead
+/// keeps (`runner_write`, while its finding is open).
 pub(in crate::app) fn attention(state: &DesktopState) -> Result<Vec<Value>> {
-    let leads = state.settings.map()?.workflow_leads;
+    let map = state.settings.map()?;
+    let leads = map.workflow_leads;
+    let lead_of = |workflow: &str| {
+        map.workflows
+            .iter()
+            .find(|w| w.id == workflow)
+            .and_then(|w| w.lead.as_ref())
+            .map(|l| l.id.clone())
+            .unwrap_or_default()
+    };
     let name = |id: &str| {
         leads
             .iter()
@@ -1667,6 +1678,16 @@ pub(in crate::app) fn attention(state: &DesktopState) -> Result<Vec<Value>> {
             items.push(json!({"kind": "question", "lead": shift.lead, "name": name(&shift.lead),
                 "question": question.id, "text": question.text, "run": question.run, "at": question.at}));
         }
+    }
+    // What a coding agent wrote to the backlog its lead keeps, until the person settles it.
+    for finding in state
+        .workflows
+        .findings
+        .open_with_prefix("runner-write:", 20)?
+    {
+        let lead = lead_of(&finding.workflow);
+        items.push(json!({"kind": "runner_write", "lead": lead, "name": name(&lead),
+            "finding": finding.id, "text": finding.title, "run": finding.run, "at": finding.created_at}));
     }
     Ok(items)
 }
@@ -2272,6 +2293,7 @@ async fn continue_runner(
         state: None,
         failure: None,
         time_limit_minutes: None,
+        lead_backlog: false,
     });
     let item = child.id;
     run.advance(

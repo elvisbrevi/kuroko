@@ -3085,6 +3085,7 @@ const UI_CATALOG = { es: {
   "the run was {state}": "la ejecución estaba en «{state}»",
   "{state} in {stage}": "{state} en {stage}",
   "Your answer: {text}": "Tu respuesta: {text}",
+  "A coding agent wrote to the backlog": "Un agente de código escribió en el backlog",
   "Question from {name}": "Pregunta de {name}",
   "{name} is not answering": "{name} no está respondiendo",
   "Open leads": "Abrir encargados",
@@ -3384,6 +3385,8 @@ const UI_CATALOG = { es: {
 /** Host texts with a variable part (older runs and entries were stored in English). */
 /** Host messages with variable parts: a pattern and its replacement, per language. @type {Record<string, [RegExp, string][]>} */
 const UI_PATTERNS = { es: [
+  [/^#(\d+) created while #(\d+) was coded$/, '#$1 creado mientras se programaba #$2'],
+  [/^#(\d+) moved to (.+) while #(\d+) was coded$/, '#$1 pasó a $2 mientras se programaba #$3'],
   [/^Application variable migrated from (.+)\.$/, 'Variable de la aplicación migrada desde $1.'],
   [/^Application variable for (.+)\.$/, 'Variable de la aplicación para $1.'],
   [/^The variable (.+) differs from the existing credential\. Review it in Variables before migrating; the original was preserved\.$/, 'La variable $1 difiere de la credencial existente. Revísala en Variables antes de migrarla; se conservó la original.'],

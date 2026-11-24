@@ -773,12 +773,58 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
                 );
             }
             warnings.extend(older_time_limit(host, &saved).await);
+            warnings.extend(backlog_writers(
+                &saved,
+                &candidate.workflow_blocks,
+                &candidate.workflow_leads,
+            ));
             Ok(json!({"workflow":shown(&saved),"saved":true,"usage":used,"warnings":warnings}))
         }
         _ => Err(invalid(
             "Give the workflow to save, or its id and enabled to enable or disable it.",
         )),
     }
+}
+
+/// The instructions and blocks of a workflow whose lead keeps the backlog that still tell its
+/// coding agents to create or change work items (an `az boards work-item` create, update,
+/// delete or relation, or a creation through the REST API), which they no longer do: a warning naming
+/// them, so the owner moves what they say to the lead.
+fn backlog_writers(
+    workflow: &crate::workflows::Workflow,
+    blocks: &[crate::workflows::Block],
+    leads: &[crate::workflows::lead::Lead],
+) -> Option<String> {
+    use crate::workflows::lead::May;
+    let lead = workflow.lead.as_ref()?;
+    if ![May::ItemStates, May::ProcessItems, May::CreateBlocking]
+        .iter()
+        .any(|what| lead.applies(*what))
+        || !leads.iter().any(|l| l.id == lead.id && l.enabled)
+    {
+        return None;
+    }
+    let writes = regex::Regex::new(
+        r"(?i)az\s+boards\s+work-item\s+(?:[a-z]+\|)*(?:create|update|delete|relation\s+(?:add|remove))|_apis/wit/workitems/\$",
+    )
+    .ok()?;
+    let mut named: Vec<String> = workflow
+        .blocks
+        .iter()
+        .filter_map(|id| blocks.iter().find(|b| &b.id == id))
+        .filter(|b| writes.is_match(&b.text))
+        .map(|b| b.id.clone())
+        .collect();
+    if writes.is_match(&workflow.instructions) {
+        named.insert(0, "its instructions".into());
+    }
+    (!named.is_empty()).then(|| {
+        format!(
+            "Workflow {}'s lead keeps the backlog, so its coding agents no longer create or change work items, yet these still tell them to: {}. Move what they say to the lead's description or the workflow's completion criteria, and take them out of the workflow.",
+            workflow.id,
+            named.join(", ")
+        )
+    })
 }
 
 fn upsert<T>(items: &mut Vec<T>, item: T, id: impl Fn(&T) -> &String) {

@@ -730,6 +730,12 @@ run (any state but `done` and `cancelled`).
   While it keeps the backlog, a pull request without auto-complete or source-branch deletion is a
   finding; with `process_items` it creates a pull request's review support task, once, when the
   pull request was not approved by itself within 15 minutes (`support_due` in the run).
+  When a coding run of such a workflow ends, the work items your account created in the project
+  while it ran, and the state changes of the run's items then, that neither the lead nor Kuroko
+  made are findings and show in Home beside the leads' questions (dismiss one you made yourself).
+  Saving a workflow whose lead keeps the backlog warns about the instructions and blocks that
+  still tell its agents to create or change work items (`az boards work-item create|update`):
+  move what they say to the lead's description or the completion criteria.
   Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within

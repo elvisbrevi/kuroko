@@ -51,6 +51,7 @@ fn coding(id: u64, at: i64, implementation: &str) -> Run {
             state: Some("running".into()),
             failure: None,
             time_limit_minutes: None,
+            lead_backlog: false,
         }),
         ..Default::default()
     }];

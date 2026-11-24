@@ -334,6 +334,30 @@ impl Azure {
             Self::Synthetic(catalog) => Ok(catalog.type_states(kind)),
         }
     }
+    /// What the source's user wrote in the run's project since `since`: work items created and
+    /// state changes of `items`.
+    pub(in crate::app) async fn written_since(
+        &self,
+        state: &DesktopState,
+        run: &Run,
+        items: &[u64],
+        since: i64,
+    ) -> Result<Vec<crate::ado::workflow::Written>, String> {
+        match self {
+            Self::Live => {
+                tools::todo::written_since(
+                    state,
+                    run.item.source.as_deref(),
+                    (&run.item.organization, &run.item.project),
+                    items,
+                    since,
+                )
+                .await
+            }
+            #[cfg(test)]
+            Self::Synthetic(catalog) => Ok(catalog.written_since(items, since)),
+        }
+    }
     /// Write a work item's state and fields (a workflow lead's decision), once.
     pub(in crate::app) async fn update_item(
         &self,
@@ -1552,6 +1576,150 @@ pub(in crate::app) fn unconfirmed_support(host: &Host, run: &Run, url: &str, now
     let _ = host.state.workflows.findings.insert(&finding);
 }
 
+/// After a coding agent launched while its workflow's lead kept the backlog ends (a coding run,
+/// a continued one or a review round): the work items the source's user created in the project
+/// from `since`, and the state changes of the run's item and that child then, that no record of
+/// Kuroko explains. Its coding agents write no work items, but they hold the token that could
+/// (it pushes and attaches their evidence), so each such write is a finding for the person (a
+/// created item once whatever run saw it, a state change once per run), in the leads'
+/// attention, and in the run's facts (`runner_writes`), so its lead wakes.
+// shortcut: a read that fails detects nothing and is not read again; an item the person, an
+// activity registration or a creation still being sent made meanwhile is flagged too (the
+// finding says so). Read them again at the run's next stage if writes go unseen.
+pub(in crate::app) async fn runner_writes(
+    host: &Arc<Host>,
+    azure: &Azure,
+    run: &mut Run,
+    index: usize,
+    since: i64,
+    now: i64,
+) {
+    if !run.children[index]
+        .coding
+        .as_ref()
+        .is_some_and(|c| c.lead_backlog)
+    {
+        return;
+    }
+    let child = run.children[index].id;
+    let mut items = vec![run.item.id];
+    if child != run.item.id {
+        items.push(child);
+    }
+    let Ok(written) = azure.written_since(&host.state, run, &items, since).await else {
+        return;
+    };
+    if written.is_empty() {
+        return;
+    }
+    // What Kuroko created: its runs' items and children, findings' items, support tasks and the
+    // implementation flow's children. Without them nothing is told apart: nothing is flagged.
+    let (Ok(runs), Ok(findings)) = (
+        host.state.workflows.db.list(&[], None, 500),
+        host.state
+            .workflows
+            .findings
+            .list(None, None, Some("item_created"), -1),
+    ) else {
+        return;
+    };
+    let mut known = host.state.implementation.created_ids().await;
+    for other in runs {
+        known.insert(other.item.id);
+        known.extend(other.children.iter().map(|c| c.id));
+        known.extend(other.process_items.iter().filter_map(|p| p["id"].as_u64()));
+    }
+    for finding in findings {
+        known.extend(finding.created.as_ref().and_then(|c| c["id"].as_u64()));
+    }
+    let child_url = run.children[index].url.clone();
+    for write in written {
+        let created = write.what == "created";
+        let (explained, key, finding_key) = if created {
+            let key = format!("{}:created", write.id);
+            (
+                known.contains(&write.id),
+                key.clone(),
+                format!("runner-write:{key}"),
+            )
+        } else {
+            // A state its lead wrote, or may have, within two minutes of the change.
+            let lead = run.lead_writes.iter().any(|w| {
+                w["item"] == write.id
+                    && matches!(
+                        w["outcome"].as_str(),
+                        Some("written" | "uncertain" | "attempting")
+                    )
+                    && w["at"]
+                        .as_i64()
+                        .is_some_and(|at| (at - write.at).abs() <= 120)
+                    && w["fields"].as_array().is_some_and(|fields| {
+                        fields
+                            .iter()
+                            .any(|f| f[0] == "System.State" && f[1] == write.state.as_str())
+                    })
+            });
+            let key = format!("{}:state:{}", write.id, write.at);
+            (lead, key.clone(), format!("runner-write:{}:{key}", run.id))
+        };
+        if explained || run.runner_writes.iter().any(|w| w["key"] == key.as_str()) {
+            continue;
+        }
+        let (title, detail) = if created {
+            (
+                format!("#{} created while #{child} was coded", write.id),
+                format!(
+                    "{} ({}) was created with your account while a coding agent of this workflow ran (#{child}), and no record of Kuroko explains it (its runs, findings, support tasks and implementation plans). Its lead keeps the backlog, so its coding agents create no work items. If you or an activity registration created it, dismiss this finding.",
+                    write.url, write.title
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "#{} moved to {} while #{child} was coded",
+                    write.id, write.state
+                ),
+                format!(
+                    "{} ({}) moved from {} to {} with your account while the coding agent of #{child} ran, and its lead did not write it. Its lead keeps the backlog, so its coding agents change no states. If you moved it yourself, or a completed pull request did, dismiss this finding.",
+                    write.url, write.title, write.from, write.state
+                ),
+            )
+        };
+        let finding = super::findings::Finding {
+            id: uuid::Uuid::new_v4().to_string(),
+            workflow: run.workflow.clone().unwrap_or_default(),
+            run: run.id.clone(),
+            item: child,
+            item_url: child_url.clone(),
+            implementation_run: finding_key,
+            seq: 0,
+            title,
+            detail,
+            severity: "important".into(),
+            evidence: write.url.clone(),
+            source: "code".into(),
+            state: "open".into(),
+            note: None,
+            created_at: now,
+            updated_at: now,
+            draft: None,
+            created: None,
+        };
+        // An item another run reported already is not reported again.
+        if !host
+            .state
+            .workflows
+            .findings
+            .insert_new(&finding)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        run.runner_writes.push(serde_json::json!({"key": key, "id": write.id, "url": write.url,
+            "what": write.what, "state": write.state, "from": write.from, "at": write.at, "child": child}));
+    }
+}
+
 /// Whether a reviewer other than its author approved the pull request (10, or 5 with
 /// suggestions).
 pub(in crate::app) fn approved(pull: &crate::ado::workflow::PullRequest) -> bool {
@@ -1802,6 +1970,7 @@ async fn planning(
             state: None,
             failure: None,
             time_limit_minutes: None,
+            lead_backlog: false,
         });
         return Ok(true);
     };
@@ -2635,6 +2804,7 @@ async fn coding(
             state: None,
             failure: None,
             time_limit_minutes: None,
+            lead_backlog: false,
         });
         return Ok(true);
     };
@@ -2751,6 +2921,7 @@ async fn coding(
                 if let Some(c) = child.coding.as_mut() {
                     c.started = true;
                     c.time_limit_minutes = recorded_limit(limit);
+                    c.lead_backlog = lead_writes;
                 }
                 child.repository = Some(repository);
                 child.directory = Some(directory);
@@ -2826,6 +2997,8 @@ async fn coding(
             }
             // The pull request the session opened, read once now; the next stage reads again.
             let _ = detect(host, azure, run, index).await;
+            let since = run.children[index].started_at.unwrap_or(now);
+            runner_writes(host, azure, run, index, since, now).await;
             Ok(true)
         }
         other => {
@@ -2836,6 +3009,8 @@ async fn coding(
             let found = super::found::discover(host, azure, run, index, now).await;
             let found_text = super::found::describe(&run.children[index].url, &found);
             run.children[index].found = Some(found);
+            let since = run.children[index].started_at.unwrap_or(now);
+            runner_writes(host, azure, run, index, since, now).await;
             let continued = if failure.is_some_and(|f| f.cause.continuable()) {
                 " If you continue its session to its final report, the run goes on with that report by itself."
             } else {
@@ -3268,6 +3443,8 @@ async fn watch_continued(
     };
     run.children[index] = delivered;
     let _ = detect(host, azure, run, index).await;
+    let since = run.children[index].started_at.unwrap_or(now);
+    runner_writes(host, azure, run, index, since, now).await;
     run.advance(Phase::Coding, now, "continued");
     run.checked_at = None;
     true
