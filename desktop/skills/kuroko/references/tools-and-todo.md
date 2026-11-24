@@ -708,6 +708,9 @@ run (any state but `done` and `cancelled`).
   `kuroko workflows leads connect LEAD --confirmed` (MCP `workflow_lead_connect`, confirmed) opens
   the lead's own conversation live through Remote Control (its `url` opens the Claude app); its
   turns wait while you talk, and `leads disconnect LEAD` (MCP `workflow_lead_disconnect`) ends it.
+  When a shift ends its record lists each transcript (the lead's and every runner's) with its
+  machine, the copy that computer kept compressed for 90 days under its private
+  `implementation/archive/<shift>/`, its size and SHA-256.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within
   the child's coding (from a minute before it started to a minute after it ended), what it may

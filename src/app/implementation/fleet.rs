@@ -339,6 +339,7 @@ pub(in crate::app) async fn register(host: &Arc<Host>, args: &Value) -> Result<V
         workflow_direct: false,
         upgrade: false,
         agent_sessions: false,
+        transcript_archive: false,
         session_filters: false,
         session_names: false,
         workflow_supervise: false,
@@ -440,6 +441,7 @@ pub(in crate::app) async fn protocol(host: &Arc<Host>, args: &Value) -> Result<V
             machine.workflow_direct = args["workflow_direct_support"] == true;
             machine.upgrade = args["upgrade_support"] == true;
             machine.agent_sessions = args["agent_sessions_support"] == true;
+            machine.transcript_archive = args["transcript_archive_support"] == true;
             machine.session_filters = args["agent_session_filters_support"] == true;
             machine.session_names = args["session_names_support"] == true;
             machine.workflow_supervise = args["workflow_supervise_support"] == true;
@@ -613,6 +615,10 @@ pub(in crate::app) async fn protocol(host: &Arc<Host>, args: &Value) -> Result<V
                 ))
                 .await
             }
+            // A computer's archive is the coordinator's to ask for, at a lead's end.
+            "forward" if args["args"]["method"] == "transcripts_archive" => {
+                anyhow::bail!("Unavailable coordinator operation.")
+            }
             "forward" => {
                 call(
                     host,
@@ -726,7 +732,8 @@ async fn call_bounded(
             "implementation_mobile_session",
             "checkout_inspect",
             "workflow_direct",
-            "agent_sessions_local"
+            "agent_sessions_local",
+            "transcripts_archive"
         ]
         .contains(&method),
         "Unavailable execution operation."
@@ -976,7 +983,7 @@ async fn poll(host: Arc<Host>) {
             let polled = remote(
                 &connection,
                 json!({"action":"poll","id":own,"results":results,"sessions":sessions,"session_cursor":next,"assistant_phase":assistant_phase,"management_support":true,"roots":roots,
-                    "host_version":env!("CARGO_PKG_VERSION"),"update":crate::app::maintenance::report(&host),"checkout_inspect_support":true,"workflow_direct_support":true,"workflow_supervise_support":true,"implementation_resume_support":true,"agent_sessions_support":true,"agent_session_filters_support":true,"session_names_support":true,"prompt_texts_support":true,"upgrade_support":crate::app::maintenance::remote_capable(&host)}),
+                    "host_version":env!("CARGO_PKG_VERSION"),"update":crate::app::maintenance::report(&host),"checkout_inspect_support":true,"workflow_direct_support":true,"workflow_supervise_support":true,"implementation_resume_support":true,"agent_sessions_support":true,"transcript_archive_support":true,"agent_session_filters_support":true,"session_names_support":true,"prompt_texts_support":true,"upgrade_support":crate::app::maintenance::remote_capable(&host)}),
             )
             .await;
             standing::note(&host.state, &polled);
@@ -994,6 +1001,7 @@ async fn poll(host: Arc<Host>) {
                     if command["method"] == "machine_assistant"
                         || command["method"] == "machine_upgrade"
                         || command["method"] == "workflow_direct"
+                        || command["method"] == "transcripts_archive"
                     {
                         let host = host.clone();
                         let command = command.clone();
@@ -1198,6 +1206,7 @@ mod tests {
             workflow_direct: false,
             upgrade: false,
             agent_sessions: false,
+            transcript_archive: false,
             session_filters: false,
             session_names: false,
             workflow_supervise: false,

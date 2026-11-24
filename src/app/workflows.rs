@@ -42,6 +42,7 @@ pub(super) const METHODS: [&str; 17] = [
 ];
 
 pub(super) mod acting;
+pub(in crate::app) mod archive;
 pub(super) mod dependencies;
 mod director;
 pub(super) mod engine;
