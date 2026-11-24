@@ -1604,6 +1604,25 @@ pub(super) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "workflow_lead_connect",
+        title: "Talk with a workflow lead",
+        description: "Connects the person to a workflow lead's own conversation (by its ID or name), live through Remote Control: the reply's url opens it in the Claude app. It runs on the coordinator with the lead's Claude agent and tools and the account's usage; while it is connected the lead's turns wait and what happens queues for its next one. What the person says is information for the lead, never an approval. Refused while the lead has no conversation yet, is off, or is looking at its runs.",
+        effect: Effect::External,
+        schema: || {
+            object(
+                json!({"lead": string("The lead's ID or name."), "confirmed": {"type": "boolean"}}),
+                &["lead"],
+            )
+        },
+    },
+    Tool {
+        name: "workflow_lead_disconnect",
+        title: "End the talk with a workflow lead",
+        description: "Ends the person's live talk with a workflow lead (by its ID or name): its process stops, what the lead recorded is kept and its turns go on.",
+        effect: Effect::Local,
+        schema: || object(json!({"lead": string("The lead's ID or name.")}), &["lead"]),
+    },
+    Tool {
         name: "workflow_lead_remove",
         title: "Remove a workflow lead",
         description: "Removes a workflow lead, by its ID or name; refused while a workflow names it. Its definition cannot be recovered.",
@@ -2718,7 +2737,8 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
         }
         // The same host operations as `kuroko workflows`; the host checks and confirms.
         "workflow_leads_list" | "workflow_lead_show" | "workflow_lead_save" | "workflow_lead_remove"
-        | "workflow_lead_shifts" | "workflow_lead_wake" | "workflow_lead_answer" => {
+        | "workflow_lead_shifts" | "workflow_lead_wake" | "workflow_lead_answer"
+        | "workflow_lead_connect" | "workflow_lead_disconnect" => {
             ipc(name, args.clone()).await
         }
         "workflows_list" | "workflow_show" | "workflow_save" | "workflow_remove"
@@ -3042,6 +3062,10 @@ pub(super) fn confirmation(name: &str, args: &Value) -> Option<String> {
         ),
         "workflow_lead_remove" => format!(
             "Remove workflow lead {}? Its definition cannot be recovered.",
+            args["lead"].as_str().unwrap_or("this")
+        ),
+        "workflow_lead_connect" => format!(
+            "Talk with workflow lead {} in its own conversation through Remote Control? It runs on the coordinator with its Claude agent and the account's usage; its turns wait while you talk.",
             args["lead"].as_str().unwrap_or("this")
         ),
         // Only a block that acts asks; an instruction block, or one the host will refuse as
@@ -3467,12 +3491,20 @@ mod tests {
             ("workflow_lead_shifts", "read"),
             ("workflow_lead_wake", "local"),
             ("workflow_lead_answer", "local"),
+            ("workflow_lead_disconnect", "local"),
             ("workflow_finding_resolve", "local"),
             ("workflow_finding_dismiss", "local"),
         ] {
             assert_eq!(effect(name), (json!(expected), json!("offered")), "{name}");
             assert!(super::super::workflows::handles(name), "{name}");
         }
+        // A talk with a lead is a person's: its link opens in the Claude app.
+        assert_eq!(
+            effect("workflow_lead_connect").0,
+            json!("needs confirmation")
+        );
+        assert_ne!(effect("workflow_lead_connect").1, json!("offered"));
+        assert!(super::super::workflows::handles("workflow_lead_connect"));
         // The confirmation shows what an acting block does.
         let question = confirmation(
             "workflow_block_save",

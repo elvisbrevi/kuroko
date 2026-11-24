@@ -21,6 +21,8 @@ let read = false;
 let warnings = [];
 /** The questions answered here; the host takes an answer at its next tick. @type {Set<string>} */
 const answered = new Set();
+/** The live talks opened here, by lead: their Remote Control link. @type {Map<string, string>} */
+const talks = new Map();
 
 /** A lead ID from its name: lowercase letters, digits and `-`, starting with a letter. */
 function slug(name) {
@@ -103,11 +105,33 @@ async function renderLeads(container, { editable, coordinator }) {
     };
     const shift = shifts.get(lead.id);
     const following = shift && shift.state !== 'ended';
-    const look = el('button', { type: 'button', class: 'secondary small', textContent: t('Look now'), hidden: !following || !editable });
+    const look = el('button', { type: 'button', class: 'secondary small', textContent: t('Look now'), hidden: !following || !editable || shift.talking });
+    // Its own conversation, live in the Claude app; a second press confirms (its turns wait meanwhile).
+    const talk = el('button', { type: 'button', class: 'secondary small', textContent: shift?.talking ? t('End the talk') : t('Talk to {name}', { name: lead.name }),
+      hidden: !following || !editable || !shift.last_wake });
+    talk.onclick = () => {
+      if (shift.talking) {
+        busy(talk, async () => { await invoke('workflow_lead_disconnect', { lead: lead.id }); done(t('{name} goes on with its runs.', { name: lead.name })); await renderLeads(container, { editable, coordinator }); });
+        return;
+      }
+      if (talk.dataset.armed !== 'true') {
+        talk.dataset.armed = 'true'; talk.textContent = t('Confirm: its turns wait while you talk');
+        setTimeout(() => { talk.dataset.armed = ''; talk.textContent = t('Talk to {name}', { name: lead.name }); }, 4000);
+        return;
+      }
+      busy(talk, async () => {
+        // Opened at the press (a phone allows no window after the reply), filled with its link.
+        const win = window.open('about:blank', '_blank');
+        const reply = await invoke('workflow_lead_connect', { lead: lead.id, confirmed: true }).catch(error => { win?.close(); throw error; });
+        if (reply.url) { talks.set(lead.id, reply.url); if (win) win.location.href = reply.url; } else win?.close();
+        done(t('{name} waits for you in the Claude app.', { name: lead.name }));
+        await renderLeads(container, { editable, coordinator });
+      });
+    };
     look.onclick = () => busy(look, async () => { await invoke('workflow_lead_wake', { lead: lead.id }); done(t('{name} looks at its runs at its next tick.', { name: lead.name })); });
     const last = shift?.last_wake;
     const state = !shift ? null : following
-      ? `${shift.state === 'failing' ? t('Its turns are failing') : t('Following its runs')}${last ? ` · ${t('last look {time}', { time: when(last.at) })}` : ''} · ${t('{n} decisions', { n: String(shift.decisions ?? 0) })}`
+      ? `${shift.talking ? t('Talking with you') : shift.state === 'failing' ? t('Its turns are failing') : t('Following its runs')}${last ? ` · ${t('last look {time}', { time: when(last.at) })}` : ''} · ${t('{n} decisions', { n: String(shift.decisions ?? 0) })}`
       : t('Last shift ended {time}', { time: when(shift.ended_at) });
     // Its questions for you, each answered once; the answer reaches it at its next turn.
     const questions = (following ? shift.questions ?? [] : []).filter(q => !answered.has(q.id)).map(q => {
@@ -124,8 +148,9 @@ async function renderLeads(container, { editable, coordinator }) {
         el('p', {}, el('strong', { textContent: t('{name} asks', { name: lead.name }) }), ' ', el('span', { textContent: q.text })), text, el('div', { class: 'actions' }, send));
     });
     return el('div', { class: 'resource', 'data-lead': lead.id },
-      el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), look, edit, remove),
+      el('div', { class: 'resource-head' }, el('strong', { textContent: lead.name }), el('span', { class: 'grow' }), talk, look, edit, remove),
       state ? el('p', { class: 'hint lead-shift', textContent: state }) : null,
+      shift?.talking && talks.has(lead.id) ? el('p', {}, el('a', { href: talks.get(lead.id), target: '_blank', rel: 'noopener', textContent: t('Open the talk in the Claude app') })) : null,
       ...questions,
       el('p', { class: 'resource-facts' }, el('small', { textContent: [`Claude · ${lead.agent.model} · ${lead.agent.effort}`, lead.enabled === false ? t('Off') : null,
         workflows.length ? t('Leads {names}', { names: workflows.join(', ') }) : t('Leads no workflow yet')].filter(Boolean).join(' · ') })),

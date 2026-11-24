@@ -21,7 +21,7 @@ use crate::workflows::lead::{self, Lead};
 use crate::workflows::{self as core, Block, Facts, Inspection, Kind, Workflow};
 use serde_json::{Value, json};
 
-pub(super) const METHODS: [&str; 15] = [
+pub(super) const METHODS: [&str; 17] = [
     "workflows_list",
     "workflow_show",
     "workflow_save",
@@ -37,6 +37,8 @@ pub(super) const METHODS: [&str; 15] = [
     "workflow_lead_shifts",
     "workflow_lead_wake",
     "workflow_lead_answer",
+    "workflow_lead_connect",
+    "workflow_lead_disconnect",
 ];
 
 pub(super) mod acting;
@@ -556,6 +558,9 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
         "workflow_lead_save" => save_lead(host, parse(args)?).await,
         "workflow_lead_shifts" | "workflow_lead_wake" | "workflow_lead_answer" => {
             shifts::operation(host, method, args)
+        }
+        "workflow_lead_connect" | "workflow_lead_disconnect" => {
+            shifts::talk(host, method, args, &engine::Azure::Live).await
         }
         "workflow_lead_remove" => {
             let a: LeadArgs = parse(args)?;

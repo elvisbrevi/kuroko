@@ -754,6 +754,36 @@ pub(crate) async fn reconnect(
     Ok(access)
 }
 
+/// A workflow lead's conversation `session_id`, resumed live for the person through Remote Control
+/// under `name`: the same isolation and tools as its turns (`lead::arguments`), kept until the
+/// person ends it (`close`) or its access expires, when `observer` hears `offline`. One already
+/// connected is returned as it is.
+pub(crate) async fn lead_live(
+    choice: (&str, &str),
+    directory: &std::path::Path,
+    session_id: &str,
+    name: &SessionName,
+    server: Arc<super::Reporter>,
+    observer: Observer,
+) -> Result<Access> {
+    let guard = sessions().lock().await;
+    if let Some(live) = guard
+        .get(session_id)
+        .filter(|live| !live.task.is_finished())
+    {
+        return Ok(live.access.clone());
+    }
+    drop(guard);
+    let binary = super::locate("claude")
+        .ok_or_else(|| anyhow::anyhow!("Claude Code is not installed on this coordinator."))?;
+    let args = super::lead::arguments(choice, Some(session_id));
+    let mut session = spawn(&binary, &args, directory).await?;
+    session.reporter = Some(server);
+    let access = session.enable(name).await?;
+    retain(session_id, session, access.clone(), observer, (false, None)).await?;
+    Ok(access)
+}
+
 #[cfg(test)]
 mod reporter_tests {
     use super::*;

@@ -140,6 +140,10 @@ pub(in crate::app) struct Shifts {
     // shortcut: kept in memory until the next tick (30 s); one given right before a restart is
     // lost and the question stays open. Persist them if that happens.
     answers: Shared<Vec<(String, String, String)>>,
+    /// The leads the person talks with now, live through Remote Control (also in `waking`).
+    talking: Shared<HashSet<String>>,
+    /// One connect or disconnect at a time.
+    talks: tokio::sync::Mutex<()>,
     /// One lead's turn at a time on the account.
     turn: tokio::sync::Mutex<()>,
 }
@@ -159,6 +163,8 @@ impl Shifts {
             waking: Shared::new(HashSet::new()),
             requests: Shared::new(HashSet::new()),
             answers: Shared::new(Vec::new()),
+            talking: Shared::new(HashSet::new()),
+            talks: tokio::sync::Mutex::new(()),
             turn: tokio::sync::Mutex::new(()),
         })
     }
@@ -314,7 +320,16 @@ fn unled(host: &Host, map: &KnowledgeMap, now: i64) -> Result<()> {
     shifts.requests.lock().unwrap().retain(|lead| on(lead));
     // Read before the shifts: a turn that ends meanwhile has saved its shift already.
     let waking = shifts.waking.lock().unwrap().clone();
+    let talking = shifts.talking.lock().unwrap().clone();
     for mut shift in shifts.find(None, None, true, -1)? {
+        // A talk with a lead turned off or removed ends; its shift ends at a later tick.
+        if !on(&shift.lead)
+            && talking.contains(&shift.lead)
+            && let Some(session) = shift.session_id.clone()
+        {
+            tokio::spawn(async move { crate::llm::implementation::mobile::close(&session).await });
+            continue;
+        }
         if on(&shift.lead) || waking.contains(&shift.lead) {
             continue;
         }
@@ -496,7 +511,10 @@ fn step(
         return Err(error);
     }
     if due {
-        shifts.waking.lock().unwrap().insert(lead.id.clone());
+        // A talk that began meanwhile keeps the conversation: no turn then.
+        if !shifts.waking.lock().unwrap().insert(lead.id.clone()) {
+            return Ok(());
+        }
         let definitions: Vec<crate::workflows::Workflow> = map
             .workflows
             .iter()
@@ -1351,8 +1369,8 @@ fn questions(shift: &Shift) -> impl Iterator<Item = &Entry> {
 }
 
 /// A shift as listed: its state, last look and open questions, without its journal.
-fn brief(shift: &Shift) -> Value {
-    json!({"id": shift.id, "lead": shift.lead, "state": shift.state, "opened_at": shift.opened_at,
+fn brief(shift: &Shift, talking: bool) -> Value {
+    json!({"id": shift.id, "lead": shift.lead, "state": shift.state, "opened_at": shift.opened_at, "talking": talking,
         "ended_at": shift.ended_at, "last_wake": shift.wakes.last(), "pending": shift.pending.len(),
         "decisions": shift.journal.iter().filter(|e| e.kind == "decision").count(), "summary": shift.summary,
         "questions": if shift.state == "ended" { vec![] } else { questions(shift).collect::<Vec<_>>() }})
@@ -1434,6 +1452,13 @@ pub(in crate::app) fn operation(
                 .shifts
                 .find(lead.as_deref(), a.run.as_deref(), false, limit)
                 .map_err(fail)?;
+            let talking = state.workflows.shifts.talking.lock().unwrap().clone();
+            let brief = |shift: &Shift| {
+                brief(
+                    shift,
+                    shift.state != "ended" && talking.contains(&shift.lead),
+                )
+            };
             Ok(
                 json!({"shifts": shifts.iter().map(|shift| match (&a.run, &lead) {
                 // A run's view: only what its leads recorded about it.
@@ -1553,5 +1578,170 @@ mod tests {
             organization: String::new(),
         };
         assert!(opening_fits(&lead, &small, &texts).is_ok());
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TalkArgs {
+    lead: String,
+    #[serde(default)]
+    confirmed: bool,
+}
+
+/// `workflow_lead_connect` and `workflow_lead_disconnect`: the person talks with a lead in its
+/// own conversation, live through Remote Control, with its tools. Meanwhile its turns wait (its
+/// ID stays in `waking`) and what happens queues for the next one; when the talk ends, the shift
+/// keeps what the lead recorded and its turns go on.
+// shortcut: what the lead records while you talk is saved when the talk ends; a host restart in
+// the middle loses it. Save it at each tool call if that matters.
+pub(in crate::app) async fn talk(
+    host: &Arc<Host>,
+    method: &str,
+    args: &Value,
+    azure: &engine::Azure,
+) -> std::result::Result<Value, String> {
+    use crate::llm::implementation::mobile;
+    let state = &host.state;
+    super::runs::require_engine(state)?;
+    let map = state.settings.map().map_err(fail)?;
+    let a: TalkArgs = parse(args)?;
+    let shifts = &state.workflows.shifts;
+    let _one = shifts.talks.lock().await;
+    if method == "workflow_lead_disconnect" {
+        // Also a lead removed or turned off while you talked.
+        let id = crate::workflows::lead::find(&map.workflow_leads, &a.lead)
+            .map_or(a.lead.clone(), |l| l.id.clone());
+        let session = shifts
+            .current(&id)
+            .map_err(fail)?
+            .and_then(|s| s.session_id)
+            .ok_or_else(|| conflict(format!("{} has no conversation now.", a.lead)))?;
+        mobile::close(&session).await;
+        return Ok(json!({"lead": id, "disconnected": true}));
+    }
+    let lead = crate::workflows::lead::find(&map.workflow_leads, &a.lead)
+        .ok_or_else(|| invalid(format!("There is no workflow lead {}.", a.lead)))?
+        .clone();
+    if !a.confirmed {
+        return Err(invalid(format!(
+            "Confirm with the user, then connect with confirmed: true. Talk with {} in its own conversation through Remote Control, on this coordinator with its Claude agent and the account's usage: while you talk its turns wait, and what you tell it is information for it, never an approval.",
+            lead.name
+        )));
+    }
+    if !lead.enabled {
+        return Err(conflict(format!("{} is off: turn it on first.", lead.name)));
+    }
+    // Claimed before the shift is read: no turn starts meanwhile, and none is running.
+    let talking = shifts.talking.lock().unwrap().contains(&lead.id);
+    if !talking {
+        if !shifts.waking.lock().unwrap().insert(lead.id.clone()) {
+            return Err(conflict(format!(
+                "{} is looking at its runs now: try again in a minute.",
+                lead.name
+            )));
+        }
+        shifts.talking.lock().unwrap().insert(lead.id.clone());
+    }
+    let release = || {
+        if !talking {
+            shifts.talking.lock().unwrap().remove(&lead.id);
+            shifts.waking.lock().unwrap().remove(&lead.id);
+        }
+    };
+    let read = shifts.current(&lead.id).map_err(fail).and_then(|shift| {
+        let shift = shift.ok_or_else(|| {
+            conflict(format!(
+                "{} has no shift now: none of its workflows has an active run.",
+                lead.name
+            ))
+        })?;
+        let session = shift.session_id.clone().ok_or_else(|| {
+            conflict(format!(
+                "{} has had no turn yet: talk with it once it has looked at its runs.",
+                lead.name
+            ))
+        })?;
+        Ok((shift, session))
+    });
+    let (mut shift, session) = match read {
+        Ok(read) => read,
+        Err(error) => {
+            release();
+            return Err(error);
+        }
+    };
+    // Marked like a turn: a host that restarts during the talk says so at the next step, and
+    // the findings' numbering goes on from what was stored.
+    if !talking {
+        shift.turn_started = Some(chrono::Utc::now().timestamp());
+        if let Err(error) = shifts.save(&shift) {
+            release();
+            return Err(fail(error));
+        }
+    }
+    let workflows: Vec<crate::workflows::Workflow> =
+        crate::workflows::lead::led_by(&map.workflows, &lead.id)
+            .into_iter()
+            .filter_map(|id| map.workflows.iter().find(|w| w.id == id).cloned())
+            .collect();
+    let directory = state.implementation.root.join("leads").join(&shift.id);
+    let shift_back = shift.clone();
+    let shared = Arc::new(Shared::new(shift));
+    // When the talk ends, once: the shift keeps what the lead recorded and its turns go on.
+    let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observer: mobile::Observer = {
+        let (host, shared, id) = (host.clone(), shared.clone(), lead.id.clone());
+        Arc::new(move |access: mobile::Access| {
+            if access.status == "offline" && !ended.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let shifts = &host.state.workflows.shifts;
+                let mut shift = shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                shift.turn_started = None;
+                if let Err(error) = shifts.save(&shift) {
+                    tracing::warn!(event = "lead_shift_unsaved", lead = %id, error = %error);
+                }
+                shifts
+                    .talking
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+                shifts
+                    .waking
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+            }
+            Ok(())
+        })
+    };
+    let connected = match security::private_dir(&directory) {
+        Ok(()) => {
+            mobile::lead_live(
+                (&lead.agent.model, &lead.agent.effort),
+                &directory,
+                &session,
+                &crate::llm::implementation::SessionName::purpose(&lead.name, None),
+                tools((host.clone(), azure.clone()), shared, workflows),
+                observer,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    };
+    match connected {
+        Ok(access) => Ok(
+            json!({"lead": lead.id, "status": access.status, "url": access.url,
+            "expires_at": access.expires_at}),
+        ),
+        Err(error) => {
+            if !talking {
+                let mut shift = shift_back;
+                shift.turn_started = None;
+                let _ = shifts.save(&shift);
+            }
+            release();
+            Err(fail(error))
+        }
     }
 }
