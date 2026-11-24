@@ -16,7 +16,7 @@ pub(in crate::app) struct Catalog {
     pulls: Mutex<BTreeMap<(String, String), Vec<PullRequest>>>,
     /// The branches that exist, by repository (lowercased) and name.
     branches: Mutex<BTreeSet<(String, String)>>,
-    /// Session summaries by implementation run, as the supervisor reads them.
+    /// Session summaries by implementation run, as a lead reads them.
     summaries: Mutex<BTreeMap<String, serde_json::Value>>,
     /// Predecessor links by successor, and the predecessors' facts (a test's dependencies).
     links: Mutex<BTreeMap<u64, Vec<u64>>>,
@@ -120,11 +120,6 @@ impl Catalog {
             .get(&(repository.to_lowercase(), branch.to_owned()))
             .cloned()
             .unwrap_or_default()
-    }
-    /// The summary of an implementation run's session, as the next read returns it.
-    #[cfg(unix)]
-    pub(in crate::app) fn set_summary(&self, run: &str, summary: serde_json::Value) {
-        self.summaries.lock().unwrap().insert(run.into(), summary);
     }
     pub(in crate::app) fn sessions(&self, runs: &[String]) -> Vec<serde_json::Value> {
         let summaries = self.summaries.lock().unwrap();
@@ -241,30 +236,6 @@ impl Catalog {
             .lock()
             .unwrap()
             .insert((repository.to_lowercase(), branch.to_owned()));
-    }
-    pub(in crate::app) fn branch_exists(&self, repository: &str, branch: &str) -> bool {
-        self.requests
-            .lock()
-            .unwrap()
-            .push(format!("GET refs {repository} heads/{branch}"));
-        self.branches
-            .lock()
-            .unwrap()
-            .contains(&(repository.to_lowercase(), branch.to_owned()))
-    }
-    /// Add a comment to an item, as its next read returns it.
-    #[cfg(unix)]
-    pub(in crate::app) fn comment(&self, id: u64, author: &str, text: &str) {
-        if let Some(detail) = self.items.lock().unwrap().get_mut(&id) {
-            detail.comments.push(crate::tools::todo::Comment {
-                author: author.into(),
-                created_at: Some(chrono::Utc::now().to_rfc3339()),
-                modified_at: None,
-                text: text.into(),
-                format: "markdown".into(),
-                content: None,
-            });
-        }
     }
     pub(in crate::app) fn item(&self, id: u64) -> Result<Detail, String> {
         self.requests

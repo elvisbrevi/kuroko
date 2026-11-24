@@ -105,8 +105,8 @@ pub const BUILT_IN: &[BuiltIn] = &[
     built_in!(
         SUPERVISE,
         "agents",
-        "Supervise workflow runs",
-        "Workflows: the workflow supervisor reads what a run's agents did, checks their reports and drafts a handover note, work items and the next steps for you to confirm.",
+        "Supervise workflow runs (retired)",
+        "Retired with the workflow supervisor (workflow leads replaced it): used only when an older coordinator asks this computer for a look.",
         prompts::WORKFLOW_SUPERVISE
     ),
     // What code adds to the agents' instructions.
@@ -259,22 +259,22 @@ pub const BUILT_IN: &[BuiltIn] = &[
     built_in!(
         "supervisor.rules",
         "workflow_director",
-        "Supervisor: looking at runs",
-        "Added after the supervisor's instructions when it looks at runs.",
+        "Supervisor (retired): looking at runs",
+        "Retired with the workflow supervisor (workflow leads replaced it): used only when an older coordinator asks this computer for a look.",
         prompts::SUPERVISE_RULES
     ),
     built_in!(
         "supervisor.audit_task",
         "workflow_director",
-        "Supervisor: audit",
-        "Added to the supervisor's instructions when it audits a batch of runs.",
+        "Supervisor (retired): audit",
+        "Retired with the workflow supervisor: used only when an older coordinator asks this computer for an audit.",
         prompts::AUDIT_TASK
     ),
     built_in!(
         "supervisor.audit_rules",
         "workflow_director",
-        "Supervisor: audit rules",
-        "Added after the audit task: what the supervisor may trust and write.",
+        "Supervisor (retired): audit rules",
+        "Retired with the workflow supervisor: used only when an older coordinator asks this computer for an audit.",
         prompts::AUDIT_RULES
     ),
     // The contexts of workflow runs and review rounds.

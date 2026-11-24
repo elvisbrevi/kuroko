@@ -1499,7 +1499,7 @@ pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "workflow_save",
         title: "Save a workflow",
-        description: "Adds or replaces a workflow by id on the account's coordinator: workflow {id, name, description, enabled, auto_start, organization (https://dev.azure.com/NAME), project, repositories [{id, name}] from workflow_repositories, machine (machine_list ID; the coordinator's own ID for it), checkouts {repository id: absolute canonical directory inside that machine's allowed roots}, agent {provider codex|claude|opencode, model, effort, time_limit_minutes (optional, 30-480: how long each session of its runs may take; none takes the workflow settings' coding_ or planning_time_limit_minutes)} installed there, instructions (at most 20000 characters), blocks (existing block IDs, at most 20), allow (what its coding runs may do that the fixed rules otherwise forbid, each at most once: work_items to create and change Azure DevOps or GitHub work items and issues, teams to send Teams messages, merge to complete and merge pull requests, deploy to publish and deploy; empty by default), preapprove (what the workflow supervisor may do for its runs without asking, each at most once: {action: restart_after_cut} to restart a run whose coding session was cut with its drafted note, {action: post_summary, chat: {id, name} from teams_chats, mentions} to post its drafted summary of a stopped run to that chat; empty by default), lead ({id} of a workflow lead, workflow_leads_list: it follows the workflow's runs on the coordinator; may: what it decides by itself once out of shadow, each at most once: settle to settle a child with the deliveries code verifies, close to close a run by the completion criteria above code's floor, wait to keep a run waiting for its pull requests past the limit (up to 60 days) and move it ahead in the line, continue to continue a coding session cut before its report (at most twice per child), item_states to move the state and guide-listed fields of the run's items with the Azure source's token (its coding agents then report instead of writing work items); create_blocking to create a blocking finding's drafted work item by itself (at most one per run and three a day); process_items to create a pull request's review support task by the organization's norms when it was not approved by itself within 15 minutes; shadow: true by default, its decisions only recorded; false applies what may lists), done_when (when one of its runs is done, in the user's words, at most 4000 characters; its lead reads it)}. A workflow that allows or pre-approves anything, or names a lead, needs the user's confirmation of what it allows, pre-approves and who leads it; its planning run and every run without it keep every prohibition. The host checks the project, the catalog, each checkout (inside the roots, no symbolic link alias, a Git checkout whose origin names that repository) and the agent on the machine; what it cannot verify (an offline or older machine, a checkout without an origin) comes back in warnings. Give only id and enabled to enable or disable a workflow; nothing else changes. A run gets the instructions and instruction blocks whole, never cut: a workflow whose largest run context (the fixed sentences, checkouts, item and longest handover note included) would exceed 100000 characters is refused with the numbers; the reply's usage says how much of each limit it uses. A workflow over 10 blocks or 8000 characters of instructions warns that computers of the account on release 0.12.22 or older cannot take the account's configuration until they update. Limits: 50 workflows, 20 repositories each. delivery (optional, left out by default): {dependency_policy wait_for_pull_request (default: a child waits until its predecessor's pull requests are completed) | stack (it starts from the branch of the predecessor's one open pull request and opens its pull request into it), max_open_pull_requests (0-10, 0 no limit: a run whose next child would open one more pull request in that repository waits in waiting_dependency, in its place by creation), target_branch (the branch the runs' pull requests go into, when not each repository's default branch), review_rounds (0-5, default 2: when a reviewer rejects a run's pull request or waits for its author, the agent that coded it corrects it in the same pull request and sends it back, at most this many times; 0 turns it off), review_on_threads (open comment threads without a negative vote also start a round)}.",
+        description: "Adds or replaces a workflow by id on the account's coordinator: workflow {id, name, description, enabled, auto_start, organization (https://dev.azure.com/NAME), project, repositories [{id, name}] from workflow_repositories, machine (machine_list ID; the coordinator's own ID for it), checkouts {repository id: absolute canonical directory inside that machine's allowed roots}, agent {provider codex|claude|opencode, model, effort, time_limit_minutes (optional, 30-480: how long each session of its runs may take; none takes the workflow settings' coding_ or planning_time_limit_minutes)} installed there, instructions (at most 20000 characters), blocks (existing block IDs, at most 20), allow (what its coding runs may do that the fixed rules otherwise forbid, each at most once: work_items to create and change Azure DevOps or GitHub work items and issues, teams to send Teams messages, merge to complete and merge pull requests, deploy to publish and deploy; empty by default), lead ({id} of a workflow lead, workflow_leads_list: it follows the workflow's runs on the coordinator; may: what it decides by itself once out of shadow, each at most once: settle to settle a child with the deliveries code verifies, close to close a run by the completion criteria above code's floor, wait to keep a run waiting for its pull requests past the limit (up to 60 days) and move it ahead in the line, continue to continue a coding session cut before its report (at most twice per child), item_states to move the state and guide-listed fields of the run's items with the Azure source's token (its coding agents then report instead of writing work items); create_blocking to create a blocking finding's drafted work item by itself (at most one per run and three a day); process_items to create a pull request's review support task by the organization's norms when it was not approved by itself within 15 minutes; shadow: true by default, its decisions only recorded; false applies what may lists), done_when (when one of its runs is done, in the user's words, at most 4000 characters; its lead reads it)}. A workflow that allows anything, or names a lead, needs the user's confirmation of what it allows and who leads it (a preapprove of the retired supervisor is accepted and ignored); its planning run and every run without it keep every prohibition. The host checks the project, the catalog, each checkout (inside the roots, no symbolic link alias, a Git checkout whose origin names that repository) and the agent on the machine; what it cannot verify (an offline or older machine, a checkout without an origin) comes back in warnings. Give only id and enabled to enable or disable a workflow; nothing else changes. A run gets the instructions and instruction blocks whole, never cut: a workflow whose largest run context (the fixed sentences, checkouts, item and longest handover note included) would exceed 100000 characters is refused with the numbers; the reply's usage says how much of each limit it uses. A workflow over 10 blocks or 8000 characters of instructions warns that computers of the account on release 0.12.22 or older cannot take the account's configuration until they update. Limits: 50 workflows, 20 repositories each. delivery (optional, left out by default): {dependency_policy wait_for_pull_request (default: a child waits until its predecessor's pull requests are completed) | stack (it starts from the branch of the predecessor's one open pull request and opens its pull request into it), max_open_pull_requests (0-10, 0 no limit: a run whose next child would open one more pull request in that repository waits in waiting_dependency, in its place by creation), target_branch (the branch the runs' pull requests go into, when not each repository's default branch), review_rounds (0-5, default 2: when a reviewer rejects a run's pull request or waits for its author, the agent that coded it corrects it in the same pull request and sends it back, at most this many times; 0 turns it off), review_on_threads (open comment threads without a negative vote also start a round)}.",
         effect: Effect::External,
         schema: || {
             object(
@@ -1901,50 +1901,14 @@ pub(super) const TOOLS: &[Tool] = &[
         },
     },
     Tool {
-        name: "workflow_supervise",
-        title: "Ask the workflow supervisor to look at a run",
-        description: "Asks the workflow supervisor (workflow_settings supervisor: its own machine, CLI, model and effort; the supervise prompt) to look at one workflow run now. Code reads the run, its implementation records and why each session stopped, the bounded summaries of its own sessions, the work item fresh with its comments and history, the pull requests and branches of the run and the machines, and the supervisor judges them in a read-only, tool-less session on its machine (Agent history, purpose supervision). The look is stored on the run (workflow_run_status supervision): its assessment (what was done, what is left, what it recommends), each claim of the final report checked by code against what it read (verified or not_verified, with code's fact), a drafted handover note, drafted work items, a drafted summary and the actions it proposes, which wait for the user (workflow_supervision_act). By itself it only stores the look and may move that run ahead in the queue. Returns at once with the look queued or running; one look runs at a time, and a run with a look queued or running, or looked at in the last five minutes, is refused. With audit: true instead of run, asks for an audit of the runs created since the last audit (or since since, RFC 3339): code lists each run's item, state, children and pull requests, the checks of its reports, the branches of completed pull requests that still exist and the looks that failed, and the supervisor adds the findings left only in comments and its proposals (workflow_supervision audit). Needs the supervisor on; runs only on the owner's coordinator. What a workflow pre-approved (its preapprove: a restart after a cut session, a post of the drafted summary to the chat it names) runs after a look when code finds every condition, once, recorded with by preapproval.",
-        effect: Effect::Local,
-        schema: || {
-            object(
-                json!({"run": string("The workflow run's ID (a look at it)."), "audit": {"type": "boolean", "description": "true for an audit of the runs since the last one, instead of a look at a run."}, "since": string("With audit: the audit covers the runs created after this RFC 3339 time.")}),
-                &[],
-            )
-        },
-    },
-    Tool {
         name: "workflow_supervision",
-        title: "Read the supervisor's looks at a run",
-        description: "The workflow supervisor's looks at one workflow run (the last 20, oldest first: event, assessment, checks of the final report with verified or not_verified and code's fact, what code could not read or cut, drafted handover, work items and summary, and each proposed action with its state: proposed, done, attempting, executed, refused, uncertain, opened, expired or dismissed, and by: person, supervisor or preapproval) and the looks queued or running for it. With audit (an ID or latest), one audit of a batch of runs: per run its item, state, children, pull requests and not verified claims; the merged branches that still exist; the runs whose latest look failed; and the supervisor's overview, results, findings left only in comments, proposals and drafted work items. With audits: true, the list of audits.",
+        title: "Read what the retired supervisor looked at",
+        description: "What the retired workflow supervisor stored before workflow leads replaced it: its looks at one workflow run (the last 20, oldest first: event, assessment, checks of the final report with verified or not_verified and code's fact, drafted handover, work items and summary, and each proposed action with its last state), with audit (an ID or latest) one audit of a batch of runs, with audits: true the list of audits. Read only: a look, an audit or an action is no longer asked for or carried out; a workflow's lead follows its runs (workflow_lead_shifts).",
         effect: Effect::Read,
         schema: || {
             object(
                 json!({"run": string("The workflow run's ID."), "audit": string("An audit's ID, or latest."), "audits": {"type": "boolean", "description": "true for the list of audits."}}),
                 &[],
-            )
-        },
-    },
-    Tool {
-        name: "workflow_supervision_act",
-        title: "Carry out an action the supervisor proposed",
-        description: "Carries out one action a look of the workflow supervisor proposed (action: its id such as a1, or its name), once, through the operation that already does it and as the user confirmed it: restart (workflow_run_restart with the drafted handover, or note, the user's edited version), resume, cancel, pause_project (workflow_runs_pause of the run's project with the proposed sessions choice) or post_summary (the drafted summary stored on the run and posted with workflow_summary_send to chat, a chat ID from teams_chats that the user chose, with mentions). create_work_item needs no confirmation here: it returns the draft for Create request (implementation_request_start), whose own confirmation and work item guide apply. An action of a run that moved on since the look is expired and refused; an action already carried out is refused. Show the user the exact draft before confirming. Runs only on the owner's coordinator.",
-        effect: Effect::External,
-        schema: || {
-            object(
-                json!({"run": string("The workflow run's ID."), "look": string("The look's ID (workflow_supervision)."), "action": string("The action's id (a1…) or name."), "note": string("For restart: the user's edited handover note, at most 4000 characters."), "chat": string("For post_summary: a chat ID from teams_chats."), "mentions": strings("For post_summary: display names of members of that chat to mention."), "confirmed": confirmed()}),
-                &["run", "look", "action"],
-            )
-        },
-    },
-    Tool {
-        name: "workflow_supervision_dismiss",
-        title: "Set aside a proposed action",
-        description: "Sets aside one action a look of the workflow supervisor proposed (dismissed); nothing else changes.",
-        effect: Effect::Local,
-        schema: || {
-            object(
-                json!({"run": string("The workflow run's ID."), "look": string("The look's ID."), "action": string("The action's id (a1…) or name.")}),
-                &["run", "look", "action"],
             )
         },
     },
@@ -2759,8 +2723,7 @@ pub(super) async fn run(name: &str, args: &Value) -> Result<Value, String> {
         | "workflow_classify" | "workflow_run_start" | "workflow_runs" | "workflow_run_status"
         | "workflow_run_resume" | "workflow_run_cancel" | "workflow_run_assign"
         | "workflow_run_restart" | "workflow_runs_pause" | "workflow_runs_unpause"
-        | "workflow_summary" | "workflow_summary_send" | "workflow_supervise"
-        | "workflow_supervision" | "workflow_supervision_act" | "workflow_supervision_dismiss"
+        | "workflow_summary" | "workflow_summary_send" | "workflow_supervision"
         | "workflow_run_requeue" | "workflow_run_skip_dependency"
         | "workflow_run_update_branch" | "workflow_run_find" | "workflow_run_accept_found"
         | "workflow_findings" | "workflow_finding_resolve" | "workflow_finding_dismiss"
@@ -3010,13 +2973,6 @@ pub(super) async fn question(name: &str, args: &Value) -> Result<Option<String>,
     {
         return Ok(Some(text));
     }
-    // An action of the supervisor names the run, the action and its exact draft.
-    if name == "workflow_supervision_act"
-        && let Ok(status) = run("workflow_run_status", &json!({"run": args["run"]})).await
-        && let Some(text) = super::workflows::supervisor::describe_act(&status, args)
-    {
-        return Ok(Some(format!("{text}\n\nCarry it out?")));
-    }
     let edited = args["text"].as_str().is_some_and(|t| !t.trim().is_empty());
     if name != "workflow_summary_send" || edited {
         return Ok(Some(asked));
@@ -3178,12 +3134,6 @@ pub(super) fn confirmation(name: &str, args: &Value) -> Option<String> {
             super::workflows::runs::describe_unpause(args["project"].as_str())
         ),
         "workflow_summary_send" => format!("{}?", super::workflows::summary::describe_args(args, None)),
-        "workflow_supervision_act" => format!(
-            "Carry out action {} that the workflow supervisor proposed in look {} of workflow run {}, once, through the operation that does it?",
-            args["action"].as_str().unwrap_or("this"),
-            args["look"].as_str().unwrap_or("this"),
-            args["run"].as_str().unwrap_or("this")
-        ),
         "cloud_disconnect" => if args["forget_service_token"] == true {
             "Disconnect this installation from the account store and remove the account's service token from it?".into()
         } else {
@@ -3491,10 +3441,7 @@ mod tests {
             ("workflow_runs_unpause", "needs confirmation"),
             ("workflow_summary", "local"),
             ("workflow_summary_send", "needs confirmation"),
-            ("workflow_supervise", "local"),
             ("workflow_supervision", "read"),
-            ("workflow_supervision_act", "needs confirmation"),
-            ("workflow_supervision_dismiss", "local"),
             ("workflow_run_requeue", "local"),
             ("workflow_run_skip_dependency", "needs confirmation"),
             ("workflow_run_update_branch", "needs confirmation"),

@@ -174,7 +174,6 @@ fn require_coordinator(state: &DesktopState) -> Result<(), String> {
 fn shown(workflow: &Workflow) -> Value {
     let mut value = serde_json::to_value(workflow).unwrap_or_default();
     value["allow"] = json!(workflow.allow);
-    value["preapprove"] = json!(workflow.preapprove);
     value
 }
 
@@ -256,26 +255,6 @@ fn lead_fits(
         Err(_) if before.and_then(size).is_some_and(|(was, _)| was >= used) => Ok(()),
         result => result.map_err(invalid),
     }
-}
-
-/// What a workflow larger than older hosts accept means for the account's other computers.
-/// A workflow that pre-approves anything is refused by a host from before the supervisor
-/// (`deny_unknown_fields`): the save names the machines of the account that report one.
-async fn older_supervisors(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
-    if workflow.preapprove.is_empty() {
-        return None;
-    }
-    let older = implementation::machines_before_supervisor(host)
-        .await
-        .unwrap_or_default();
-    (!older.is_empty()).then(|| {
-        format!(
-            "Workflow {} pre-approves actions of the workflow supervisor, which {} cannot read: until updated, {} the account's configuration while this workflow is in it.",
-            workflow.id,
-            older.join(", "),
-            if older.len() == 1 { "it refuses" } else { "they refuse" }
-        )
-    })
 }
 
 /// A workflow with delivery settings is refused by a host from before them (0.14.1 or older,
@@ -383,8 +362,7 @@ async fn older_hosts(host: &Arc<Host>, workflow: &Workflow) -> Option<String> {
 /// rules allow is saved; none when it allows nothing.
 pub(super) fn describe_workflow(workflow: &Workflow) -> Option<String> {
     let lifted = core::describe_allow(&workflow.allow);
-    let preapproved = core::describe_preapprove(&workflow.preapprove);
-    if lifted.is_empty() && preapproved.is_empty() && workflow.lead.is_none() {
+    if lifted.is_empty() && workflow.lead.is_none() {
         return None;
     }
     let mut text = format!("Save workflow {}?", workflow.id);
@@ -406,11 +384,6 @@ pub(super) fn describe_workflow(workflow: &Workflow) -> Option<String> {
     if !lifted.is_empty() {
         text.push_str(&format!(
             " In every run it starts (also those that start by themselves), {lifted}, when its instructions ask for it. Its planning run, and every run without this workflow, keep every prohibition."
-        ));
-    }
-    if !preapproved.is_empty() {
-        text.push_str(&format!(
-            " For its runs, {preapproved}; code checks every condition first, and anything else the supervisor proposes waits for you."
         ));
     }
     Some(text)
@@ -459,7 +432,7 @@ async fn operation(host: &Arc<Host>, method: &str, args: &Value) -> Result<Value
         return summary::operation(host, method, args).await;
     }
     if supervisor::METHODS.contains(&method) {
-        return supervisor::operation(host, method, args, &engine::Azure::Live).await;
+        return supervisor::operation(host, method, args).await;
     }
     match method {
         "workflows_list" => {
@@ -687,14 +660,12 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             // Refuses checkouts keyed twice by one repository, then keys them in lowercase.
             core::validate_workflow(&workflow).map_err(invalid)?;
             workflow.allow.sort();
-            workflow.preapprove.sort_by_key(|p| p.action);
+            // What the retired supervisor was pre-approved to do is accepted and does nothing.
+            workflow.preapprove.clear();
             if let Some(lead) = workflow.lead.as_mut() {
                 lead.may.sort();
                 lead.may.dedup();
             }
-            // A pre-approved post's chat is one of the user's, under the name their chat list
-            // gives it, before the confirmation shows it.
-            preapproved_chats(state, &workflow).await?;
             // Lifting a fixed rule of its coding agents is the user's decision, confirmed with
             // what it lets them do.
             if let Some(question) = describe_workflow(&workflow)
@@ -740,7 +711,6 @@ async fn save(host: &Arc<Host>, args: SaveArgs) -> Result<Value, String> {
             })
             .await?;
             warnings.extend(older_hosts(host, &saved).await);
-            warnings.extend(older_supervisors(host, &saved).await);
             warnings.extend(older_delivery(host, &saved).await);
             if saved
                 .lead
@@ -984,48 +954,6 @@ async fn verify_chat(state: &DesktopState, chat: &str) -> Result<Option<String>,
             "The chat {chat} could not be checked against your chats (no Microsoft session could read them here); it is checked again when the block posts."
         ))),
     }
-}
-
-/// A pre-approved post goes, with nobody reading it first, only to a chat the user belongs to:
-/// the chat must be in the user's chat list, read now, under the name that list gives it
-/// (otherwise the confirmation would show the caller's label). A list that cannot be read
-/// refuses the save: a destination nobody could check is not pre-approved.
-pub(super) async fn preapproved_chats(
-    state: &DesktopState,
-    workflow: &Workflow,
-) -> Result<(), String> {
-    let chats: Vec<&core::Chat> = workflow
-        .preapprove
-        .iter()
-        .filter_map(|p| p.chat.as_ref())
-        .collect();
-    if chats.is_empty() {
-        return Ok(());
-    }
-    let read = tokio::time::timeout(std::time::Duration::from_secs(CHATS_SECONDS), async {
-        let graph = teams_graph(state).await?;
-        graph.chat_directory(None).await
-    })
-    .await;
-    let Ok(Ok(directory)) = read else {
-        return Err("[not_ready] Your chats could not be read here (no Microsoft session could read them): a pre-approved post needs its chat checked against your chats. Save it where they can be read.".into());
-    };
-    for chat in chats {
-        let Some(listed) = directory.iter().find(|c| c["id"] == chat.id.as_str()) else {
-            return Err(invalid(format!(
-                "You are not a member of the chat {}; choose one that kuroko teams chats lists.",
-                chat.id
-            )));
-        };
-        let name = listed["topic"].as_str().unwrap_or_default();
-        if name != chat.name {
-            return Err(invalid(format!(
-                "The chat {} is named «{name}» in your chats; save the pre-approved post with that name.",
-                chat.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Save a workflow lead: its own rules, its agent installed on this coordinator (what cannot be

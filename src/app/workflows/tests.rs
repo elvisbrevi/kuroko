@@ -407,76 +407,26 @@ async fn a_save_is_refused_before_anything_is_read_when_the_map_alone_refuses_it
 }
 
 #[tokio::test]
-async fn a_workflow_that_preapproves_the_supervisor_is_saved_only_once_confirmed() {
+async fn a_workflow_saved_with_the_retired_supervisors_preapprovals_asks_nothing_and_keeps_none() {
     let root = tempfile::tempdir().unwrap();
     let host = host(root.path());
     let own = implementation::test_machine(&host, None).await;
     let mut w = workflow("payments", &own);
     w.preapprove = vec![crate::workflows::Preapproval {
-        action: crate::workflows::Preapproved::PostSummary,
-        chat: Some(crate::workflows::Chat {
-            id: "19:team@thread.v2".into(),
-            name: "Equipo".into(),
-        }),
-        mentions: vec!["Ana Pérez".into()],
-    }];
-    // A post's chat must be checked against the user's chats: here they cannot be read, so the
-    // save is refused before anything else.
-    let refused = call(&host, Local, "workflow_save", json!({"workflow":w})).await;
-    assert_eq!(refused.code, "not_ready", "{:?}", refused.message);
-    assert!(refused.message.unwrap().contains("could not be read"));
-    // MCP's question names the chat and mentions.
-    let question =
-        crate::app::tools::confirmation("workflow_save", &json!({"workflow":w})).unwrap();
-    assert!(
-        question.contains("without asking") && question.contains("Equipo"),
-        "{question}"
-    );
-    // A restart alone: unconfirmed, refused with what the supervisor may do and how far the
-    // barrier goes.
-    let mut restart = workflow("payments", &own);
-    restart.preapprove = vec![crate::workflows::Preapproval {
         action: crate::workflows::Preapproved::RestartAfterCut,
         chat: None,
         mentions: Vec::new(),
     }];
-    let refused = call(&host, Local, "workflow_save", json!({"workflow":restart})).await;
-    assert_eq!(refused.code, "invalid_input");
-    let text = refused.message.unwrap();
-    assert!(
-        text.contains("confirmed: true") && text.contains("not a guarantee"),
-        "{text}"
-    );
-    // Confirmed: it goes on to the checks (here, the Azure source this host lacks).
-    let refused = call(
-        &host,
-        Local,
-        "workflow_save",
-        json!({"workflow":restart,"confirmed":true}),
-    )
-    .await;
+    // Nothing to confirm: the save goes on to its checks (here, the Azure source this host
+    // lacks), and its question names no pre-approval.
+    let refused = call(&host, Local, "workflow_save", json!({"workflow":w})).await;
     assert_eq!(refused.code, "not_ready", "{:?}", refused.message);
-    // A machine of the account that predates the supervisor would refuse it: the save says so.
-    implementation::test_worker(&host, "Old laptop", false).await;
-    implementation::test_worker(&host, "New desktop", true).await;
-    let warning = older_supervisors(&host, &w).await.unwrap();
-    assert!(
-        warning.contains("Old laptop") && !warning.contains("New desktop"),
-        "{warning}"
-    );
-    assert!(
-        older_supervisors(&host, &workflow("plain", &own))
-            .await
-            .is_none()
-    );
-    // list and show carry it, empty included.
-    store(&host, vec![w, workflow("plain", &own)]);
+    assert!(describe_workflow(&w).is_none());
+    // A stored one is shown and written without them.
+    store(&host, vec![w]);
     let list = call(&host, Local, "workflows_list", json!({})).await.data;
-    assert_eq!(
-        list["workflows"][0]["preapprove"][0]["action"],
-        "post_summary"
-    );
-    assert_eq!(list["workflows"][1]["preapprove"], json!([]));
+    assert!(list["workflows"][0].get("preapprove").is_none(), "{list}");
+    assert!(!stored_map(&host).contains("preapprove"));
 }
 
 #[tokio::test]
@@ -893,104 +843,24 @@ async fn the_director_must_be_an_installed_agent_on_a_machine_of_the_account() {
 }
 
 #[tokio::test]
-async fn the_supervisor_must_be_an_installed_agent_and_starts_off() {
+async fn the_retired_supervisors_settings_are_neither_shown_nor_changed() {
     let root = tempfile::tempdir().unwrap();
     let host = host(root.path());
-    let own = implementation::test_machine(&host, None).await;
+    implementation::test_machine(&host, None).await;
     let shown = call(&host, Local, "workflow_settings", json!({})).await;
     assert!(shown.ok, "{:?}", shown.message);
-    assert_eq!(shown.data["settings"]["supervisor"]["enabled"], false);
-    assert_eq!(shown.data["defaults"]["supervisor"]["looks_per_day"], 24);
-    assert_eq!(
-        shown.data["bounds"]["supervisor"]["session_seconds"],
-        json!([60, 600])
-    );
-    // On without an agent: refused, naming what is missing, and nothing is saved.
-    let bare = call(
-        &host,
-        Local,
-        "workflow_settings_update",
+    for part in ["settings", "defaults", "bounds"] {
+        assert!(shown.data[part].get("supervisor").is_none(), "{part}");
+    }
+    for change in [
         json!({"supervisor":{"enabled":true}}),
-    )
-    .await;
-    assert_eq!(bare.code, "invalid_input");
-    assert!(
-        bare.message
-            .unwrap()
-            .contains("machine, provider, model, effort")
-    );
-    // An agent not installed on its machine is refused like the director's.
-    let missing = call(
-        &host,
-        Local,
-        "workflow_settings_update",
-        json!({"supervisor":{"enabled":true,"machine":own,"provider":"codex","model":"synthetic-model-that-is-not-installed","effort":"low"}}),
-    )
-    .await;
-    assert_eq!(missing.code, "invalid_input", "{:?}", missing.message);
-    let message = missing.message.unwrap();
-    assert!(
-        message.contains("the workflow supervisor's machine")
-            && (message.contains("not installed") || message.contains("has no model")),
-        "{message}"
-    );
-    assert!(!stored_map(&host).contains("supervisor"));
-    // Its bounds alone change without an agent, merged with the defaults, and only they are written.
-    let bounds = call(
-        &host,
-        Local,
-        "workflow_settings_update",
-        json!({"supervisor":{"looks_per_day":12}}),
-    )
-    .await;
-    assert!(bounds.ok, "{:?}", bounds.message);
-    let saved = host
-        .state
-        .settings
-        .map()
-        .unwrap()
-        .workflow_settings
-        .supervisor;
-    assert_eq!(
-        (saved.looks_per_day, saved.session_seconds, saved.enabled),
-        (12, 180, false)
-    );
-    let out = call(
-        &host,
-        Local,
-        "workflow_settings_update",
-        json!({"supervisor":{"session_seconds":601}}),
-    )
-    .await;
-    assert_eq!(out.code, "invalid_input");
-    assert!(out.message.unwrap().contains("session_seconds"));
-    // null turns it off and clears it.
-    let cleared = call(
-        &host,
-        Local,
-        "workflow_settings_update",
         json!({"supervisor":null}),
-    )
-    .await;
-    assert!(cleared.ok, "{:?}", cleared.message);
-    assert!(
-        host.state
-            .settings
-            .map()
-            .unwrap()
-            .workflow_settings
-            .supervisor
-            .is_default()
-    );
-    // A machine credential reaches none of it.
-    let from_machine = call(
-        &host,
-        Machine,
-        "workflow_settings_update",
-        json!({"supervisor":{"looks_per_day":5}}),
-    )
-    .await;
-    assert!(!from_machine.ok);
+    ] {
+        let refused = call(&host, Local, "workflow_settings_update", change).await;
+        assert_eq!(refused.code, "state_conflict", "{:?}", refused.message);
+        assert!(refused.message.unwrap().contains("supervisor was retired"));
+    }
+    assert!(!stored_map(&host).contains("supervisor"));
 }
 
 #[tokio::test]

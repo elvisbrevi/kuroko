@@ -413,42 +413,6 @@ pub(crate) async fn conflicts(
     Ok(files)
 }
 
-/// Whether `branch` exists in `repository` (its catalog ID) now: a ref named exactly
-/// `refs/heads/BRANCH` in the repository's refs that start so.
-pub(crate) async fn branch_exists(
-    client: &Client,
-    key: &str,
-    catalog: &str,
-    organization: &str,
-    project: &str,
-    repository: &str,
-    branch: &str,
-) -> Result<bool> {
-    ensure!(
-        uuid::Uuid::parse_str(repository).is_ok() && repository.len() == 36,
-        "invalid repository ID"
-    );
-    ensure!(valid_branch(branch), "invalid branch name");
-    let source = source(catalog, organization)?;
-    let mut url = project_url(
-        &source,
-        project,
-        "dev.azure.com",
-        &["_apis", "git", "repositories", repository, "refs"],
-    )?;
-    url.query_pairs_mut()
-        .append_pair("filter", &format!("heads/{branch}"))
-        .append_pair("$top", &TOP.to_string());
-    let value = request(client, key, Method::GET, url, None).await?;
-    let page = value["value"]
-        .as_array()
-        .context("invalid Azure DevOps refs")?;
-    let wanted = format!("refs/heads/{branch}");
-    Ok(page
-        .iter()
-        .any(|r| r["name"].as_str() == Some(wanted.as_str())))
-}
-
 /// At most this many pushes of one repository are read, and this many branches kept.
 const PUSHES: usize = 100;
 const PUSHED_BRANCHES: usize = 20;
@@ -1710,58 +1674,6 @@ mod tests {
                 .is_err()
         );
         let requests = server.received_requests().await.unwrap();
-        assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
-        super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
-    }
-
-    #[tokio::test]
-    async fn a_branch_exists_only_when_its_exact_ref_is_listed_and_nothing_is_written() {
-        let server = MockServer::start().await;
-        super::super::TEST_SERVER
-            .with(|s| *s.borrow_mut() = Some(Url::parse(&server.uri()).unwrap()));
-        Mock::given(method("GET"))
-            .and(path(format!(
-                "/example/Payments/_apis/git/repositories/{REPO}/refs"
-            )))
-            .and(query_param("filter", "heads/feature/42"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":[
-                {"name":"refs/heads/feature/42-other","objectId":"a"},
-                {"name":"refs/heads/feature/42","objectId":"b"}
-            ]})))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!(
-                "/example/Payments/_apis/git/repositories/{REPO}/refs"
-            )))
-            .and(query_param("filter", "heads/feature/4"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":[
-                {"name":"refs/heads/feature/42","objectId":"b"}
-            ]})))
-            .mount(&server)
-            .await;
-        let client = Client::new();
-        let exists = |branch: &'static str| {
-            let client = client.clone();
-            async move {
-                branch_exists(
-                    &client,
-                    "key",
-                    CATALOG,
-                    "https://dev.azure.com/example",
-                    "Payments",
-                    REPO,
-                    branch,
-                )
-                .await
-            }
-        };
-        assert!(exists("feature/42").await.unwrap());
-        // A prefix of an existing branch is not that branch.
-        assert!(!exists("feature/4").await.unwrap());
-        assert!(exists("x;rm").await.is_err());
-        let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 2);
         assert!(requests.iter().all(|r| r.method.as_str() == "GET"));
         super::super::TEST_SERVER.with(|s| *s.borrow_mut() = None);
     }

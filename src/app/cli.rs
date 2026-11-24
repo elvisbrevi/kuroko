@@ -591,23 +591,8 @@ Knowledge
   workflows unpause [--project NAME] --confirmed
                            Ends that project's pause, or every pause; the runs go on in their order.
   workflows assign RUN WORKFLOW --confirmed   Gives an unassigned run an enabled workflow of its project.
-  workflows supervise RUN  The workflow supervisor looks at the run now (settings supervisor.*): code reads
-                           the run, why its sessions stopped, their summaries, the work item with its
-                           comments and history, its pull requests and branches; the supervisor's
-                           assessment, report checks (not_verified marks what code could not confirm),
-                           drafts and proposed actions are stored on the run. One look at a time.
-  workflows supervise --audit [--since TIME]
-                           An audit of the runs created since the last audit (or TIME, RFC 3339):
-                           each run's item, state, pull requests and unverified claims, the merged
-                           branches that still exist, and the findings left only in comments.
-  workflows supervision RUN              The supervisor's looks at the run, and any queued or running.
-  workflows audits [ID|latest]           The supervisor's audits, or one of them.
-  workflows act RUN LOOK ACTION [--note TEXT | --note-file PATH] [--chat ID] [--mention NAME…] --confirmed
-                           Carries out one action a look proposed (its id, a1…, or name), once, through
-                           the operation that does it: restart (with the drafted note, or yours),
-                           resume, cancel, pause_project, post_summary (to --chat). create_work_item
-                           prints the draft for Create request.
-  workflows dismiss RUN LOOK ACTION      Sets a proposed action aside.
+  workflows supervision RUN              What the retired workflow supervisor looked at in the run (read only).
+  workflows audits [ID|latest]           The retired supervisor's audits, or one of them (read only).
   workflows requeue RUN --ahead|--back   Moves a run that waits for a slot ahead, or back in its place.
   workflows summary RUN    The workflow director writes a progress summary of the run from its record
                            (stages, children, pull requests, block outcomes; Markdown, at most 4000
@@ -1144,8 +1129,6 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
     let mut body = json!({});
     let mut director = Value::Null;
     let mut director_changed = false;
-    let mut supervisor = Value::Null;
-    let mut supervisor_changed = false;
     let mut ready = Vec::new();
     // Each project's own director, in the order first named: `{project, director}`.
     let mut projects: Vec<Value> = Vec::new();
@@ -1220,39 +1203,6 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
                 director[&field["director.".len()..]] = json!(value);
                 director_changed = true;
             }
-            "supervisor" => {
-                ensure!(
-                    value == "none",
-                    "supervisor takes none (turns it off and clears it); set its fields with supervisor.enabled, .machine, .provider, .model, .effort and its bounds"
-                );
-                supervisor = Value::Null;
-                supervisor_changed = true;
-            }
-            _ if key.starts_with("supervisor.") => {
-                let field = &key["supervisor.".len()..];
-                if !supervisor.is_object() {
-                    supervisor = json!({});
-                }
-                supervisor[field] = match field {
-                    "enabled" => json!(match value.as_str() {
-                        "true" | "on" => true,
-                        "false" | "off" => false,
-                        _ => anyhow::bail!("supervisor.enabled takes true or false"),
-                    }),
-                    "machine" | "provider" | "model" | "effort" => json!(value),
-                    "looks_per_day"
-                    | "min_interval_minutes"
-                    | "wait_hours"
-                    | "offline_minutes"
-                    | "session_seconds" => json!(
-                        value
-                            .parse::<u32>()
-                            .with_context(|| format!("{key} takes a whole number"))?
-                    ),
-                    _ => anyhow::bail!("unknown setting {key}; consult --help"),
-                };
-                supervisor_changed = true;
-            }
             "ready_states" => {
                 let entry: Value = serde_json::from_str(value)
                     .context("ready_states takes JSON {organization?, project, states}")?;
@@ -1274,9 +1224,6 @@ fn settings_update(sets: &[(String, String)]) -> Result<Value> {
     }
     if director_changed {
         body["director"] = director;
-    }
-    if supervisor_changed {
-        body["supervisor"] = supervisor;
     }
     if !ready.is_empty() {
         body["ready_states"] = json!(ready);
@@ -1752,54 +1699,11 @@ async fn workflows_command(args: &[String]) -> Result<Reply> {
                 Err(reply) => return Ok(reply),
             }
         }
-        (Some("supervise"), _) if args.iter().any(|a| a == "--audit") => {
-            let mut body = json!({"audit":true});
-            if let Some(since) = option(args, "--since") {
-                body["since"] = json!(since);
-            }
-            ("workflow_supervise", body)
-        }
-        (Some("supervise"), _) => ("workflow_supervise", json!({"run":id(2)?})),
         (Some("supervision"), _) => ("workflow_supervision", json!({"run":id(2)?})),
         (Some("audits"), _) => match words.get(2) {
             Some(id) => ("workflow_supervision", json!({"audit":id})),
             None => ("workflow_supervision", json!({"audits":true})),
         },
-        (Some("act"), _) => {
-            let mut body = json!({"run":id(2)?,"look":id(3)?,"action":id(4)?});
-            match (option(args, "--note"), option(args, "--note-file")) {
-                (Some(_), Some(_)) => {
-                    anyhow::bail!("give --note TEXT or --note-file PATH, not both")
-                }
-                (Some(text), None) => body["note"] = json!(text),
-                (None, Some(path)) => body["note"] = json!(note_file(path)?),
-                (None, None) => {}
-            }
-            if let Some(chat) = option(args, "--chat") {
-                body["chat"] = json!(chat);
-            }
-            let mentions = options(args, "--mention");
-            if !mentions.is_empty() {
-                body["mentions"] = json!(mentions);
-            }
-            // The look's exact draft, read from the coordinator for the question.
-            if !confirmed {
-                let question = super::tools::question("workflow_supervision_act", &body)
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                if let Some(reply) = unconfirmed(args, question) {
-                    return Ok(reply);
-                }
-            }
-            body["confirmed"] = json!(true);
-            ("workflow_supervision_act", body)
-        }
-        (Some("dismiss"), _) => (
-            "workflow_supervision_dismiss",
-            json!({"run":id(2)?,"look":id(3)?,"action":id(4)?}),
-        ),
         (Some("requeue"), _) => {
             let ahead = args.iter().any(|a| a == "--ahead");
             let back = args.iter().any(|a| a == "--back");
@@ -2602,8 +2506,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | "--forget-service-token"
             | "--director"
             | "--ahead"
-            | "--back"
-            | "--audit" => {}
+            | "--back" => {}
             "--destination" | "--name" | "--existing" | "--to" | "--target" | "--label"
             | "--token-expires" | "--keep" | "--machine" | "--since" | "--until" | "--before"
             | "--from" | "--chat" | "--query" | "--wiki" | "--author" | "--project"
@@ -2948,12 +2851,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             ]
             | ["workflows", "findings"]
             | ["workflows", "assign", _, _]
-            | [
-                "workflows",
-                "summary" | "supervise" | "supervision" | "requeue",
-                _
-            ]
-            | ["workflows", "act" | "dismiss", _, _, _]
+            | ["workflows", "summary" | "supervision" | "requeue", _]
             | ["workflows", "audits"]
             | ["workflows", "audits", _]
             | ["workflows", "show" | "remove" | "enable" | "disable", _]
@@ -2974,9 +2872,6 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             | ["index", "status" | "refresh"]
             | ["index", "refresh", _]
     );
-    // An audit is asked without a run, a look with one.
-    let valid = valid
-        || (p.as_slice() == ["workflows", "supervise"] && args.iter().any(|a| a == "--audit"));
     ensure!(valid, "unknown command or invalid argument count");
     for (flag, allowed) in [
         ("--offline", p[0] == "doctor"),
@@ -3062,7 +2957,6 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                             | "restart"
                             | "pause"
                             | "unpause"
-                            | "act"
                             | "skip-wait"
                             | "update-branch"
                             | "accept-found",
@@ -3220,8 +3114,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
             "--since",
             p.as_slice().starts_with(&["teams", "messages"])
                 || p.as_slice().starts_with(&["teams", "search"])
-                || p.as_slice() == ["audit", "list"]
-                || p.as_slice() == ["workflows", "supervise"],
+                || p.as_slice() == ["audit", "list"],
         ),
         (
             "--until",
@@ -3236,11 +3129,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                 || p.as_slice() == ["audit", "list"],
         ),
         ("--mine", p.as_slice() == ["teams", "messages"]),
-        (
-            "--chat",
-            p.as_slice().starts_with(&["teams", "search"])
-                || matches!(p.as_slice(), ["workflows", "act", _, _, _]),
-        ),
+        ("--chat", p.as_slice().starts_with(&["teams", "search"])),
         ("--from", p.as_slice().starts_with(&["teams", "search"])),
         (
             "--source",
@@ -3276,22 +3165,17 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
                     "workflows",
                     "restart" | "resolve-finding" | "dismiss-finding",
                     _
-                ] | ["workflows", "act", _, _, _]
-                    | ["workflows", "leads", "answer", _, _]
+                ] | ["workflows", "leads", "answer", _, _]
             ),
         ),
         (
             "--note-file",
-            matches!(
-                p.as_slice(),
-                ["workflows", "restart", _] | ["workflows", "act", _, _, _]
-            ),
+            matches!(p.as_slice(), ["workflows", "restart", _]),
         ),
         (
             "--ahead",
             matches!(p.as_slice(), ["workflows", "requeue", _]),
         ),
-        ("--audit", p.as_slice() == ["workflows", "supervise"]),
         (
             "--back",
             matches!(p.as_slice(), ["workflows", "requeue", _]),
@@ -3334,10 +3218,7 @@ pub(super) fn validate_args(args: &[String]) -> Result<()> {
         ),
         (
             "--mention",
-            matches!(
-                p.as_slice(),
-                ["workflows", "summary", _] | ["workflows", "act", _, _, _]
-            ),
+            matches!(p.as_slice(), ["workflows", "summary", _]),
         ),
         ("--image", matches!(p.as_slice(), ["teams", "send", _])),
         ("--alt", matches!(p.as_slice(), ["teams", "send", _])),
@@ -4992,13 +4873,13 @@ mod wiki_tests {
             &["workflows", "pause", "--sessions"],
             &["workflows", "pause", "--note", "x", "--sessions", "stop"],
             &["workflows", "unpause", "--sessions", "finish"],
-            &["workflows", "supervise"],
-            &["workflows", "supervise", "r", "--note", "x"],
-            &["workflows", "supervise", "r", "--audit"],
+            // The retired supervisor's commands are gone.
+            &["workflows", "supervise", "r"],
+            &["workflows", "supervise", "--audit"],
+            &["workflows", "act", "r", "look", "a1", "--confirmed"],
+            &["workflows", "dismiss", "r", "look", "a1"],
             &["workflows", "audits", "a", "b"],
             &["workflows", "runs", "--audit"],
-            &["workflows", "act", "r", "look"],
-            &["workflows", "dismiss", "r", "look", "a1", "--confirmed"],
             &["workflows", "requeue", "r", "--confirmed"],
             &["workflows", "status", "r", "--ahead"],
             &["workflows", "summary", "r", "--chat", "19:x"],
@@ -5017,38 +4898,7 @@ mod wiki_tests {
             assert!(check(args).is_err(), "{args:?}");
         }
         for args in [
-            &["workflows", "supervise", "r"][..],
-            &["workflows", "supervision", "r"],
-            &[
-                "workflows",
-                "act",
-                "r",
-                "look",
-                "a1",
-                "--chat",
-                "19:x",
-                "--mention",
-                "Ana",
-                "--confirmed",
-            ],
-            &[
-                "workflows",
-                "act",
-                "r",
-                "look",
-                "restart",
-                "--note-file",
-                "n.md",
-            ],
-            &["workflows", "dismiss", "r", "look", "a2"],
-            &["workflows", "supervise", "--audit"],
-            &[
-                "workflows",
-                "supervise",
-                "--audit",
-                "--since",
-                "2026-11-10T00:00:00Z",
-            ],
+            &["workflows", "supervision", "r"][..],
             &["workflows", "audits"],
             &["workflows", "audits", "latest"],
             &["workflows", "requeue", "r", "--ahead"],
@@ -5102,31 +4952,8 @@ mod wiki_tests {
         ] {
             assert!(check(args).is_ok(), "{args:?}");
         }
-        let body = settings_update(&[
-            ("supervisor.enabled".into(), "true".into()),
-            ("supervisor.model".into(), "sonnet".into()),
-            ("supervisor.looks_per_day".into(), "12".into()),
-        ])
-        .unwrap();
-        assert_eq!(
-            body,
-            json!({"supervisor":{"enabled":true,"model":"sonnet","looks_per_day":12}})
-        );
-        assert_eq!(
-            settings_update(&[("supervisor".into(), "none".into())]).unwrap(),
-            json!({"supervisor":null})
-        );
-        for bad in [
-            ("supervisor.enabled", "maybe"),
-            ("supervisor.colour", "red"),
-            ("supervisor.session_seconds", "long"),
-            ("supervisor", "off"),
-        ] {
-            assert!(
-                settings_update(&[(bad.0.into(), bad.1.into())]).is_err(),
-                "{bad:?}"
-            );
-        }
+        // The retired supervisor has no settings.
+        assert!(settings_update(&[("supervisor.enabled".into(), "true".into())]).is_err());
         for args in [
             &[
                 "workflows",
