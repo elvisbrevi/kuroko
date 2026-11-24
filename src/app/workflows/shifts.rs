@@ -981,7 +981,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 20] = [
+const TOOLS: [(&str, &str, Schema); 22] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1056,6 +1056,16 @@ const TOOLS: [(&str, &str, Schema); 20] = [
         "lead_set_item_state",
         "Move the run's work item, or one of its children, to a state its type allows, with the closing fields its work item guide lists (reference names, from the runner's delivery report and evidence). Written once with the Azure source's token and recorded; never retried. Applied only where your workflow lets you decide; otherwise recorded.",
         || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}, "state": {"type": "string"}, "fields": {"type": "object", "additionalProperties": {"type": "string"}}, "reason": {"type": "string"}}, "required": ["run", "state", "reason"]}),
+    ),
+    (
+        "lead_propose_work_item",
+        "Draft the work item a finding needs, as a child of its run's item: the type, title, description and the fields its work item guide asks for (reference names). Code checks it against the live type; it waits for the person's approval in Kuroko (a blocking one may be created by you where your workflow lets you). Never ask the person in an answer to approve it.",
+        || json!({"type": "object", "properties": {"finding": {"type": "string"}, "type": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "fields": {"type": "array", "items": {"type": "object", "properties": {"reference": {"type": "string"}, "value": {"type": "string"}}, "required": ["reference", "value"]}}}, "required": ["finding", "type", "title", "description"]}),
+    ),
+    (
+        "lead_create_work_item",
+        "Create the drafted work item of a blocking finding now, where your workflow lets you: at most one per run and three a day for the workflow, never for a run whose item came from a finding; sent once, never retried.",
+        || json!({"type": "object", "properties": {"finding": {"type": "string"}, "reason": {"type": "string"}}, "required": ["finding", "reason"]}),
     ),
     (
         "lead_move_ahead",
@@ -1248,6 +1258,80 @@ async fn call(
             };
             azure.lead_read(&host.state, workflow, read).await
         }
+        "lead_propose_work_item" => {
+            let id = args["finding"].as_str().unwrap_or_default();
+            let mut finding = host
+                .state
+                .workflows
+                .findings
+                .get(id)
+                .map_err(|e| e.to_string())?
+                .filter(|f| ids.contains(&f.workflow))
+                .ok_or_else(|| format!("{id} is not a finding of your workflows."))?;
+            if !matches!(finding.state.as_str(), "open" | "proposed") {
+                return Err(format!(
+                    "Finding {id} is {}: it takes no draft.",
+                    finding.state
+                ));
+            }
+            let draft = json!({"type": text("type", 120), "title": text("title", 200),
+                "description": text("description", 16_000),
+                "fields": args["fields"].as_array().cloned().unwrap_or_default()});
+            let run = host
+                .state
+                .workflows
+                .db
+                .get(&finding.run)
+                .ok()
+                .flatten()
+                .ok_or("The finding's run is gone.")?;
+            let parent = azure
+                .item(
+                    &host.state,
+                    run.item.source.as_deref(),
+                    Some(&run.item.project),
+                    run.item.id,
+                )
+                .await?;
+            azure
+                .check_child(&host.state, &run, &parent, &draft)
+                .await?;
+            // Saved under the creations' lock, on the finding as it is now: never over a
+            // creation that started meanwhile.
+            let creating = host.state.workflows.lock("finding-create");
+            let _one = creating.lock().await;
+            finding = host
+                .state
+                .workflows
+                .findings
+                .get(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("The finding is gone.")?;
+            if !matches!(finding.state.as_str(), "open" | "proposed") {
+                return Err(format!(
+                    "Finding {id} is {}: it takes no draft.",
+                    finding.state
+                ));
+            }
+            finding.draft = Some(draft);
+            finding.state = "proposed".into();
+            finding.updated_at = now.max(finding.updated_at + 1);
+            host.state
+                .workflows
+                .findings
+                .save(&finding)
+                .map_err(|e| e.to_string())?;
+            note(Entry {
+                at: now,
+                kind: "decision".into(),
+                run: Some(finding.run.clone()),
+                decision: Some("propose_work_item".into()),
+                text: finding.title.clone(),
+                result: Some("proposed: waits for the person's approval".into()),
+                ..Default::default()
+            });
+            Ok(json!({"proposed": true, "finding": finding.id}))
+        }
         "lead_findings" => {
             let about = match args["run"].as_str() {
                 Some(_) => Some(run("run")?.id),
@@ -1309,15 +1393,37 @@ async fn call(
         | "lead_keep_waiting"
         | "lead_move_ahead"
         | "lead_continue_runner"
-        | "lead_set_item_state" => {
+        | "lead_set_item_state"
+        | "lead_create_work_item" => {
             use crate::workflows::lead::May;
-            let run = run("run")?;
+            // A finding's work item: its run is the finding's.
+            let run = if tool == "lead_create_work_item" {
+                let id = args["finding"].as_str().unwrap_or_default();
+                let finding = host
+                    .state
+                    .workflows
+                    .findings
+                    .get(id)
+                    .map_err(|e| e.to_string())?
+                    .filter(|f| ids.contains(&f.workflow))
+                    .ok_or_else(|| format!("{id} is not a finding of your workflows."))?;
+                host.state
+                    .workflows
+                    .db
+                    .get(&finding.run)
+                    .ok()
+                    .flatten()
+                    .ok_or("The finding's run is gone.")?
+            } else {
+                run("run")?
+            };
             let (what, word) = match tool {
                 "lead_settle_child" => (May::Settle, "settle"),
                 "lead_close_run" => (May::Close, "close"),
                 "lead_keep_waiting" => (May::Wait, "keep_waiting"),
                 "lead_continue_runner" => (May::Continue, "continue"),
                 "lead_set_item_state" => (May::ItemStates, "set_item_state"),
+                "lead_create_work_item" => (May::CreateBlocking, "create_work_item"),
                 _ => (May::Wait, "move_ahead"),
             };
             // What the workflow allows now: a change applies from the next decision.
@@ -1341,6 +1447,11 @@ async fn call(
             );
             let result = if !allowed {
                 None
+            } else if word == "create_work_item" {
+                Some(
+                    create_blocking(host, azure, args["finding"].as_str().unwrap_or_default())
+                        .await,
+                )
             } else if word == "set_item_state" {
                 Some(set_item_state(host, azure, &run.id, args).await)
             } else if word == "continue" {
@@ -1481,6 +1592,8 @@ async fn call(
                 note: None,
                 created_at: now,
                 updated_at: now,
+                draft: None,
+                created: None,
             };
             host.state
                 .workflows
@@ -2266,4 +2379,14 @@ async fn set_item_state(
     written.map(|()| json!({"item": item, "state": wanted, "written": true})).map_err(|_| {
         format!("The change was not confirmed ({outcome}): it is not retried; the person looks at #{item}.")
     })
+}
+
+/// A blocking finding's work item, created by its workflow's lead from its draft within the
+/// caps `findings::create` checks under its lock.
+async fn create_blocking(
+    host: &Arc<Host>,
+    azure: &engine::Azure,
+    id: &str,
+) -> std::result::Result<Value, String> {
+    super::findings::create(host, azure, id, "lead", None).await
 }

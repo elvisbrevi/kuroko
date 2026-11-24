@@ -86,6 +86,8 @@ pub enum May {
     Continue,
     /// Move the state and closing fields of the run's item and its children (0.20.12).
     ItemStates,
+    /// Create a blocking finding's work item by itself, within the caps (0.20.13).
+    CreateBlocking,
 }
 impl May {
     /// The newest release that cannot read it in a workflow's lead.
@@ -95,6 +97,7 @@ impl May {
             May::Wait => "0.20.9",
             May::Continue => "0.20.10",
             May::ItemStates => "0.20.11",
+            May::CreateBlocking => "0.20.12",
         }
     }
     /// What allowing it means, for the confirmation of a workflow's save.
@@ -102,6 +105,9 @@ impl May {
         match self {
             May::Settle => {
                 "settle a child with the branches, pull requests or Wiki pages code verifies it delivered, after which the run goes on by itself (its next child is coded)"
+            }
+            May::CreateBlocking => {
+                "create the work item of a blocking finding from its draft by itself, at most one per run and three a day for this workflow, never for a run whose item came from a finding; any other finding's work item waits for your approval"
             }
             May::ItemStates => {
                 "move the state of the run's work item and its children to a state their type allows, with the fields their work item guide lists, written with the Azure source's personal access token; its coding agents then report instead of writing work items"

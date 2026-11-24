@@ -722,6 +722,11 @@ run (any state but `done` and `cancelled`).
   (states the type allows, fields its work item guide lists), each change written once with the
   Azure source's token and recorded on the run; out of shadow its coding agents report instead of
   writing work items, whatever `allow` says.
+  A lead may draft the work item a finding needs (`lead_propose_work_item`): the finding is then
+  `proposed` and `kuroko workflows approve-finding ID --seen UPDATED_AT --confirmed` (MCP `workflow_finding_approve`, with the finding's `updated_at` as its draft was shown)
+  creates it once, as a child of its run's item (`item_created` with its link, or `uncertain`,
+  never sent again); with `create_blocking` it creates a blocking finding's item by itself, at most
+  one per run and three a day.
   Each decision is journaled with what code did; in shadow it is only recorded.
 - **What was delivered without its report:** when a coding run ends without a `Branch:` line
   (or does not end done), the engine reads, with the source's read credential and only within

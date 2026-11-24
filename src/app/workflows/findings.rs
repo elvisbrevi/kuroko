@@ -2,6 +2,7 @@
 //! someone must know or decide, reported through its run's tools (`finding_report`) and kept
 //! here once per report, in `workflow_findings` in `workflows.db`. Nothing here writes outside
 //! this record: a finding is listed, resolved or dismissed by the person.
+use super::engine;
 use super::record::Run;
 use super::runs::require_engine;
 use super::*;
@@ -34,6 +35,14 @@ pub(in crate::app) struct Finding {
     pub note: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// The work item its workflow's lead drafted for it (`proposed`), as a child of the run's
+    /// item: type, title, description and fields (0.20.13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<Value>,
+    /// The work item created from that draft, once: its ID and verified link, who approved it
+    /// (`person`, or `lead` for a blocking finding its workflow lets it create) and when.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<Value>,
 }
 
 /// The findings of `workflows.db` (its own connection beside the runs').
@@ -51,7 +60,13 @@ impl Findings {
             CREATE INDEX IF NOT EXISTS workflow_findings_workflow ON workflow_findings(workflow_id, created_at);
             CREATE INDEX IF NOT EXISTS workflow_findings_run ON workflow_findings(run_id, created_at);",
         )?;
-        Ok(Self(std::sync::Mutex::new(db)))
+        let findings = Self(std::sync::Mutex::new(db));
+        // A creation the host stopped in the middle of may or may not have reached Azure DevOps.
+        for mut finding in findings.list(None, None, Some("sending"), -1)? {
+            finding.state = "uncertain".into();
+            findings.save(&finding)?;
+        }
+        Ok(findings)
     }
     /// Keep a finding once per report (`implementation run:seq`).
     pub(in crate::app) fn insert(&self, finding: &Finding) -> Result<()> {
@@ -104,7 +119,7 @@ impl Findings {
         }
         Ok(found)
     }
-    fn get(&self, id: &str) -> Result<Option<Finding>> {
+    pub(in crate::app) fn get(&self, id: &str) -> Result<Option<Finding>> {
         let db = self.0.lock().unwrap();
         let payload: Option<String> = rusqlite::OptionalExtension::optional(db.query_row(
             "SELECT payload FROM workflow_findings WHERE id=?1",
@@ -113,7 +128,7 @@ impl Findings {
         ))?;
         Ok(payload.and_then(|p| serde_json::from_str(&p).ok()))
     }
-    fn save(&self, finding: &Finding) -> Result<()> {
+    pub(in crate::app) fn save(&self, finding: &Finding) -> Result<()> {
         self.0.lock().unwrap().execute(
             "UPDATE workflow_findings SET state=?2, payload=?3 WHERE id=?1",
             params![finding.id, finding.state, serde_json::to_string(finding)?],
@@ -160,6 +175,8 @@ pub(in crate::app) fn record(state: &DesktopState, run: &Run, index: usize, obse
             note: None,
             created_at: at,
             updated_at: at,
+            draft: None,
+            created: None,
         };
         if let Err(error) = state.workflows.findings.insert(&finding) {
             tracing::warn!(event = "workflow_finding_unrecorded", run = %run.id, error = %error);
@@ -197,7 +214,16 @@ pub(in crate::app) fn operation(
         "workflow_findings" => {
             let a: ListArgs = parse(args)?;
             if let Some(word) = a.state.as_deref()
-                && !matches!(word, "open" | "resolved" | "dismissed")
+                && !matches!(
+                    word,
+                    "open"
+                        | "resolved"
+                        | "dismissed"
+                        | "proposed"
+                        | "sending"
+                        | "item_created"
+                        | "uncertain"
+                )
             {
                 return Err(invalid("A finding's state is open, resolved or dismissed."));
             }
@@ -216,13 +242,22 @@ pub(in crate::app) fn operation(
         }
         "workflow_finding_resolve" | "workflow_finding_dismiss" => {
             let a: SettleArgs = parse(args)?;
-            let mut finding = state
+            // An open finding, a draft the person turns down, or one whose uncertain item they
+            // checked by hand; never while its item is being created.
+            let creating = state.workflows.lock("finding-create");
+            let Ok(_one) = creating.try_lock() else {
+                return Err(conflict(
+                    "A finding's work item is being created: try again in a moment.",
+                ));
+            };
+            let finding = state
                 .workflows
                 .findings
                 .get(&a.finding)
                 .map_err(fail)?
                 .ok_or_else(|| invalid(format!("Finding {} does not exist.", a.finding)))?;
-            if finding.state != "open" {
+            let mut finding = finding;
+            if !matches!(finding.state.as_str(), "open" | "proposed" | "uncertain") {
                 return Err(conflict(format!(
                     "Finding {} is already {}.",
                     finding.id, finding.state
@@ -251,4 +286,155 @@ pub(in crate::app) fn operation(
         }
         _ => Err(invalid("Unknown workflow operation.")),
     }
+}
+
+/// Create the work item a finding's draft describes, once (`workflow_finding_approve` by the
+/// person, who names the draft they saw by the finding's `updated_at`, or a blocking finding by
+/// its workflow's lead within the caps): checked against the live type and the token first,
+/// recorded `sending` before it is sent, then `item_created` with its link or `uncertain`, and
+/// never sent again. The send outlives its caller (a dropped request, a lead's turn that ends).
+pub(in crate::app) async fn create(
+    host: &Arc<Host>,
+    azure: &engine::Azure,
+    id: &str,
+    by: &str,
+    seen: Option<i64>,
+) -> Result<Value, String> {
+    let state = &host.state;
+    // One creation at a time on the account: a finding is never sent twice, and the caps are
+    // counted with nothing else being created.
+    let lock = state.workflows.lock("finding-create");
+    let _one = lock.lock().await;
+    let findings = &state.workflows.findings;
+    let mut finding = findings
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no finding {id}.")))?;
+    if finding.state != "proposed" {
+        return Err(conflict(format!(
+            "Finding {id} is {}: only a proposed draft is created, once.",
+            finding.state
+        )));
+    }
+    if seen.is_some_and(|at| at != finding.updated_at) {
+        return Err(conflict(format!(
+            "The draft of finding {id} changed since you saw it: look at it again."
+        )));
+    }
+    let draft = finding
+        .draft
+        .clone()
+        .ok_or_else(|| conflict("The finding has no draft."))?;
+    let run = state
+        .workflows
+        .db
+        .get(&finding.run)
+        .map_err(fail)?
+        .ok_or_else(|| invalid("The finding's run is gone."))?;
+    if by == "lead" {
+        lead_caps(
+            &findings.list(None, None, None, -1).map_err(fail)?,
+            &finding,
+            &run,
+        )?;
+    }
+    let parent = azure
+        .item(
+            state,
+            run.item.source.as_deref(),
+            Some(&run.item.project),
+            run.item.id,
+        )
+        .await?;
+    azure.check_child(state, &run, &parent, &draft).await?;
+    azure.ready_to_create(state, &run).await?;
+    let now = chrono::Utc::now().timestamp();
+    finding.state = "sending".into();
+    finding.created = Some(json!({"by": by, "at": now}));
+    finding.updated_at = now;
+    findings.save(&finding).map_err(fail)?;
+    let task = {
+        let (host, azure, run, draft) = (host.clone(), azure.clone(), run.clone(), draft.clone());
+        tokio::spawn(async move { azure.create_child(&host.state, &run, &parent, &draft).await })
+    };
+    let sent = task.await.unwrap_or_else(|_| Err("uncertain".into()));
+    finding.updated_at = chrono::Utc::now().timestamp();
+    let unsent = sent.as_ref().is_err_and(|e| e.contains("unsent: "));
+    match &sent {
+        Ok(item) => {
+            finding.state = "item_created".into();
+            finding.created =
+                Some(json!({"id": item["id"], "url": item["url"], "by": by, "at": now}));
+        }
+        // Nothing left: it is a proposal again.
+        Err(_) if unsent => {
+            finding.state = "proposed".into();
+            finding.created = None;
+        }
+        Err(_) => finding.state = "uncertain".into(),
+    }
+    findings.save(&finding).map_err(fail)?;
+    match sent {
+        Ok(_) => Ok(json!({"finding": finding})),
+        Err(reason) if unsent => Err(format!(
+            "The work item of finding {id} was not sent: {reason}"
+        )),
+        Err(_) => Err(format!(
+            "The work item of finding {id} was not confirmed: it is never sent again; look in Azure DevOps whether it exists."
+        )),
+    }
+}
+
+/// The most blocking findings' work items a lead creates for one run, and for one workflow a day.
+const BLOCKING_PER_RUN: usize = 1;
+const BLOCKING_PER_DAY: usize = 3;
+
+/// What a lead may create by itself: a blocking finding's item, at most one per run and three a
+/// day per workflow (those it sent, confirmed or not), never for a run whose own item came from
+/// a finding.
+fn lead_caps(all: &[Finding], finding: &Finding, run: &Run) -> Result<(), String> {
+    if finding.severity != "blocking" {
+        return Err(conflict(
+            "Only a blocking finding's work item is created without the person: propose it.",
+        ));
+    }
+    let by_lead = |f: &&Finding| f.created.as_ref().is_some_and(|c| c["by"] == "lead");
+    if all
+        .iter()
+        .filter(by_lead)
+        .filter(|f| f.run == finding.run)
+        .count()
+        >= BLOCKING_PER_RUN
+    {
+        return Err(conflict(
+            "This run has its blocking finding's work item already: propose this one for the person.",
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let today = all
+        .iter()
+        .filter(by_lead)
+        .filter(|f| f.workflow == finding.workflow)
+        .filter(|f| {
+            f.created
+                .as_ref()
+                .and_then(|c| c["at"].as_i64())
+                .is_some_and(|at| now - at < 86_400)
+        })
+        .count();
+    if today >= BLOCKING_PER_DAY {
+        return Err(conflict(
+            "This workflow had three blocking findings' work items in a day: propose this one for the person.",
+        ));
+    }
+    if all.iter().any(|f| {
+        f.created
+            .as_ref()
+            .is_some_and(|c| c["id"].as_u64() == Some(run.item.id))
+    }) {
+        return Err(conflict(
+            "This run's item came from a finding: propose this one for the person.",
+        ));
+    }
+    Ok(())
 }

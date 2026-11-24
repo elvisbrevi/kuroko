@@ -174,6 +174,8 @@ function foundPanels(run, { twice, refresh, resumable }) {
 
 /** A finding's severity, as the person reads it. */
 const SEVERITY = { blocking: 'Blocking', important: 'Important', minor: 'Minor' };
+/** A finding's state, as the person reads it. */
+const FINDING_STATES = { resolved: 'Resolved', dismissed: 'Dismissed', proposed: 'Work item proposed', sending: 'Being created', item_created: 'Work item created', uncertain: 'Not confirmed' };
 /**
  * Findings the runs' coding sessions reported (`workflow_findings`): severity, title, detail,
  * evidence and its work item; an open one is resolved or dismissed (`workflow_finding_resolve`,
@@ -184,11 +186,27 @@ function findingsPanel(findings, refresh, id, title) {
   const rows = findings.map(f => el('div', { class: 'resource run-finding', 'data-finding': f.id },
     el('div', { class: 'resource-head' }, badge(t(SEVERITY[f.severity] ?? f.severity), f.severity === 'blocking' ? 'warn' : f.severity === 'important' ? 'info' : 'muted'),
       el('strong', { textContent: f.title }), el('span', { class: 'grow' }),
-      f.state === 'open' ? null : badge(f.state === 'resolved' ? t('Resolved') : t('Dismissed'), 'muted')),
+      f.state === 'open' ? null : badge(t(FINDING_STATES[f.state] ?? f.state), f.state === 'uncertain' ? 'warn' : 'muted')),
     f.detail ? el('p', { textContent: f.detail }) : null,
     f.evidence ? el('p', { class: 'hint', textContent: t('Evidence: {text}', { text: f.evidence }) }) : null,
     el('p', { class: 'resource-facts' }, el('small', {}, link(`#${f.item}`, f.item_url), ` · ${when(f.created_at)}${f.note ? ` · ${f.note}` : ''}`)),
-    f.state === 'open' ? el('div', { class: 'actions' }, ...[['workflow_finding_resolve', t('Mark resolved')], ['workflow_finding_dismiss', t('Dismiss')]].map(([method, label]) => {
+    // The work item its lead drafted: approved here, created once.
+    f.draft ? el('div', { class: 'hint' }, el('p', { textContent: t('Drafted work item: {type} «{title}»', { type: f.draft.type, title: f.draft.title }) }), el('p', { textContent: f.draft.description ?? '' })) : null,
+    f.created?.url ? el('p', {}, t('Created as '), link(`#${f.created.id}`, f.created.url)) : null,
+    f.state === 'uncertain' ? el('p', { class: 'callout warn', textContent: t('It was sent but not confirmed: look in Azure DevOps whether it exists; it is never sent again.') }) : null,
+    f.state === 'proposed' ? el('div', { class: 'actions' }, (() => {
+      const approve = el('button', { type: 'button', class: 'small', textContent: t('Approve and create') });
+      approve.onclick = () => {
+        if (approve.dataset.armed !== 'true') {
+          approve.dataset.armed = 'true'; approve.textContent = t('Confirm: create it in Azure DevOps');
+          setTimeout(() => { approve.dataset.armed = ''; approve.textContent = t('Approve and create'); }, 4000);
+          return;
+        }
+        busy(approve, async () => { await invoke('workflow_finding_approve', { finding: f.id, seen: f.updated_at, confirmed: true }); done(t('Work item created.')); await refresh(); });
+      };
+      return approve;
+    })()) : null,
+    ['open', 'proposed'].includes(f.state) ? el('div', { class: 'actions' }, ...[['workflow_finding_resolve', t('Mark resolved')], ['workflow_finding_dismiss', t('Dismiss')]].map(([method, label]) => {
       const button = el('button', { type: 'button', class: 'secondary small', textContent: label });
       button.onclick = () => busy(button, async () => { await invoke(/** @type {any} */ (method), { finding: f.id }); done(t('Finding updated.')); await refresh(); });
       return button;
