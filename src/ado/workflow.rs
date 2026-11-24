@@ -60,6 +60,12 @@ pub struct PullRequest {
     /// The person resumed the run with this pull request abandoned: it no longer stops it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub accepted: bool,
+    /// Whether it completes itself once approved and deletes its source branch then, as read
+    /// while active (0.20.14; none from older reads).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_complete: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_source_branch: Option<bool>,
 }
 
 /// A reviewer of a pull request and the vote it cast.
@@ -245,6 +251,10 @@ fn parse_pull(
             .is_string()
             .then(|| text(&pull["lastMergeSourceCommit"]["commitId"], 64)),
         source: None,
+        auto_complete: (pull["status"] == "active")
+            .then(|| pull["autoCompleteSetBy"]["id"].is_string()),
+        delete_source_branch: (pull["status"] == "active")
+            .then(|| pull["completionOptions"]["deleteSourceBranch"] == true),
         created_by: pull["createdBy"]["id"]
             .is_string()
             .then(|| text(&pull["createdBy"]["id"], 64)),

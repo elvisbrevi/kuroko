@@ -887,3 +887,125 @@ async fn a_finding_s_work_item_is_created_once_by_the_person_or_its_lead_within_
         .count();
     assert_eq!(posts, 2);
 }
+
+#[tokio::test]
+async fn an_unapproved_pull_request_gets_its_support_task_once_and_missing_settings_a_finding() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::ProcessItems];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    // The norms' work item has a guide.
+    crate::store::organization::OrganizationStore::save_guide(
+        &crate::store::organization::LocalOrganization::new(&bench.host.state.settings),
+        &crate::work_items::Guide {
+            id: "support".into(),
+            provider: "azure".into(),
+            kind: "Task".into(),
+            name: "Revisión PR".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    bench.mode("mode", "done");
+    let id = bench.start(TASK).await;
+    let opened = (chrono::Utc::now() - chrono::Duration::minutes(20)).to_rfc3339();
+    let url = "https://dev.azure.com/example/Payments/_git/payments-web/pullrequest/21";
+    bench.catalog.set_pulls(
+        WEB,
+        "feature/child-1",
+        vec![crate::ado::workflow::PullRequest {
+            id: 21,
+            repository: WEB.into(),
+            title: "PR 21".into(),
+            status: "active".into(),
+            url: url.into(),
+            created_at: Some(opened),
+            auto_complete: Some(false),
+            delete_source_branch: Some(true),
+            ..Default::default()
+        }],
+    );
+    let due = bench.until(&id, |r| !r.support_due.is_empty()).await;
+    assert_eq!(due.support_due, [url]);
+    // Missing auto-complete is a finding, once.
+    let findings = bench
+        .host
+        .state
+        .workflows
+        .findings
+        .list(None, Some(&id), None, -1)
+        .unwrap();
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|f| f.title.contains("without auto-complete"))
+            .count(),
+        1
+    );
+    let call = |n: u32| {
+        json!({"type":"control_request","request_id":format!("m{n}"),"request":{"subtype":"mcp_message","server_name":"kuroko",
+            "message":{"jsonrpc":"2.0","id":n,"method":"tools/call","params":{"name":"lead_create_process_item","arguments":{"run": id, "pull_request": url, "type": "Task", "title": "Revisión PR 21", "description": "Review pull request 21.", "reason": "Not approved by itself."}}}}}).to_string()
+    };
+    fs::write(
+        bench.log.join("lead_call"),
+        [call(1), call(2)].join("\n") + "\n",
+    )
+    .unwrap();
+    let decided = look(&bench, "create_process_item", 2).await;
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let results: Vec<String> = decided
+        .journal
+        .iter()
+        .filter(|e| e.decision.as_deref() == Some("create_process_item"))
+        .filter_map(|e| e.result.clone())
+        .take(2)
+        .collect();
+    assert_eq!(results[0], "applied", "{results:?}");
+    assert!(
+        results[1].contains("not due") || results[1].contains("never sent twice"),
+        "{results:?}"
+    );
+    let mut run = bench.run(&id);
+    assert_eq!(run.process_items.len(), 1);
+    assert_eq!(run.process_items[0]["state"], "created");
+    assert!(run.support_due.is_empty());
+    // One a stopped host left sending may or may not exist: uncertain, and the person is told.
+    run.process_items[0]["state"] = json!("sending");
+    bench.host.state.workflows.db.save(&run).unwrap();
+    bench
+        .until(&id, |r| r.process_items[0]["state"] == "uncertain")
+        .await;
+    let findings = bench
+        .host
+        .state
+        .workflows
+        .findings
+        .list(None, Some(&id), None, -1)
+        .unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.title == "Review support task not confirmed")
+    );
+    bench.release();
+}
+
+#[test]
+fn a_pull_request_is_approved_by_a_vote_of_five_or_ten_from_someone_else() {
+    let mut pull = crate::ado::workflow::PullRequest {
+        created_by: Some("author".into()),
+        ..Default::default()
+    };
+    let vote = |id: &str, vote: i32| crate::ado::workflow::Reviewer {
+        id: id.into(),
+        name: id.into(),
+        vote,
+    };
+    pull.reviewers = vec![vote("author", 10), vote("other", 0)];
+    assert!(!crate::app::workflows::engine::approved(&pull));
+    pull.reviewers.push(vote("reviewer", 5));
+    assert!(crate::app::workflows::engine::approved(&pull));
+}

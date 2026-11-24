@@ -3105,6 +3105,8 @@ const UI_CATALOG = { es: {
   "Created as ": "Creado como ",
   "It was sent but not confirmed: look in Azure DevOps whether it exists; it is never sent again.": "Se envió pero no se confirmó: revisa en Azure DevOps si existe; nunca se vuelve a enviar.",
   "Approve and create": "Aprobar y crear",
+  "Create the norms' work items": "Crear los elementos de las normas",
+  "A pull request's review support task, once, when it was not approved by itself within 15 minutes.": "La tarea de apoyo de revisión de un pull request, una vez, cuando no se aprobó solo en 15 minutos.",
   "Confirm: create it in Azure DevOps": "Confirma: crearlo en Azure DevOps",
   "Work item created.": "Elemento creado.",
   "Create blocking findings' items": "Crear elementos de hallazgos bloqueantes",
