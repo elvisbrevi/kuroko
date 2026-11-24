@@ -71,7 +71,7 @@ gui = []
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
-jsonwebtoken = { version = "10.3", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12.0", default-features = false, features = ["aws_lc_rs"] }
 aes-gcm-siv = "0.11"
 aws-lc-rs = "1"
 base64 = "0.23"
