@@ -554,3 +554,90 @@ async fn a_lead_keeps_a_run_waiting_past_the_limit_but_never_past_sixty_days() {
     bench.offset.store(40 * 86_400, Ordering::SeqCst);
     bench.state(&id, Phase::NeedsAttention).await;
 }
+
+#[tokio::test]
+async fn a_lead_continues_a_cut_runner_twice_at_most() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::Continue];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "fail");
+    let id = bench.start(TASK).await;
+    let cut = bench.state(&id, Phase::NeedsAttention).await;
+    assert_eq!(cut.stopped_in, Some(Phase::Coding));
+    let child = cut.children[0].id;
+    let call = json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+        "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_continue_runner","arguments":{"run": id, "child": child, "message": "Finish the rounding fix.", "reason": "It was cut before its report."}}}}});
+    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+    // Continued in its own conversation; cut again, continued again; then the person decides.
+    let results = |shift: &super::super::shifts::Shift| -> Vec<String> {
+        shift
+            .journal
+            .iter()
+            .filter(|e| e.decision.as_deref() == Some("continue"))
+            .filter_map(|e| e.result.clone())
+            .collect()
+    };
+    let third = look(&bench, "continue", 3).await;
+    let seen = results(&third);
+    assert_eq!(seen[0], "applied", "{seen:?}");
+    assert_eq!(seen[1], "applied", "{seen:?}");
+    assert!(seen[2].contains("continued 2 times"), "{seen:?}");
+    let run = bench.run(&id);
+    assert_eq!(run.children[0].continuations, 2);
+    assert_eq!(bench.count("starts"), 3);
+    // Each continuation is one more turn of the cut session, with its lead's note.
+    let continued = fs::read_to_string(bench.log.join("coding.2")).unwrap();
+    assert!(
+        continued.contains("Your session stopped before its final report"),
+        "{continued}"
+    );
+    assert!(
+        continued.contains("Finish the rounding fix."),
+        "{continued}"
+    );
+    // The session the first coding run recorded, which the continuation resumes.
+    let original = cut.children[0].coding.clone().unwrap();
+    let session = crate::app::implementation::observe(&bench.host, &bench.machine, &original.id)
+        .await
+        .unwrap()
+        .unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let args = fs::read_to_string(bench.log.join("coding_args.2")).unwrap();
+    assert!(
+        args.lines().any(|a| a == format!("--session={session}")),
+        "{session}: {args}"
+    );
+    assert!(bench.catalog.only_reads());
+}
+
+#[tokio::test]
+async fn a_continued_runner_that_finishes_delivers_its_branch() {
+    let bench = Bench::new().await;
+    lead_to(&bench);
+    let mut map = bench.host.state.settings.map().unwrap();
+    let lead = map.workflows[0].lead.as_mut().unwrap();
+    lead.may = vec![crate::workflows::lead::May::Continue];
+    lead.shadow = false;
+    bench.host.state.settings.save_map(&map).unwrap();
+    bench.mode("mode", "fail");
+    let id = bench.start(TASK).await;
+    let cut = bench.state(&id, Phase::NeedsAttention).await;
+    let child = cut.children[0].id;
+    // This time the continued session finishes its work.
+    bench.mode("mode", "done");
+    let call = json!({"type":"control_request","request_id":"m1","request":{"subtype":"mcp_message","server_name":"kuroko",
+        "message":{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lead_continue_runner","arguments":{"run": id, "child": child, "message": "Finish it.", "reason": "Cut before its report."}}}}});
+    fs::write(bench.log.join("lead_call"), format!("{call}\n")).unwrap();
+    look(&bench, "continue", 1).await;
+    fs::remove_file(bench.log.join("lead_call")).unwrap();
+    let run = bench.state(&id, Phase::PullRequests).await;
+    assert_eq!(run.children[0].branch.as_deref(), Some("feature/child-2"));
+    assert_eq!(run.children[0].continuations, 1);
+    assert!(run.children[0].continue_session.is_none());
+}

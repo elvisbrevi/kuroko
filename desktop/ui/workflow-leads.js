@@ -13,6 +13,7 @@ import { fillAgentChoices } from './settings-models.js';
 const MAY = [
   { id: 'settle', name: 'Settle children', effect: 'With the branches, pull requests or Wiki pages code verifies they delivered; the run then goes on by itself.' },
   { id: 'close', name: 'Close runs', effect: 'As done by your criteria once every child is settled, also with pull requests still open.' },
+  { id: 'continue', name: 'Continue cut runners', effect: 'Continue a coding session cut before its report, in its own conversation, at most twice per child.' },
   { id: 'wait', name: 'Wait longer', effect: 'For pull requests past your limit, up to 60 days, and move a run ahead in the line.' },
 ];
 

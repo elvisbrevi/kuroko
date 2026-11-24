@@ -981,7 +981,7 @@ fn tools(
 }
 
 type Schema = fn() -> Value;
-const TOOLS: [(&str, &str, Schema); 18] = [
+const TOOLS: [(&str, &str, Schema); 19] = [
     (
         "lead_runs",
         "The facts of every active run of your workflows, read now.",
@@ -1046,6 +1046,11 @@ const TOOLS: [(&str, &str, Schema); 18] = [
         "lead_keep_waiting",
         "Keep waiting for a run's pull requests this many more days, past the account's limit (asked in its facts' wait): at most 60 days from the start of the wait. Applied only where your workflow lets you decide; otherwise recorded.",
         || json!({"type": "object", "properties": {"run": {"type": "string"}, "days": {"type": "integer", "minimum": 1, "maximum": 60}, "reason": {"type": "string"}}, "required": ["run", "days", "reason"]}),
+    ),
+    (
+        "lead_continue_runner",
+        "Continue a child's coding session that was cut before its final report (a time limit, a usage limit, a lost connection), in its own conversation with your note: at most twice per child, never while it runs, under a pause or for a session that cannot continue. Applied only where your workflow lets you decide; otherwise recorded.",
+        || json!({"type": "object", "properties": {"run": {"type": "string"}, "child": {"type": "integer"}, "message": {"type": "string"}, "reason": {"type": "string"}}, "required": ["run", "child", "message", "reason"]}),
     ),
     (
         "lead_move_ahead",
@@ -1294,13 +1299,18 @@ async fn call(
             });
             Ok(json!({"recorded": true, "applied": false}))
         }
-        "lead_settle_child" | "lead_close_run" | "lead_keep_waiting" | "lead_move_ahead" => {
+        "lead_settle_child"
+        | "lead_close_run"
+        | "lead_keep_waiting"
+        | "lead_move_ahead"
+        | "lead_continue_runner" => {
             use crate::workflows::lead::May;
             let run = run("run")?;
             let (what, word) = match tool {
                 "lead_settle_child" => (May::Settle, "settle"),
                 "lead_close_run" => (May::Close, "close"),
                 "lead_keep_waiting" => (May::Wait, "keep_waiting"),
+                "lead_continue_runner" => (May::Continue, "continue"),
                 _ => (May::Wait, "move_ahead"),
             };
             // What the workflow allows now: a change applies from the next decision.
@@ -1324,6 +1334,16 @@ async fn call(
             );
             let result = if !allowed {
                 None
+            } else if word == "continue" {
+                Some(
+                    continue_runner(
+                        host,
+                        &run.id,
+                        args["child"].as_u64().unwrap_or_default(),
+                        &text("message", 2000),
+                    )
+                    .await,
+                )
             } else if word == "keep_waiting" || word == "move_ahead" {
                 Some(wait(host, &run.id, word, args["days"].as_i64()).await)
             } else if what == May::Settle {
@@ -1993,4 +2013,139 @@ async fn wait(
     }
     state.workflows.db.save(&run).map_err(fail)?;
     Ok(json!({"run": run.id, "applied": word}))
+}
+
+/// The most times a lead continues one child's cut coding session.
+const CONTINUATIONS: u32 = 2;
+
+/// A workflow lead's continuation of a child's coding session cut before its final report
+/// (`lead_continue_runner`): the run goes back to coding and the engine launches one more turn
+/// of that session with the lead's note (`runs.continue`).
+async fn continue_runner(
+    host: &Arc<Host>,
+    id: &str,
+    child: u64,
+    note: &str,
+) -> std::result::Result<Value, String> {
+    use super::record::State as Phase;
+    let state = &host.state;
+    let lock = state.workflows.lock(id);
+    let _guard = lock.lock().await;
+    let mut run = state
+        .workflows
+        .db
+        .get(id)
+        .map_err(fail)?
+        .ok_or_else(|| invalid(format!("There is no workflow run {id}.")))?;
+    if run.state != Phase::NeedsAttention || run.stopped_in != Some(Phase::Coding) {
+        return Err(conflict(
+            "Only a run stopped while coding continues a cut session.",
+        ));
+    }
+    let paused = super::record::paused(
+        &state.workflows.db.pauses().map_err(fail)?,
+        &run.item.project,
+    );
+    if paused {
+        return Err(conflict(
+            "The runs are paused: nothing continues until the pause ends.",
+        ));
+    }
+    let index = run
+        .children
+        .iter()
+        .position(|c| c.id == child)
+        .ok_or_else(|| invalid(format!("#{child} is not a child of run {id}.")))?;
+    let current = &run.children[index];
+    // The child the run stopped on: the first not done, without a delivery.
+    let first = run
+        .children
+        .iter()
+        .position(|c| c.outcome.as_deref() != Some("done"));
+    if first != Some(index) || current.reported() {
+        return Err(conflict(format!(
+            "#{child} is not the child the run stopped on, or it was settled already."
+        )));
+    }
+    if current.continuations >= CONTINUATIONS {
+        return Err(conflict(format!(
+            "#{child}'s session was continued {CONTINUATIONS} times already: the person decides now."
+        )));
+    }
+    let coding = current
+        .coding
+        .clone()
+        .filter(|c| c.started)
+        .ok_or_else(|| conflict(format!("#{child} has no coding session to continue.")))?;
+    if !coding.failure.is_some_and(|f| f.cause.continuable()) {
+        return Err(conflict(format!(
+            "#{child}'s session did not stop in a way it can be continued from (a time limit, a usage limit, a lost connection)."
+        )));
+    }
+    if super::super::implementation::session_life(host, &coding.id)
+        .await
+        .is_some_and(|life| life["session_alive"] == true)
+    {
+        return Err(conflict(format!("#{child}'s session is still alive.")));
+    }
+    // The session as its machine recorded it, as a review round resumes one; never one a
+    // person continued to its report meanwhile.
+    let observed =
+        super::super::implementation::observe_recovering(host, &coding.machine, &coding.id)
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| conflict(format!("#{child}'s session is not recorded.")))?;
+    if observed["state"] == "done" || !observed["continued_at"].is_null() {
+        return Err(conflict(format!(
+            "#{child}'s session was continued to its report already: resume the run instead."
+        )));
+    }
+    let session = observed["session_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| conflict(format!("#{child}'s session is not recorded.")))?;
+    // What it reported through its tools stays its delivery.
+    let reported: Vec<Value> = observed["reports"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["kind"] == "delivery")
+        .cloned()
+        .collect();
+    let resumes = super::super::implementation::machine_facts(host, &coding.machine)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|m| m.online && m.resume);
+    if !resumes {
+        return Err(conflict(
+            "Its machine is offline or cannot continue sessions: the person decides.",
+        ));
+    }
+    let now = chrono::Utc::now().timestamp();
+    let child = &mut run.children[index];
+    child.continuations += 1;
+    child.continue_session = Some(session);
+    child.continue_note = Some(note.to_owned());
+    child.outcome = None;
+    child.previous_reports.extend(reported);
+    child.previous.push(coding.clone());
+    child.coding = Some(super::record::Implementation {
+        id: uuid::Uuid::new_v4().to_string(),
+        machine: coding.machine.clone(),
+        started: false,
+        state: None,
+        failure: None,
+        time_limit_minutes: None,
+    });
+    let item = child.id;
+    run.advance(
+        Phase::Coding,
+        now,
+        &format!("its lead continues the cut session of #{item}"),
+    );
+    run.error = None;
+    state.workflows.db.save(&run).map_err(fail)?;
+    Ok(json!({"run": run.id, "continued": item}))
 }

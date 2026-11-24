@@ -259,6 +259,20 @@ pub(in crate::app) struct Child {
     /// delivered only so needs no pull request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wiki_pages: Vec<crate::ado::workflow::WikiPage>,
+    /// How many times its lead continued its cut coding session, and the continuation waiting to
+    /// be launched: the session it resumes and the lead's note (0.20.11).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub continuations: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_note: Option<String>,
+    /// The coding runs its continuations replaced, oldest first, and the deliveries they
+    /// reported through their tools (a resumed turn has none of its own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous: Vec<Implementation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_reports: Vec<Value>,
     /// What code found that its coding run delivered without reporting it (`found`): candidates
     /// for the person, never a delivery by themselves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -784,8 +798,9 @@ impl Run {
         self.planning
             .iter()
             .chain(self.children.iter().flat_map(|c| {
-                c.coding
+                c.previous
                     .iter()
+                    .chain(c.coding.iter())
                     .chain(c.rounds.iter().filter_map(|r| r.coding.as_ref()))
             }))
     }
